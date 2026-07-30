@@ -40,11 +40,32 @@ it is that the audio never leaves the device and the user owns the stack.
 
 | # | Goal | Measurement |
 |---|---|---|
-| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to first character injected, for a 10-second utterance |
+| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance. Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
 | G2 | Transcription is accurate enough to not require editing | ≤ 5% WER on clean desk-mic English |
-| G3 | Zero network traffic at runtime | Verified by packet capture with the app under load |
+| G3 | Zero network traffic at runtime | Verified by packet capture with the app under load. **Scope:** this verifies Amanuensis's own sockets only. Transcript egress through a third-party clipboard manager happens in another process and is invisible to this method — see §7.3. |
 | G4 | Works in any focused application | Native fields, Electron apps, terminals, browsers |
 | G5 | A developer can read the codebase in an afternoon | Enforced by the structure in §6 |
+
+### G1 measurement note
+
+Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
+
+1. **The window excludes capture.** G1 starts at hotkey release, so the time
+   spent recording is not in it. `LatencyBreakdown.total_ms` includes
+   `capture_ms` and is therefore a diagnostic figure, **not** the gated number.
+   The gated number is `g1_ms`.
+2. **The utterance length is 10 seconds, and §7.1's 15–30 s is a different
+   thing.** G1 binds at 10 s; §7.1's "realistic 15–30 second utterances" is a
+   *revisit trigger* for the batch-vs-streaming decision, not a second budget.
+   A build that passes at 10 s and degrades at 30 s is a G1 pass **and** a §7.1
+   trigger. Neither overrides the other; they are separate signals.
+3. **"Fully present" rather than "first character."** The earlier wording could
+   not be applied to the default clipboard strategy, where paste is atomic and
+   there is no first character distinct from the last — and under
+   `strategy = "keystroke"` it would have reported a fast number for a slow
+   experience, measuring to the first character of a paragraph §7.3 rejects
+   keystroke for being too slow to deliver. "Fully present" is what the §4 user
+   experiences and is comparable across both strategies.
 
 ## 3. Non-goals (v1)
 
@@ -127,6 +148,7 @@ max_latency_ms = 300        # exceed this and the pass is skipped, not queued
 strategy = "clipboard"      # clipboard | keystroke
 restore_clipboard = true
 restore_delay_ms = 150
+warn_on_clipboard_manager = true   # tray indicator when a manager is detected; see §7.3
 
 [history]
 enabled = true
@@ -142,6 +164,11 @@ is ambiguous about recording state is a privacy problem regardless of where the 
 - Tray/menubar icon state: idle / recording / transcribing / error
 - Optional audio cue on start and stop (`[feedback] sounds = true`)
 - Recording state must be visible without the tray menu open
+- **Clipboard exposure state** — when `strategy = "clipboard"` and a known
+  clipboard manager is detected, the tray carries a persistent indicator that
+  transcripts transit the system clipboard (§7.3, objection O12). Same
+  reasoning as recording state: a privacy-relevant condition the user cannot
+  see is a privacy problem regardless of whether it is ever exercised.
 
 ### 5.5 History
 
@@ -226,14 +253,25 @@ class DictationSession:
 ```python
 @dataclass
 class LatencyBreakdown:
-    """Per-stage timings. Required for G1 — every stage records into this."""
-    capture_ms: float = 0.0
+    """Per-stage timings. Required for G1 — every stage records into this.
+
+    Two summary properties, deliberately distinct (see §2, G1 measurement note):
+    `g1_ms` is the gated number; `total_ms` is for diagnostics only. Asserting
+    G1 against `total_ms` would compare a ~10,400 ms figure to a 400 ms budget
+    and fail unconditionally.
+    """
+    capture_ms: float = 0.0        # excluded from G1 — G1's clock starts at release
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
     inject_ms: float = 0.0
 
     @property
-    def total_ms(self) -> float: ...
+    def g1_ms(self) -> float:
+        """transcribe + postprocess + inject. The number G1 is gated on."""
+
+    @property
+    def total_ms(self) -> float:
+        """Every stage including capture. Diagnostics only — never assert G1 on this."""
 ```
 
 **Abstract bases** define the swap points. Every one of these exists because there is a
@@ -396,6 +434,43 @@ transcript before restore lands. This is a known, unavoidable leak of the strate
 must be documented in the README rather than papered over.
 
 `strategy = "keystroke"` exists for users who cannot accept that.
+
+**Transcript egress is a privacy surface, not a hygiene annoyance** (resolved
+2026-07-30, objection O12). The framing above — and §10's — describes the
+clipboard-manager capture as a *race*, which understates it in three ways:
+
+- Capturing the clipboard is the **normal operation** of a clipboard manager,
+  not a timing artefact. A manager that missed the transcript would be broken.
+  `restore_delay_ms` governs only whether the user's *previous* contents come
+  back; it has no bearing on whether the transcript was recorded in transit.
+- Several widely used managers on the target platform offer **cross-device
+  sync**. For those users a transcript leaves the machine as a direct
+  consequence of the default configuration.
+- §1's promise is scoped to *audio* ("no audio leaving the machine") and is
+  technically preserved. No reader parses it that way, and the transcript is
+  the artefact the user cares about keeping private.
+
+Clipboard remains the default — the latency argument above still holds, and
+`keystroke` is slower and more failure-prone precisely for the §4 secondary
+user who can least afford either. The exposure is handled by **making it
+visible rather than silent**:
+
+1. At daemon start, detect known clipboard managers on the platform.
+2. When one is present, surface the exposure in the tray as a persistent
+   state, following the §5.4 precedent that a privacy-relevant condition must
+   be visible without opening a menu.
+3. Config key `[injection] warn_on_clipboard_manager = true` (§5.3) to silence
+   it for users who have read the README and accepted the trade.
+
+The detection list will be incomplete and must not be presented as
+comprehensive — absence of a warning means "no known manager detected", never
+"no manager present". Say that in the README.
+
+**This is also a G3 verification gap, not only a risk.** G3's method is packet
+capture on this app; the egress occurs in another process, so the headline
+privacy claim would verify green while the leak is live. §2's G3 row now scopes
+the claim accordingly. Whatever gate ends up verifying G3 must cover the
+cross-process path or explicitly state that it does not.
 
 **Platform assumption:** Phase 2 targets **macOS first**, because its permissions model
 (Accessibility + Input Monitoring) is the most restrictive and will surface the hardest
@@ -589,3 +664,5 @@ should produce a dated revision-log entry below — not a silent edit.
 |---|---|
 | 2026-07-30 | Initial draft |
 | 2026-07-30 | Added §14 indexing the four sentinel records. Navigational only — no decision in §1–§13 was amended, and all 29 dispositions remain pending. |
+| 2026-07-30 | **O8 accepted.** G1 redefined as hotkey release to *text fully present*, measured by the new `LatencyBreakdown.g1_ms` (§6.3); `total_ms` is diagnostics only. Added the G1 measurement note to §2, including an explicit precedence statement that §2's 10 s budget and §7.1's 15–30 s revisit trigger are separate signals. HARNESS.md corrected to assert against `g1_ms`. |
+| 2026-07-30 | **O12 accepted.** Clipboard remains the default injection strategy; the transcript-egress exposure is made visible instead. §7.3 reframes clipboard-manager capture as a privacy surface rather than a restore race, and adds startup detection plus a tray indicator. §5.4 gains the clipboard exposure state; §5.3 gains `[injection] warn_on_clipboard_manager`. §2's G3 row now scopes packet-capture verification to this process only. |

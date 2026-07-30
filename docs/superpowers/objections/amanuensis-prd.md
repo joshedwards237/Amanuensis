@@ -58,8 +58,8 @@ objections:
     severity: critical
     claim: "G1's measurement window excludes capture, but LatencyBreakdown.total_ms includes it and HARNESS.md directs latency tests at LatencyBreakdown — so the project's kill criterion is computed from an instrument that measures something else."
     evidence: "§2 G1 'from hotkey release to first character injected, for a 10-second utterance'; §6.3 LatencyBreakdown fields 'capture_ms ... total_ms'; HARNESS.md 'Latency assertions test against the G1 budgets in PRD §2 ... using LatencyBreakdown'; §7.1 sets the revisit trigger at 'realistic 15–30 second utterances'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. G1 redefined as hotkey release to text FULLY PRESENT in the focused application, measured by a new LatencyBreakdown.g1_ms property (transcribe + postprocess + inject); total_ms retained for diagnostics only. Closes defect 1 (capture_ms in the instrument, outside the metric) and defect 3 (first-character undefined for atomic clipboard paste, and gameable under keystroke). Defect 2 — the 10 s goal versus the 15-30 s revisit trigger — is NOT closed by the redefinition and was resolved separately with an explicit precedence statement: G1 binds at 10 s, §7.1's 15-30 s is a distinct revisit signal, and neither overrides the other. Applied to PRD §2 (G1 row plus a new G1 measurement note), PRD §6.3, and the HARNESS.md test-framework line that had directed assertions at the unqualified instrument."
   - id: O9
     category: specification quality
     severity: high
@@ -86,8 +86,8 @@ objections:
     severity: critical
     claim: "The default injection strategy routes every transcript through the system clipboard where third-party managers may capture and cloud-sync it, and G3's stated verification method structurally cannot detect that egress."
     evidence: "§5.3 injection strategy defaults to clipboard; §7.3 'the manager may capture the transcript before restore lands. This is a known, unavoidable leak'; §2 G3 'Verified by packet capture with the app under load'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Clipboard REMAINS the default — the §7.3 latency argument holds, and keystroke is slower and more failure-prone for exactly the §4 secondary user who can least afford it. The exposure is handled by making it visible rather than by changing the default: detect known clipboard managers at daemon start, surface a persistent tray indicator on the §5.4 precedent that a privacy-relevant condition must be visible without opening a menu, and gate it behind a new [injection] warn_on_clipboard_manager key. The detection list is explicitly incomplete and the README must say that absence of a warning means 'no known manager detected', never 'no manager present'. The G3 verification blind spot is treated as part of the same objection: §2's G3 row now scopes packet capture to this process only and points at §7.3 for the cross-process path. Applied to PRD §2 (G3 row), §5.3, §5.4, and §7.3."
 ---
 
 ## O1 — premise — high

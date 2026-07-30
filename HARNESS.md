@@ -33,8 +33,13 @@
   `mypy --strict src/` must be clean; that is a gate condition, not a preference.
 - **Test framework**: `pytest`, suite at `tests/` off the repo root (PRD §6.4)
   — *not yet present*. Latency assertions test against the G1 budgets in PRD §2
-  (p50 ≤ 400 ms, p95 ≤ 800 ms) using `LatencyBreakdown`, which exists as a
-  product requirement precisely so those targets are testable (PRD §5.5).
+  (p50 ≤ 400 ms, p95 ≤ 800 ms) using **`LatencyBreakdown.g1_ms`** — never
+  `total_ms`, which includes `capture_ms` and would compare a ~10,400 ms figure
+  against a 400 ms budget for a 10-second utterance. `LatencyBreakdown` exists
+  as a product requirement precisely so those targets are testable (PRD §5.5).
+  An earlier revision of this line named `LatencyBreakdown` without qualifying
+  which property; that ambiguity was objection O8 and is resolved in PRD §2's
+  G1 measurement note.
 - **Container strategy**: none, deliberately. Amanuensis is a long-lived local
   desktop daemon (PRD §6.1) with no backend, no network at runtime (G3), and no
   server to containerize. Do not introduce Docker; a container would break the
