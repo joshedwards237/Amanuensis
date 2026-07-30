@@ -57,7 +57,7 @@ Phase 1 gate and this paragraph is where the correction lands.
 
 | # | Goal | Measurement |
 |---|---|---|
-| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance. Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
+| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance, **on accelerated hardware** (CUDA / Apple Silicon), with the **default post-processing chain** (`["rules"]`). Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
 | G2 | Transcription is accurate enough to not require editing | ≤ 5% WER on clean desk-mic English |
 | G3 | Zero network traffic at runtime | Verified by packet capture with the app under load. **Scope:** this verifies Amanuensis's own sockets only. Transcript egress through a third-party clipboard manager happens in another process and is invisible to this method — see §7.3. |
 | G4 | Works in any focused application | Native fields, Electron apps, terminals, browsers |
@@ -83,6 +83,35 @@ Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
    experience, measuring to the first character of a paragraph §7.3 rejects
    keystroke for being too slow to deliver. "Fully present" is what the §4 user
    experiences and is comparable across both strategies.
+
+Two further scoping decisions, resolved the same day:
+
+4. **G1 is tier-conditional** (objection O1). It binds on **accelerated
+   hardware** — the CUDA and Apple Silicon rows of §7.2's `model = "auto"`
+   table. On **CPU-only** hardware, G1 is *not* a pass/fail criterion: that tier
+   ships with a **measured, documented latency expectation** instead, per §10.
+   §9's "if G1 is missed here, stop" therefore means *stop for the tiers G1
+   binds on*. It does not halt the project over a CPU-tier miss.
+
+   Why: §1's differentiator is locality, and the §4 user who is
+   offline-constrained or privacy-motivated frequently has no fast alternative
+   at all. Shipping them a slower tool with an honest number serves them;
+   shipping them nothing does not. Previously §2 and §9 demanded parity
+   unconditionally while §10 quietly permitted the CPU tier to ship anyway —
+   which meant the gate could not fail, because any miss was redescribable as
+   "a documented latency expectation." The escape hatch is now a stated scope
+   boundary rather than an unstated one.
+
+   **The CPU tier still needs a published number.** "Not gated by G1" is not
+   "unmeasured" — the Phase 1 gate reports CPU-tier latency alongside the
+   accelerated figure, and the README states it.
+
+5. **G1 assumes post-processing is off** (objection O11). The budgets above are
+   measured with `chain = ["rules"]`, the default. The optional LLM pass adds
+   200–500 ms against a 300 ms ceiling (§5.3, §7.5), so a base pipeline landing
+   exactly at the 400 ms p50 target reaches ~700 ms with the pass enabled —
+   G1 as written was unsatisfiable whenever the feature it gates was turned on.
+   Phase 5 carries its **own** stated budget; see §7.5.
 
 ## 3. Non-goals (v1)
 
@@ -173,7 +202,9 @@ restore_delay_ms = 150
 warn_on_clipboard_manager = true   # tray indicator when a manager is detected; see §7.3
 
 [history]
-enabled = true
+enabled = true              # RETENTION only; the pre-injection write in §8 is
+                            # unconditional. false = write, then delete after
+                            # successful injection. See §5.5.
 retain_days = 30
 store_audio = false         # off by default; audio is the sensitive artifact
 ```
@@ -200,6 +231,22 @@ duration, engine, and latency breakdown. Audio is **not** stored unless explicit
 
 Latency breakdown is a product requirement, not a debugging nicety — G1 cannot be defended
 without per-stage timings.
+
+**`enabled` controls retention, not the write** (resolved 2026-07-30, objection
+O10). The pre-injection write in §8 happens **unconditionally**. `enabled = false`
+means the row is deleted immediately after injection succeeds — so nothing
+persists, and the crash guarantee still holds on the path where it matters.
+
+The alternative reading — that `enabled = false` disables the write — would have
+made §8's "never lose a transcript" silently conditional on a setting the user was
+never told it depended on. That trade lands worst on the two §4 users at once: the
+privacy-motivated primary user is the one most likely to disable history, and the
+secondary user with motor impairment, for whom "a dropped transcription is not a
+minor annoyance," is the one who most needs the recovery path. Neither would have
+been told the trade existed.
+
+Read the key as *retain* history, not *use* history. It costs one write and one
+delete on the disabled path.
 
 ### 5.6 Custom vocabulary
 
@@ -420,6 +467,28 @@ not natively streaming.
 **Rejected:** chunked streaming with rolling context. Revisit only if §9 Phase 1 shows
 p95 latency missing G1 on realistic 15–30 second utterances.
 
+**Also weighed, and deliberately not built for v1: pre-release inference**
+(recorded 2026-07-30, objection O3). Run inference on buffered audio *while the
+hotkey is still held*, surfacing nothing. By the time the user releases, most of
+the audio is already transcribed and only the tail remains.
+
+This matters because it attacks G1's clock directly — G1 starts at *release*
+(§2), so work completed before release is free against the budget. Of the three
+costs the rejection above cites, two — hypothesis revision, and partial-text
+injection and retraction — arise **only because partial results are displayed**,
+and nothing is displayed here. §5.1 puts injection at step 7 and release at
+step 4; there is no user-visible surface in between. Only chunk boundary handling
+survives, and it is real: Whisper-family models are not natively streaming, and
+splitting mid-word costs accuracy.
+
+**Why it is recorded rather than built:** batch is simpler, v1 does not need it,
+and it adds a concurrency burden to a daemon whose threading model is already
+unstated. **Why it is recorded at all:** §9's Phase 1 instruction on a G1 miss is
+"renegotiate §7.1," and until now the only alternative §7.1 documented was full
+streaming with retraction — the most expensive possible response. A project that
+halts on latency should have the cheap option on the table before it reaches for
+the dear one.
+
 ### 7.2 Engine: faster-whisper default, abstracted
 
 `faster_whisper` (CTranslate2) is the default because it is fast, mature, quantizes well,
@@ -524,6 +593,27 @@ Therefore: **off by default, hard latency ceiling, and it is skipped rather than
 when it exceeds budget.** A dictation tool that sometimes takes 900 ms is worse than one
 that is consistently 350 ms and slightly rougher.
 
+**The budget, stated honestly** (resolved 2026-07-30, objection O11). The instinct
+above is right; the numbers as originally written did not implement it.
+
+- **G1 does not apply when this pass is enabled.** §2's budgets assume
+  `chain = ["rules"]`. A base pipeline at the 400 ms p50 target plus a 300 ms
+  ceiling is ~700 ms. Pretending otherwise made G1 unsatisfiable exactly when the
+  feature was on.
+- **Phase 5 carries its own budget:** **p50 ≤ 700 ms, p95 ≤ 1100 ms** with the pass
+  enabled, on the same accelerated-hardware and measurement basis as G1. The
+  README states both numbers; the user choosing to enable this is choosing the
+  second one.
+- **`max_latency_ms` is a cancellation deadline, not a predictive check.** You
+  cannot know a pass's cost before paying it, so "skip" means *abandon in flight
+  at the deadline and inject the pre-LLM text*. There is no predictor and none is
+  specified.
+- **The skip path costs the full ceiling and produces nothing.** A cancelled pass
+  has already spent 300 ms. That is the price of the mechanism, and it is worth
+  naming rather than discovering: the worst case is strictly worse than either not
+  running the pass or letting it finish. It is still the right trade — a bounded
+  overrun beats an unbounded one — but the bound is on the overrun, not a saving.
+
 ### 7.6 Security posture
 
 Standard Firebase/cloud rules mostly do not apply — there is no backend, no secrets, no
@@ -549,11 +639,16 @@ auth. What does apply:
 | Idle RSS | < 1.5 GB with model resident (GPU) |
 | Cold daemon start to ready | < 15 s |
 | Recovery from mic disconnect | Automatic, no restart |
-| Crash behavior | Never lose a transcript — write to history before injection |
+| Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] enabled` (§5.5) |
 | Python | 3.11+ |
 
 Note the crash-order requirement: persist first, inject second. If injection fails the user
 can still recover their words.
+
+This guarantee is **not** conditional on the `[history] enabled` config key. That key
+governs *retention* — when it is false the row is written before injection and deleted
+after injection succeeds (§5.5, objection O10). A guarantee whose mechanism a user can
+switch off without being told is not a guarantee.
 
 ---
 
@@ -597,6 +692,12 @@ malformed file with a useful error.
 faster-whisper vs. Moonshine and write `docs/adr/0001-engine-selection.md`. **If G1 is
 missed here, stop and renegotiate §7.1 before continuing** — no later phase makes this faster.
 
+Scope of that stop (objection O1): G1 binds on **accelerated hardware only**. A miss
+there stops the project. Also measure and report the **CPU-only** tier — it is not
+gated, but it ships with a published number (§2, §10), and "not gated" is not
+"unmeasured." When renegotiating §7.1, weigh **pre-release inference** before full
+streaming; §7.1 now records both (objection O3).
+
 **Also at this gate — first G3 verification** (added 2026-07-30, objection O5).
 Run the daemon under packet capture through a full transcribe cycle and report
 whether any network traffic occurred. This is the earliest point a model loads, and
@@ -636,13 +737,20 @@ section rather than only at the gate.
 **Gate:** A/B against Phase 3 output on the same audio. If quality gain does not justify
 measured latency cost, ship it disabled and say so in the README.
 
+Measure against **Phase 5's own budget** — p50 ≤ 700 ms, p95 ≤ 1100 ms with the pass
+enabled (§7.5, objection O11) — not against G1, which is defined with the pass off.
+Report how often the cancellation deadline fires and the pass is discarded, since a
+cancelled pass costs the full ceiling and returns nothing; a high cancellation rate is
+the signal to ship disabled.
+
 ---
 
 ## 10. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| G1 unachievable on CPU-only hardware | High | The pre-Phase-0 probe (§9) answers this to an order of magnitude in about an hour, before the scaffold is built; the Phase 1 gate remains the real go/no-go. CPU tier may ship with a smaller model and a documented latency expectation rather than a broken promise. |
+| G1 unachievable on **accelerated** hardware | High | The pre-Phase-0 probe (§9) answers this to an order of magnitude in about an hour, before the scaffold is built; the Phase 1 gate remains the real go/no-go. A miss here does stop the project (§9). |
+| CPU-only tier is slow enough to be unusable | Medium | G1 does not bind on this tier (§2, objection O1). It ships with a smaller model and a **measured, published** latency expectation rather than a broken promise. The Phase 1 gate reports the CPU number even though it does not gate on it; if that number turns out to be unusable rather than merely slow, the honest response is to drop the tier in §3, not to ship it silently. |
 | Silent network egress from a transitive dependency | High | Packet capture is now a gate criterion at Phase 1 and again at Phase 4 (§9). Model weights resolve from a pinned local path, never a repository ID at runtime (§7.6). |
 | Transcript captured and cloud-synced by a third-party clipboard manager | High | Clipboard-manager detection at startup with a persistent tray indicator (§5.4, §7.3). Not covered by G3's packet capture — the egress is in another process. |
 | macOS permissions are opaque and users get stuck | High | Permission check at startup with copy-pasteable remediation, not a generic failure. |
@@ -706,7 +814,7 @@ below; none was made silently.
 | Record | Path | State |
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 7 pending |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — 6 accepted, 6 pending |
+| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — 10 accepted, 2 pending |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 10 stories — 10 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 
@@ -715,13 +823,13 @@ against the instrument built to measure it) and `O12` (the default clipboard
 strategy is a transcript-egress path G3's verification structurally cannot see)
 are accepted and applied — see the revision log.
 
-**Still open, and worth reading before Phase 0** — `O1` (is G1 tier-conditional,
-or does a CPU-tier miss stop the project?), `O3` (§7.1 rejected streaming without
-weighing pre-release inference, so the Phase 1 "renegotiate §7.1" instruction
-points at only the most expensive option), `O7` (G2's WER corpus is undefined and
-no phase measures WER), `O9` (three gates state an activity rather than a pass
-condition), `O10` (`[history] enabled = false` silently voids §8's crash
-guarantee), `O11` (the LLM latency ceiling is 75% of the p50 budget on its own).
+**Still open** — `O7` (G2's WER corpus is undefined and no phase in §9 measures
+WER at all, so the Phase 1 engine ADR trades accuracy against latency with only
+the latency side defined) and `O9` (three of six gates state an activity rather
+than a pass condition, so they cannot fail on their own terms).
+
+Both bear on the same weakness: this document is better at defining what to build
+than at defining what would count as having built it badly.
 
 Two further caveats on the records themselves:
 
@@ -749,3 +857,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-30 | **O4 accepted.** A throwaway latency probe is inserted before Phase 0 in §9, answering G1 to an order of magnitude in about an hour. It does not replace the Phase 1 gate and is optimistic by construction. §10's top-risk mitigation updated: a gate positioned after the cost is incurred is a deferral, not a mitigation. |
 | 2026-07-30 | **O5 accepted.** Packet capture becomes a gate criterion at Phase 1 (earliest model load, where a cache-miss fetch would fire) and again at Phase 4 (assembled product, new tray and install-path dependency surface). §10 gains a corresponding risk row. G3 previously had a stated verification method and no gate that ran it. |
 | 2026-07-30 | **O6 accepted.** v1 is macOS-only. Windows and Linux move to §3 non-goals; §6.2 and §6.4 drop the two injectors and their files; §5.1 loses the Right Alt default; §7.3 changes from "macOS first" to "macOS only"; §11.1 resolved. §6.4 no longer mandates two stub files that made the layout describe a product that does not exist. |
+| 2026-07-30 | **O1 accepted.** G1 is tier-conditional: it binds on accelerated hardware (CUDA / Apple Silicon) and does not gate the CPU-only tier, which ships with a measured, published number instead. §9's "stop" scoped accordingly; §10's risk row split in two. Previously §2 and §9 demanded parity while §10 quietly permitted the CPU tier to ship anyway, which meant the gate could not fail. |
+| 2026-07-30 | **O11 accepted.** G1 is defined with post-processing off (`chain = ["rules"]`). Phase 5 carries its own budget: p50 ≤ 700 ms, p95 ≤ 1100 ms. §7.5 now states that `max_latency_ms` is a cancellation deadline rather than a predictive check, and that the skip path costs the full ceiling and returns nothing. |
+| 2026-07-30 | **O10 accepted.** `[history] enabled` governs retention, not the write. The pre-injection write is unconditional; `false` deletes the row after injection succeeds. §8's guarantee is no longer silently contingent on a config key. Deliberately **not** addressed: `retain_days` and aborted-session retention, which the objection also raised. |
+| 2026-07-30 | **O3 accepted.** §7.1 now records pre-release inference — inference during the hold, nothing displayed — as a weighed alternative, deliberately not built for v1. Phase 1's "renegotiate §7.1" instruction previously pointed only at full streaming with retraction, the most expensive available response. |

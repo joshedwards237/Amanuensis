@@ -32,14 +32,20 @@
   Toolchain fixed by the Phase 0 gate (PRD §9): `ruff` + `black` + `mypy --strict`.
   `mypy --strict src/` must be clean; that is a gate condition, not a preference.
 - **Test framework**: `pytest`, suite at `tests/` off the repo root (PRD §6.4)
-  — *not yet present*. Latency assertions test against the G1 budgets in PRD §2
-  (p50 ≤ 400 ms, p95 ≤ 800 ms) using **`LatencyBreakdown.g1_ms`** — never
-  `total_ms`, which includes `capture_ms` and would compare a ~10,400 ms figure
-  against a 400 ms budget for a 10-second utterance. `LatencyBreakdown` exists
-  as a product requirement precisely so those targets are testable (PRD §5.5).
-  An earlier revision of this line named `LatencyBreakdown` without qualifying
-  which property; that ambiguity was objection O8 and is resolved in PRD §2's
-  G1 measurement note.
+  — *not yet present*. `LatencyBreakdown` exists as a product requirement
+  precisely so the latency targets are testable (PRD §5.5). Three qualifiers,
+  all load-bearing — a G1 assertion missing any of them tests the wrong thing:
+  - **Property**: assert on **`LatencyBreakdown.g1_ms`**, never `total_ms`.
+    `total_ms` includes `capture_ms` and would compare a ~10,400 ms figure
+    against a 400 ms budget for a 10-second utterance (objection O8).
+  - **Hardware tier**: G1 (p50 ≤ 400 ms, p95 ≤ 800 ms) binds on **accelerated**
+    hardware only — CUDA and Apple Silicon. The CPU-only tier is measured and
+    published but **not** gated, so a CPU-tier assertion must not fail the
+    suite (objection O1).
+  - **Post-processing chain**: G1 assumes `chain = ["rules"]`. With the LLM
+    pass enabled the applicable budget is Phase 5's — p50 ≤ 700 ms,
+    p95 ≤ 1100 ms (PRD §7.5, objection O11). Asserting G1 against an
+    LLM-enabled run tests a budget that does not apply to it.
 - **Container strategy**: none, deliberately. Amanuensis is a long-lived local
   desktop daemon (PRD §6.1) with no backend, no network at runtime (G3), and no
   server to containerize. Do not introduce Docker; a container would break the

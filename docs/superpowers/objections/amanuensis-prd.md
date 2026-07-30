@@ -9,8 +9,8 @@ objections:
     severity: high
     claim: "The PRD holds two incompatible premises about whether locality buys tolerance for slower or rougher output, and the Phase 1 kill gate resolves differently depending on which one is operative."
     evidence: "§1 'The differentiator is not features — it is that the audio never leaves the device' vs §4 'They will not tolerate a tool that is slower than typing' and §9 Phase 1 'If G1 is missed here, stop.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. G1 is tier-conditional: it binds on accelerated hardware (the CUDA and Apple Silicon rows of §7.2's auto table) and does NOT gate the CPU-only tier, which ships with a measured, published latency expectation instead. §9's 'if G1 is missed here, stop' now means stop for the tiers G1 binds on; a CPU-tier miss does not halt the project. Rationale: §1's differentiator is locality, and the §4 offline-constrained user frequently has no fast alternative at all — a slower tool with an honest number serves them, nothing does not. This makes §10's previously-unstated escape hatch a stated scope boundary; before, §2 and §9 demanded parity unconditionally while §10 quietly permitted the CPU tier to ship anyway, which meant the gate could not fail because any miss was redescribable as 'a documented latency expectation'. Guard added: not-gated is not unmeasured — the Phase 1 gate reports the CPU number and the README publishes it, and if that number is unusable rather than merely slow the honest response is to drop the tier in §3. Applied to PRD §2 (G1 row plus measurement-note items 4), §9 Phase 1 gate, §10 (risk row split in two), and the HARNESS.md test-framework qualifiers."
   - id: O2
     category: premise
     severity: high
@@ -23,8 +23,8 @@ objections:
     severity: high
     claim: "§7.1 rejects streaming using arguments that apply only to on-screen partial results, and therefore never weighs speculative inference during the hold — the one design lever that directly attacks G1's clock."
     evidence: "§7.1 'it triples complexity — chunk boundary handling, hypothesis revision, partial-text injection and retraction'; §2 G1 measures 'from hotkey release'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Pre-release inference — running inference on buffered audio while the hotkey is still held, surfacing nothing — is now RECORDED in §7.1 as a weighed alternative, and deliberately not built for v1. The objection's core point is upheld: two of §7.1's three stated costs (hypothesis revision, partial-text injection and retraction) exist only because partial results are displayed, and nothing is displayed here, so the original rejection argument did not reach this option. Only chunk boundary handling survives, and §7.1 now says so. It is not built because batch is simpler, v1 does not need it, and it adds concurrency burden to a daemon whose threading model is already unstated (see choice-story #2). It is recorded because §9's Phase 1 instruction on a G1 miss is 'renegotiate §7.1', and until now the only documented alternative was full streaming with retraction — the most expensive possible response. The Phase 1 gate now names pre-release inference as the thing to weigh first."
   - id: O4
     category: alternatives
     severity: medium
@@ -72,15 +72,15 @@ objections:
     severity: high
     claim: "The unconditional crash guarantee in §8 is implemented entirely by a subsystem that §5.3 lets the user switch off."
     evidence: "§8 'Crash behavior | Never lose a transcript — write to history before injection'; §5.3 '[history] enabled = true'; §5.5 'retain_days = 30'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. The [history] enabled key governs RETENTION, not the write. The pre-injection write in §8 happens unconditionally; enabled = false means the row is deleted immediately after injection succeeds. Nothing persists, so the privacy intent is preserved, and §8's crash guarantee holds on the path where it matters. Cost is one write plus one delete on the disabled path. The rejected reading — that enabled = false disables the write — would have made 'never lose a transcript' silently conditional on a setting the user was never told it depended on, and it lands worst on both §4 users simultaneously: the privacy-motivated primary user is the one most likely to disable history, and the secondary user with motor impairment, for whom a dropped transcription is not a minor annoyance, is the one who most needs the recovery path. Applied to PRD §5.3 (key comment), §5.5 (new paragraph), and §8 (NFR row plus note). NOT addressed: the objection's second half — that persist-before-inject puts transcripts on disk before the user has seen them, and that aborted or misfired sessions are retained for 30 days by default. retain_days and aborted-session handling remain as written and are open for a later pass."
   - id: O11
     category: implementation
     severity: high
     claim: "The LLM post-processing budget arithmetic is unsatisfiable against G1: the skip ceiling alone consumes 75% of the p50 budget, and neither §7.5 nor §9 Phase 5 states that G1 is relaxed when the pass is enabled."
     evidence: "§2 G1 'p50 ≤ 400 ms'; §7.5 'It also adds 200–500 ms, which directly threatens G1'; §5.3 'max_latency_ms = 300' with the comment that an over-budget pass is skipped rather than queued."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. G1 is defined with post-processing OFF — §2's budgets assume chain = ['rules'], the default. Phase 5 carries its own stated budget of p50 <= 700 ms, p95 <= 1100 ms with the pass enabled, on the same accelerated-hardware and g1_ms measurement basis. The README publishes both numbers; a user enabling the pass is choosing the second. Two mechanism points the objection correctly identified are now written down rather than left to the implementer: max_latency_ms is a CANCELLATION DEADLINE, not a predictive check — you cannot know a pass's cost before paying it, so skip means abandon in flight and inject the pre-LLM text, and no predictor is specified because none exists; and the skip path costs the full ceiling while producing nothing, so the worst case is strictly worse than either not running the pass or letting it finish. That remains the right trade — a bounded overrun beats an unbounded one — but the bound is on the overrun, not a saving, and §7.5 now says so. The Phase 5 gate additionally reports how often the deadline fires, since a high cancellation rate is the signal to ship disabled. Applied to PRD §2, §7.5, §9 Phase 5, and the HARNESS.md chain qualifier."
   - id: O12
     category: risk
     severity: critical
