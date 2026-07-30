@@ -51,8 +51,8 @@ objections:
     severity: high
     claim: "G2 is stated as a WER threshold against an undefined corpus, and no phase in §9 measures WER at all."
     evidence: "§2 G2 '≤ 5% WER on clean desk-mic English'; §9 Phase 3 gate measures 'edit rate — what fraction of output needed manual correction'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Two instruments, each placed where it works. (1) EDIT RATE becomes the product goal: G2 is restated as 'edit rate <= 5% across the Phase 3 dictation set', which is what the §4 user experiences and what the Phase 3 gate already collects. The objection's steel-man is upheld — WER punishes a model for transcribing 'gonna' when the speaker said 'gonna', and a tool optimised for WER against read-aloud corpora can lose to one optimised for post-edit effort. (2) A FIXED CORPUS serves the Phase 1 engine benchmark, because the ADR trades accuracy against latency and edit rate does not exist until Phase 3, two phases after the decision needing it. Phase 1 commits a small self-recorded desk-mic corpus with reference transcripts under tests/fixtures/asr/ and reports WER per candidate engine — explicitly for RELATIVE comparison only, not an absolute threshold the corpus size cannot support, and not a G2 measurement. Honesty guard: the 5% edit-rate threshold is carried over from the old WER number and the two metrics have different denominators, so it is recorded as PROVISIONAL, to be confirmed or moved at Phase 3 with a stated reason. A number presented as derived when it was inherited is worse than one labelled a guess. Applied to PRD §2 (G2 row plus a new accuracy-measurement note), §6.4 (tests/fixtures/asr/), and the §9 Phase 1 and Phase 3 gates."
   - id: O8
     category: specification quality
     severity: critical
@@ -65,8 +65,8 @@ objections:
     severity: high
     claim: "Three of six phase gates state an activity rather than a pass condition, so the document's primary control mechanism cannot fail on its own terms."
     evidence: "§9 Phase 2 'Report where it fails'; Phase 3 'Report edit rate'; Phase 4 'A second person installs it from the README without your help' — compare Phase 0's 'mypy --strict src/ is clean'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Two changes, addressing the objection and choice-story #9 together. (1) Every gate gains a 'Rejects if' line naming what result rejects the phase. Phase 2: injection failing in two or more of the four named applications, or in a native text field — G4 claims 'works in any focused application', two of four is not that, and a native-field failure means the injector is broken rather than the target hostile; a single Electron or Java failure remains a known-hazard finding per §10 and does not reject. Phase 3: edit rate over the G2 threshold AND dominated by classes the rules chain should have caught, since proper-noun-driven error points at §5.6 rather than a phase failure. Phase 4: the tester cannot reach a first successful dictation from the README alone, with conduct fixed in advance — observe silently, no hints, stop at 30 minutes, note the starting environment — so the gate measures the README rather than the tester, which was the objection's specific complaint about n=1. Phase 1 and Phase 0 gained explicit reject lines too. (2) Each gate writes docs/gates/phase-<n>.md carrying date, measurements, decision, and §9's standing 'what did this phase reveal that the PRD got wrong' question. This is choice-story #9's point rather than the objection's: without it, Phase 1's measured latencies exist only in conversation and every later phase implicitly regresses against a baseline never written down. Added docs/gates/ to the §6.4 tree."
   - id: O10
     category: implementation
     severity: high

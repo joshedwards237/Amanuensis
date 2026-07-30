@@ -58,7 +58,7 @@ Phase 1 gate and this paragraph is where the correction lands.
 | # | Goal | Measurement |
 |---|---|---|
 | G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance, **on accelerated hardware** (CUDA / Apple Silicon), with the **default post-processing chain** (`["rules"]`). Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
-| G2 | Transcription is accurate enough to not require editing | ≤ 5% WER on clean desk-mic English |
+| G2 | Transcription is accurate enough to not require editing | **Edit rate ≤ 5%** — the fraction of words requiring manual correction across the Phase 3 dictation set. WER is *not* the product goal; see the accuracy-measurement note below. |
 | G3 | Zero network traffic at runtime | Verified by packet capture with the app under load. **Scope:** this verifies Amanuensis's own sockets only. Transcript egress through a third-party clipboard manager happens in another process and is invisible to this method — see §7.3. |
 | G4 | Works in any focused application | Native fields, Electron apps, terminals, browsers |
 | G5 | A developer can read the codebase in an afternoon | Enforced by the structure in §6 |
@@ -112,6 +112,36 @@ Two further scoping decisions, resolved the same day:
    exactly at the 400 ms p50 target reaches ~700 ms with the pass enabled —
    G1 as written was unsatisfiable whenever the feature it gates was turned on.
    Phase 5 carries its **own** stated budget; see §7.5.
+
+### G2 accuracy-measurement note
+
+Resolved 2026-07-30 (objection O7). G2 previously read "≤ 5% WER on clean
+desk-mic English" — a numeric threshold against a corpus that did not exist and
+was not described well enough to construct, while no phase in §9 measured WER at
+all. Two instruments now do two different jobs:
+
+- **Edit rate is the product goal.** It measures what the §4 user experiences —
+  how much correcting they had to do — and it is what the Phase 3 gate already
+  collects. WER punishes a model for transcribing "gonna" when the speaker said
+  "gonna"; a dictation tool optimised for WER against read-aloud corpora can lose
+  to one optimised for post-edit effort.
+- **A fixed corpus serves the Phase 1 engine benchmark.** The Phase 1 ADR
+  (`0001-engine-selection.md`) trades accuracy against latency, and edit rate does
+  not exist until Phase 3 — two phases after the decision that needs it. So Phase 1
+  commits a small self-recorded desk-mic corpus with reference transcripts under
+  `tests/fixtures/asr/`, and reports WER on it for each candidate engine.
+
+  **That WER figure is for relative comparison only.** A corpus of this size
+  cannot validate an absolute 5% claim, and it is not a G2 measurement. It answers
+  "is Moonshine competitive with `small.en` here", which is the only question the
+  ADR needs.
+
+**The 5% edit-rate threshold is provisional.** It is carried over from the old WER
+number, and the two metrics have different denominators, so it is not a converted
+figure — it is a placeholder with a plausible magnitude. Phase 3 is where it gets
+confirmed or moved, with real data and a stated reason. Recording it as provisional
+is deliberate: a goal with no number cannot fail, and a number presented as
+derived when it was inherited is worse than one labelled as a guess.
 
 ## 3. Non-goals (v1)
 
@@ -442,10 +472,12 @@ amanuensis/
 │   └── ui/
 │       └── tray.py
 ├── tests/
+│   └── fixtures/asr/             # desk-mic corpus + reference transcripts (§2, Phase 1)
 ├── docs/
 │   ├── PRD.md                    # this file
 │   ├── HARNESS.md
-│   └── adr/                      # architecture decision records
+│   ├── adr/                      # architecture decision records
+│   └── gates/                    # phase-<n>.md — one record per gate (§9)
 ├── pyproject.toml
 └── README.md
 ```
@@ -656,6 +688,19 @@ switch off without being told is not a guarantee.
 
 Each phase ends at an approval gate. **Stop at the gate.**
 
+**Every gate states what rejects it, and every gate leaves a record**
+(resolved 2026-07-30, objection O9 and choice-story #9). Previously three of six
+gates named an activity — "report where it fails", "report edit rate" — with no
+condition attached, so they could not fail on their own terms and reduced to
+discretionary approval by the person whose work was being gated. Each gate below
+now carries a **Rejects if** line.
+
+Each gate also writes `docs/gates/phase-<n>.md`: the date, the measurements, the
+pass/reject decision, and §9's standing question — what this phase revealed that
+the PRD got wrong. Without it, Phase 1's measured latencies exist only in a
+conversation, and every later phase implicitly regresses against a baseline that
+was never written down.
+
 ### Probe — Is G1 reachable at all? (before Phase 0)
 
 Added 2026-07-30 (objection O4). A throwaway script — no package, no ABCs, no
@@ -684,6 +729,8 @@ load and validation, CLI skeleton, all ABCs defined with no implementations.
 **Gate:** `manu --help` runs, `mypy --strict src/` is clean, config loads and rejects a
 malformed file with a useful error.
 
+**Rejects if:** any of the three fails. All are mechanical; there is no judgment here.
+
 ### Phase 1 — Prove the ASR path
 `AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`. No hotkey, no injection.
 `manu transcribe --seconds 10` records from the mic and prints the transcript plus timings.
@@ -697,6 +744,14 @@ there stops the project. Also measure and report the **CPU-only** tier — it is
 gated, but it ships with a published number (§2, §10), and "not gated" is not
 "unmeasured." When renegotiating §7.1, weigh **pre-release inference** before full
 streaming; §7.1 now records both (objection O3).
+
+Benchmark methodology (objection O7): record a small desk-mic corpus with reference
+transcripts, commit it under `tests/fixtures/asr/`, and report WER per candidate
+engine. That figure is for **relative** comparison only — the corpus is too small to
+validate an absolute threshold, and it is not a G2 measurement (§2).
+
+**Rejects if:** G1 is missed on accelerated hardware. A CPU-tier miss does not reject;
+it is recorded and published.
 
 **Also at this gate — first G3 verification** (added 2026-07-30, objection O5).
 Run the daemon under packet capture through a full transcribe cycle and report
@@ -712,17 +767,44 @@ error messages, `DictationController` wiring the loop.
 **Gate:** Dictate into TextEdit, VS Code, Chrome, and a terminal. Report where it fails.
 Confirm clipboard save/restore behavior with a clipboard manager running.
 
+**Rejects if:** injection fails in **two or more** of the four named applications, or
+fails in a *native* text field. G4 claims "works in any focused application"; two of
+four is not that, and a native-field failure means the injector is broken rather than
+the target being hostile. A single Electron or Java failure is a known-hazard finding
+(§10) and does not reject — enumerate it and carry a per-app strategy override.
+
+Also confirm the clipboard-manager detection and tray indicator from §7.3 fire
+correctly, since this is the first gate at which they exist.
+
 ### Phase 3 — Post-processing and history
 `RuleBasedPostProcessor`, `VocabularyPostProcessor`, `HistoryStore`, silence trimming via VAD.
 
 **Gate:** Ten real dictations of ≥ 60 seconds. Report edit rate — what fraction of output
 needed manual correction, and what kind.
 
+**Rejects if:** edit rate exceeds the G2 threshold **and** the corrections are
+dominated by classes the rules chain should have caught (punctuation, capitalisation,
+spoken commands). An edit rate driven by proper nouns points at §5.6's vocabulary
+mechanisms, not at a phase failure.
+
+This is also where G2's provisional 5% threshold is confirmed or moved (§2). Moving it
+is a legitimate outcome; moving it without stating the reason in the gate record is
+not.
+
 ### Phase 4 — Tray, modes, polish
 `TrayApp`, `toggle` and `vad_auto` modes, error surfacing, README with the clipboard caveat
 documented, install path with checksummed model download.
 
 **Gate:** A second person installs it from the README without your help.
+
+**Rejects if:** they cannot reach a first successful dictation from the README alone,
+or they have to ask a question the README should have answered. Record what they asked
+— that list is the README's real defect report.
+
+Define the conduct in advance so the gate measures the README rather than the tester:
+observe silently, no hints, stop at 30 minutes, and note their starting environment.
+This gate is n=1 and unrepeatable; those constraints are what keep it honest rather
+than flattering.
 
 **Also at this gate — second G3 verification** (objection O5). Re-run packet capture
 against the assembled product: tray running, install path exercised, checksummed
@@ -814,7 +896,7 @@ below; none was made silently.
 | Record | Path | State |
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 7 pending |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — 10 accepted, 2 pending |
+| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all 12 accepted** |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 10 stories — 10 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 
@@ -823,13 +905,11 @@ against the instrument built to measure it) and `O12` (the default clipboard
 strategy is a transcript-egress path G3's verification structurally cannot see)
 are accepted and applied — see the revision log.
 
-**Still open** — `O7` (G2's WER corpus is undefined and no phase in §9 measures
-WER at all, so the Phase 1 engine ADR trades accuracy against latency with only
-the latency side defined) and `O9` (three of six gates state an activity rather
-than a pass condition, so they cannot fail on their own terms).
-
-Both bear on the same weakness: this document is better at defining what to build
-than at defining what would count as having built it badly.
+**All twelve objections are now disposed as accepted**, and every amendment is in
+the revision log. The through-line across them: this document was better at defining
+what to build than at defining what would count as having built it badly. G1 was not
+computable, G2 was stated in a unit nothing measured, G3 had a verification method no
+gate ran, and half the gates could not fail. Those are fixed.
 
 Two further caveats on the records themselves:
 
@@ -861,3 +941,5 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-30 | **O11 accepted.** G1 is defined with post-processing off (`chain = ["rules"]`). Phase 5 carries its own budget: p50 ≤ 700 ms, p95 ≤ 1100 ms. §7.5 now states that `max_latency_ms` is a cancellation deadline rather than a predictive check, and that the skip path costs the full ceiling and returns nothing. |
 | 2026-07-30 | **O10 accepted.** `[history] enabled` governs retention, not the write. The pre-injection write is unconditional; `false` deletes the row after injection succeeds. §8's guarantee is no longer silently contingent on a config key. Deliberately **not** addressed: `retain_days` and aborted-session retention, which the objection also raised. |
 | 2026-07-30 | **O3 accepted.** §7.1 now records pre-release inference — inference during the hold, nothing displayed — as a weighed alternative, deliberately not built for v1. Phase 1's "renegotiate §7.1" instruction previously pointed only at full streaming with retraction, the most expensive available response. |
+| 2026-07-30 | **O7 accepted.** G2 is restated as **edit rate ≤ 5%**, matching the Phase 3 gate; WER is no longer the product goal. A small committed desk-mic corpus (`tests/fixtures/asr/`) serves the Phase 1 engine benchmark for *relative* comparison only. The 5% threshold is recorded as **provisional** — inherited from the old WER number, not converted from it — and is confirmed or moved at Phase 3. |
+| 2026-07-30 | **O9 accepted.** Every gate in §9 gains a **Rejects if** line, and every gate writes `docs/gates/phase-<n>.md` carrying its measurements, decision, and what the phase revealed that this PRD got wrong. Phase 4's gate also fixes observer conduct in advance so it measures the README rather than the tester. |
