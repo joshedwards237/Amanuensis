@@ -16,8 +16,8 @@ objections:
     severity: high
     claim: "The spec measures itself against a cloud competitor while listing two shipping local, open-source dictation tools as reading material, never establishing that the claimed differentiator is still unoccupied."
     evidence: "§1 'The product it is measured against is Wispr Flow'; §13 lists 'nerd-dictation (Linux) — the injection layer, done well' and 'Talon Voice' under 'Prior art to read before Phase 1'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Build-vs-adopt paragraph added to §1 recording why the two shipping local tools do not close the gap: nerd-dictation is Linux-only and therefore does not serve the platform §7.3 targets first, and Talon is a voice-CONTROL system whose command grammar for driving the OS is an explicit §3 non-goal, with a different interaction model and licensing posture. The stated gap is narrow but real: general-purpose push-to-talk dictation, model resident, macOS-first, open source, no account. The paragraph names itself as the place a correction lands if §13's required reading before Phase 1 shows either tool closes the gap after all."
   - id: O3
     category: alternatives
     severity: high
@@ -30,22 +30,22 @@ objections:
     severity: medium
     claim: "The go/no-go experiment for the project's hardest goal is scheduled after two phases of scaffolding, when a throwaway script would answer it in an hour."
     evidence: "§9 Phase 0 requires 'ruff + black + mypy strict, AppConfig with TOML load and validation, CLI skeleton, all ABCs defined' before Phase 1's latency measurement; §10 mitigation for the High risk is 'Phase 1 gate is explicitly a go/no-go.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. A throwaway probe is inserted before Phase 0 in §9: a script outside §6.4 that loads the model = auto resolution for this hardware, transcribes a pre-recorded 10-second WAV, and prints elapsed transcribe time. Deleted afterwards, not a deliverable. It does NOT replace the Phase 1 gate and is optimistic by construction — it skips real capture, model residency, post-processing and injection — so it is a floor, and a floor is enough to kill the project an hour in rather than a scaffold in. Ambiguous result is treated as a pass. §10's top-risk mitigation updated to name the probe, since a gate positioned after the cost is incurred is a deferral rather than a mitigation. Carpaccio slice S1 reached the same conclusion independently."
   - id: O5
     category: scope
     severity: high
     claim: "G3 — the goal that carries the entire product premise — is verified by no phase gate in §9."
     evidence: "§2 G3 'Zero network traffic at runtime | Verified by packet capture with the app under load'; no gate in §9 mentions packet capture or network verification."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. Packet capture becomes a gate criterion twice. At Phase 1: the earliest point a model loads and therefore the earliest a Hugging Face cache-miss fetch would fire; the gate also confirms the model resolves from a local path rather than a repository ID. At Phase 4: re-run against the assembled product, because the tray toolkit and install path are new dependency surface introduced after Phase 1, and this is the last point before an audience sees it; the result goes in the README privacy section rather than only into the gate conversation. §10 gains a corresponding risk row. Note the scope limit carried from O12: this verifies Amanuensis's own sockets only and cannot see cross-process transcript egress."
   - id: O6
     category: scope
     severity: high
     claim: "WindowsInjector and LinuxInjector are mandated by the architecture and the repository layout, built by no phase, and declared out of scope by no non-goal."
     evidence: "§6.2 lists 'MacOSInjector / WindowsInjector / LinuxInjector'; §6.4 requires 'injection/macos.py, windows.py, linux.py'; §9 Phase 2 builds 'MacOSInjector (or Windows, per §7.3)'; §3 non-goals list neither platform."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-30. v1 is macOS-only. Windows and Linux move to §3 non-goals; §6.2's component diagram and §6.4's tree drop WindowsInjector/LinuxInjector and their files; §5.1's dual hotkey default loses the Right Alt branch; §7.3's Platform assumption paragraph is rewritten from 'macOS first' to 'macOS only', since 'first' implied a second platform no §9 phase ever scheduled; §11.1 is marked resolved; §9 Phase 2 drops 'or Windows, per §7.3'. factory.py raises an actionable error naming the unsupported platform. TextInjector stays an ABC so a later port remains a scheduling decision, but §7.3 now records two caveats on that claim — the ABC covers injection only, while HotkeyListener, the tray, and the manu toggle unix socket are each platform-shaped with no equivalent factory. This also removes the G5 damage of shipping two stub files that made §6.4 describe a product that does not exist."
   - id: O7
     category: specification quality
     severity: high

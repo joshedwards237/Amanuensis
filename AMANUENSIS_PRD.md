@@ -34,6 +34,23 @@ No account, no network, no audio leaving the machine.
 The product it is measured against is Wispr Flow. The differentiator is not features —
 it is that the audio never leaves the device and the user owns the stack.
 
+**Why build rather than adopt** (resolved 2026-07-30, objection O2). §7's discipline
+is that every decision records the alternative it rejected; the decision to build at
+all deserves the same treatment, and §13 lists two shipping local tools whose
+existence would otherwise go unaddressed:
+
+- **nerd-dictation** does the injection layer well — §13 says so — and is Linux-only.
+  The platform this product targets first (§7.3) is the one it does not serve.
+- **Talon Voice** has the mature hotkey and injection layer this product needs, but
+  it is a voice-*control* system: a command grammar for driving the OS, which §3
+  explicitly lists as a non-goal. Its interaction model and licensing posture are
+  both different from a press-hold-speak dictation tool the user owns outright.
+
+The gap is therefore narrow but real: general-purpose push-to-talk dictation, model
+resident in memory, macOS-first, open source, no account. If Phase 1's required
+reading (§13) shows either tool closes that gap after all, that is a finding for the
+Phase 1 gate and this paragraph is where the correction lands.
+
 ---
 
 ## 2. Goals
@@ -72,6 +89,11 @@ Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
 - Real-time streaming transcription with partial results on screen
 - Speaker diarization or multi-speaker meeting transcription
 - Mobile
+- **Windows and Linux** — v1 is macOS-only (resolved 2026-07-30, objection O6).
+  `TextInjector` remains an ABC so the port stays a scheduling decision (§7.3),
+  but no phase in §9 builds a second platform and §6.4 no longer stubs the files.
+  `injection/factory.py` raises an actionable error naming the unsupported
+  platform rather than failing obscurely.
 - Cloud sync of history or settings
 - Voice commands that control the OS ("open Chrome")
 - Text-to-speech (see §12 for where Kokoro actually belongs)
@@ -94,8 +116,8 @@ This group raises the bar on reliability — a dropped transcription is not a mi
 ### 5.1 Core loop
 
 1. Daemon runs in the background with the ASR model resident in memory.
-2. User presses and holds the configured hotkey (default: `Right Option` on macOS,
-   `Right Alt` on Windows).
+2. User presses and holds the configured hotkey (default: `Right Option`; macOS is the
+   only v1 platform per §3).
 3. Audio capture begins immediately. A visual indicator appears (§5.4).
 4. User speaks and releases the hotkey.
 5. Audio buffer is transcribed.
@@ -222,9 +244,7 @@ DictationController  (orchestrator — owns the loop, owns nothing else)
 │     ├── VocabularyPostProcessor
 │     └── LocalLLMPostProcessor
 ├── TextInjector            ← ABC
-│     ├── MacOSInjector
-│     ├── WindowsInjector
-│     └── LinuxInjector
+│     └── MacOSInjector           (v1; other platforms are §3 non-goals)
 ├── HistoryStore            → SQLite
 └── TrayApp                 → status surface only, no business logic
 ```
@@ -365,9 +385,8 @@ amanuensis/
 │   ├── injection/
 │   │   ├── base.py
 │   │   ├── macos.py
-│   │   ├── windows.py
-│   │   ├── linux.py
-│   │   └── factory.py            # platform detection → injector
+│   │   └── factory.py            # platform detection → injector;
+│   │                             # raises an actionable error off macOS
 │   ├── hotkey/
 │   │   ├── base.py
 │   │   └── listener.py
@@ -472,10 +491,18 @@ privacy claim would verify green while the leak is live. §2's G3 row now scopes
 the claim accordingly. Whatever gate ends up verifying G3 must cover the
 cross-process path or explicitly state that it does not.
 
-**Platform assumption:** Phase 2 targets **macOS first**, because its permissions model
-(Accessibility + Input Monitoring) is the most restrictive and will surface the hardest
-problems earliest. If your daily driver is Windows, swap the order at the Phase 2 gate —
-the ABC makes this a scheduling decision, not an architectural one.
+**Platform: macOS only for v1** (resolved 2026-07-30, objection O6; §3, §11.1). The
+original reasoning stands — macOS's permissions model (Accessibility + Input
+Monitoring) is the most restrictive and surfaces the hardest problems earliest — but
+"first" implied a second platform that no phase in §9 ever scheduled. Windows and
+Linux are now explicit non-goals.
+
+`TextInjector` remains an ABC, so a later port stays a scheduling decision rather
+than an architectural one. Two caveats on that claim, since it is no longer load-bearing
+for v1 and should not be trusted without evidence: the ABC covers injection only, and
+`HotkeyListener`, the tray, and the `manu toggle` unix socket (§6.1) are each
+platform-shaped with no equivalent factory. Whoever ports first will find out how
+much of the claim was true.
 
 ### 7.4 VAD: Silero, optional
 
@@ -534,6 +561,27 @@ can still recover their words.
 
 Each phase ends at an approval gate. **Stop at the gate.**
 
+### Probe — Is G1 reachable at all? (before Phase 0)
+
+Added 2026-07-30 (objection O4). A throwaway script — no package, no ABCs, no
+config, deliberately not to §6.4 — that loads the `model = "auto"` resolution for
+this hardware (§7.2), transcribes a pre-recorded 10-second WAV, and prints the
+elapsed transcribe time. Delete it afterwards; it is not a deliverable.
+
+**Gate:** Does transcription complete in a few hundred milliseconds, or in several
+seconds? An order of magnitude is all this needs to answer.
+
+The reasoning: §10 rates G1-unachievability as the top risk and offers the Phase 1
+gate as the mitigation, but that gate sits *after* the entire Phase 0 scaffold and
+most of Phase 1. A gate is a mitigation only when it can change the decision before
+the cost is incurred. This probe costs about an hour and makes the price of a "no"
+an hour rather than a scaffold.
+
+It does **not** replace the Phase 1 gate. This number is optimistic by
+construction — it skips real capture, model residency, post-processing and
+injection. It is a floor, and a floor is enough to kill the project early. If the
+probe is ambiguous, treat it as a pass and let Phase 1 decide.
+
 ### Phase 0 — Scaffolding
 Repo structure per §6.4, `pyproject.toml`, ruff + black + mypy strict, `AppConfig` with TOML
 load and validation, CLI skeleton, all ABCs defined with no implementations.
@@ -549,8 +597,15 @@ malformed file with a useful error.
 faster-whisper vs. Moonshine and write `docs/adr/0001-engine-selection.md`. **If G1 is
 missed here, stop and renegotiate §7.1 before continuing** — no later phase makes this faster.
 
+**Also at this gate — first G3 verification** (added 2026-07-30, objection O5).
+Run the daemon under packet capture through a full transcribe cycle and report
+whether any network traffic occurred. This is the earliest point a model loads, and
+therefore the earliest point a Hugging Face cache-miss fetch would fire. G3 is the
+goal that carries the product premise (§1) and until now no gate verified it.
+Confirm the model resolves from a local path, not a repository ID.
+
 ### Phase 2 — Hotkey and injection (the product becomes real)
-`HotkeyListener`, `MacOSInjector` (or Windows, per §7.3), permission checks with actionable
+`HotkeyListener`, `MacOSInjector`, permission checks with actionable
 error messages, `DictationController` wiring the loop.
 
 **Gate:** Dictate into TextEdit, VS Code, Chrome, and a terminal. Report where it fails.
@@ -568,6 +623,13 @@ documented, install path with checksummed model download.
 
 **Gate:** A second person installs it from the README without your help.
 
+**Also at this gate — second G3 verification** (objection O5). Re-run packet capture
+against the assembled product: tray running, install path exercised, checksummed
+model download performed. Phase 1 verified a narrower system; this is the last point
+before an audience sees it, and the tray toolkit and install path are both new
+dependency surface introduced since. Report the result in the README's privacy
+section rather than only at the gate.
+
 ### Phase 5 — Optional LLM post-processing
 `LocalLLMPostProcessor` with the latency ceiling from §7.5.
 
@@ -580,7 +642,9 @@ measured latency cost, ship it disabled and say so in the README.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| G1 unachievable on CPU-only hardware | High | Phase 1 gate is explicitly a go/no-go. CPU tier may ship with a smaller model and a documented latency expectation rather than a broken promise. |
+| G1 unachievable on CPU-only hardware | High | The pre-Phase-0 probe (§9) answers this to an order of magnitude in about an hour, before the scaffold is built; the Phase 1 gate remains the real go/no-go. CPU tier may ship with a smaller model and a documented latency expectation rather than a broken promise. |
+| Silent network egress from a transitive dependency | High | Packet capture is now a gate criterion at Phase 1 and again at Phase 4 (§9). Model weights resolve from a pinned local path, never a repository ID at runtime (§7.6). |
+| Transcript captured and cloud-synced by a third-party clipboard manager | High | Clipboard-manager detection at startup with a persistent tray indicator (§5.4, §7.3). Not covered by G3's packet capture — the egress is in another process. |
 | macOS permissions are opaque and users get stuck | High | Permission check at startup with copy-pasteable remediation, not a generic failure. |
 | Clipboard restore races with clipboard managers | Medium | Document it. Offer `keystroke` strategy. Do not claim it is solved. |
 | Electron and Java apps reject synthetic paste | Medium | Enumerate failures at the Phase 2 gate; per-app strategy override if needed. |
@@ -593,7 +657,11 @@ measured latency cost, ship it disabled and say so in the README.
 
 Resolve before or at the stated gate. Do not guess.
 
-1. **Primary OS target** — macOS assumed (§7.3). Confirm at Phase 2 gate.
+1. ~~**Primary OS target**~~ — **RESOLVED 2026-07-30 (objection O6): macOS-only v1.**
+   Windows and Linux are §3 non-goals. `TextInjector` stays an ABC so a later port is
+   a scheduling decision (§7.3), but nothing in §9 builds one and §6.4 no longer stubs
+   the files. Note what this closes: §7.3's "swap the order freely" claim was never
+   tested, and is now not relied upon for v1.
 2. **Settings UI** — tray menu is sufficient for v1. A React/Tauri settings panel is a
    post-v1 question and is not in §9.
 3. **Model distribution** — Hugging Face at first run vs. bundled installer. Phase 4.
@@ -630,31 +698,42 @@ Read these before writing code; several problems in §10 are already solved in p
 ## 14. Sentinel records for this document
 
 Four read-only sentinel agents were run against this PRD on 2026-07-30, before
-Phase 0 started. Each produced a structured record. **Every disposition in all
-three adjudicable records is `pending`** — the sentinels cannot fill them, by
-design, and nothing in this PRD has been amended in response to them. Resolving
-a disposition is a human act, and the read-only tool boundary on those agents is
-what enforces that.
+Phase 0 started. Each produced a structured record. The sentinels cannot fill a
+disposition — resolving one is a human act, and their read-only tool boundary is
+what enforces that. Every amendment made in response appears in the revision log
+below; none was made silently.
 
-| Record | Path | Entries |
+| Record | Path | State |
 |---|---|---|
-| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices, 7 pending |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections, 12 pending |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 10 stories, 10 pending |
+| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 7 pending |
+| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — 6 accepted, 6 pending |
+| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 10 stories — 10 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 
-Two objections are rated **critical** and both bear on §2 and §7.3 — read
-`O8` (G1 is not operationally defined against the instrument that measures it)
-and `O12` (the default clipboard strategy is an egress path G3's verification
-method structurally cannot see) before Phase 0 begins, since both change what
-Phase 0 should freeze.
+**Both critical objections are resolved.** `O8` (G1 was not operationally defined
+against the instrument built to measure it) and `O12` (the default clipboard
+strategy is a transcript-egress path G3's verification structurally cannot see)
+are accepted and applied — see the revision log.
+
+**Still open, and worth reading before Phase 0** — `O1` (is G1 tier-conditional,
+or does a CPU-tier miss stop the project?), `O3` (§7.1 rejected streaming without
+weighing pre-release inference, so the Phase 1 "renegotiate §7.1" instruction
+points at only the most expensive option), `O7` (G2's WER corpus is undefined and
+no phase measures WER), `O9` (three gates state an activity rather than a pass
+condition), `O10` (`[history] enabled = false` silently voids §8's crash
+guarantee), `O11` (the LLM latency ceiling is 75% of the p50 budget on its own).
+
+Two further caveats on the records themselves:
+
+- The **choice-story record was drawn concurrently with the objection record**,
+  not after it as the pipeline intends, so no story cites an objection ID. It
+  should be re-run now that dispositions exist.
+- Its Story #9 cites HARNESS.md's "1 of 3 constraints enforced" as evidence;
+  that figure has not been re-audited since and may be stale.
 
 The cost estimate omits a dollar figure: no snapshot exists in
 `observability/costs/`, and there is no list-price fallback. Its token figures
 are generation-side only and its stated failure direction is `likely-underrun`.
-
-Per §7's own discipline, any of these records that changes a decision here
-should produce a dated revision-log entry below — not a silent edit.
 
 ---
 
@@ -666,3 +745,7 @@ should produce a dated revision-log entry below — not a silent edit.
 | 2026-07-30 | Added §14 indexing the four sentinel records. Navigational only — no decision in §1–§13 was amended, and all 29 dispositions remain pending. |
 | 2026-07-30 | **O8 accepted.** G1 redefined as hotkey release to *text fully present*, measured by the new `LatencyBreakdown.g1_ms` (§6.3); `total_ms` is diagnostics only. Added the G1 measurement note to §2, including an explicit precedence statement that §2's 10 s budget and §7.1's 15–30 s revisit trigger are separate signals. HARNESS.md corrected to assert against `g1_ms`. |
 | 2026-07-30 | **O12 accepted.** Clipboard remains the default injection strategy; the transcript-egress exposure is made visible instead. §7.3 reframes clipboard-manager capture as a privacy surface rather than a restore race, and adds startup detection plus a tray indicator. §5.4 gains the clipboard exposure state; §5.3 gains `[injection] warn_on_clipboard_manager`. §2's G3 row now scopes packet-capture verification to this process only. |
+| 2026-07-30 | **O2 accepted.** §1 gains a build-vs-adopt paragraph recording why nerd-dictation (Linux-only) and Talon (voice control, a §3 non-goal) do not close the gap — applying §7's record-the-rejected-alternative discipline to the decision at the top of the tree. |
+| 2026-07-30 | **O4 accepted.** A throwaway latency probe is inserted before Phase 0 in §9, answering G1 to an order of magnitude in about an hour. It does not replace the Phase 1 gate and is optimistic by construction. §10's top-risk mitigation updated: a gate positioned after the cost is incurred is a deferral, not a mitigation. |
+| 2026-07-30 | **O5 accepted.** Packet capture becomes a gate criterion at Phase 1 (earliest model load, where a cache-miss fetch would fire) and again at Phase 4 (assembled product, new tray and install-path dependency surface). §10 gains a corresponding risk row. G3 previously had a stated verification method and no gate that ran it. |
+| 2026-07-30 | **O6 accepted.** v1 is macOS-only. Windows and Linux move to §3 non-goals; §6.2 and §6.4 drop the two injectors and their files; §5.1 loses the Right Alt default; §7.3 changes from "macOS first" to "macOS only"; §11.1 resolved. §6.4 no longer mandates two stub files that made the layout describe a product that does not exist. |
