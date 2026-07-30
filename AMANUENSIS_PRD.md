@@ -897,7 +897,7 @@ below; none was made silently.
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 7 pending |
 | Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all 12 accepted** |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 10 stories — 10 pending |
+| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | **second pass** — 13 stories, 13 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 
 **Both critical objections are resolved.** `O8` (G1 was not operationally defined
@@ -911,13 +911,12 @@ what to build than at defining what would count as having built it badly. G1 was
 computable, G2 was stated in a unit nothing measured, G3 had a verification method no
 gate ran, and half the gates could not fail. Those are fixed.
 
-Two further caveats on the records themselves:
-
-- The **choice-story record was drawn concurrently with the objection record**,
-  not after it as the pipeline intends, so no story cites an objection ID. It
-  should be re-run now that dispositions exist.
-- Its Story #9 cites HARNESS.md's "1 of 3 constraints enforced" as evidence;
-  that figure has not been re-audited since and may be stale.
+The choice-story record has been **re-run** against this amended PRD, in the
+intended order this time. Of its first-pass ten: one stands, six changed, two were
+resolved outright (by O6 and O9), and one was superseded. Seven of the thirteen are
+new — decisions the amendments themselves introduced. Read `#8`, `#9` and `#12`
+first; each maps a choice made *inside* an objection resolution without being
+posed as a choice.
 
 The cost estimate omits a dollar figure: no snapshot exists in
 `observability/costs/`, and there is no list-price fallback. Its token figures
