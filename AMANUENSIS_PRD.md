@@ -315,7 +315,26 @@ secondary user with motor impairment, for whom "a dropped transcription is not a
 minor annoyance," is the one who most needs the recovery path. Neither would have
 been told the trade existed.
 
-It costs one write and one delete on the non-retaining path.
+**The non-retaining path does not touch the database** (resolved 2026-07-31,
+choice-story #5). When `retain = false`, the pre-injection transcript is written to a
+`0600` temp file and unlinked once injection succeeds — it never enters
+`history.db` at all.
+
+The earlier reading was write-then-`DELETE` in SQLite, which makes "nothing persists" a
+privacy claim resting on a statement that marks pages free for reuse rather than
+erasing bytes. `secure_delete`, `VACUUM` and WAL checkpoint behaviour all bear on
+whether the transcript is actually gone, and specifying all three correctly is more
+work — and easier to get subtly wrong — than not writing it to the shared file in the
+first place. A component chosen silently for retention convenience should not become
+load-bearing for a privacy promise.
+
+**The write is scoped to sessions that reach injection** (choice-story #7). §8's
+guarantee protects words the user has committed to. A session aborted before injection
+— `abort_session()`, an empty transcript, a mic disconnect mid-capture — has no such
+claim and leaves nothing behind on either path. This closes the half of objection O10
+that was explicitly deferred: previously every misfired session was written to disk
+before the user had seen it, and retained for thirty days by default when `retain` was
+on.
 
 ### 5.6 Custom vocabulary
 
@@ -412,8 +431,38 @@ class LatencyBreakdown:
         """Every stage including capture. Diagnostics only — never assert G1 on this."""
 ```
 
-**Abstract bases** define the swap points. Every one of these exists because there is a
-real chance we replace the implementation, not for symmetry.
+**Abstract bases** define the swap points. The original rule — "every one of these
+exists because there is a real chance we replace the implementation, not for symmetry" —
+was one test covering three structurally different jobs, plus a fourth ABC it was never
+applied to (choice-story #4). Restated 2026-07-31 as three rules, each carrying the
+contract its own job requires:
+
+| Kind | Dispatch | Instances live | ABCs |
+|---|---|---|---|
+| **Replacement** | `registry.py`, config string → class | one at a time | `TranscriptionEngine` |
+| **Platform selection** | `factory.py`, platform detection | one per process | `TextInjector`, `HotkeyListener` |
+| **Composition** | ordered chain from `chain = [...]` | **several at once** | `TextPostProcessor` |
+
+The test to apply before adding an ABC is now *which of these three is it* — and if it
+is none, it is symmetry and does not get one.
+
+**Composition needs a contract the other two do not**, and `TextPostProcessor` was
+given two members on the assumption it was the same kind of thing as the others.
+It is not:
+
+- **Order is significant.** `chain` is ordered (§5.3) and each processor transforms the
+  same value. Reordering changes output.
+- **`process` must be pure with respect to the session.** It returns transformed text
+  and does not mutate `DictationSession`, so a chain is replayable against a stored
+  transcript and a processor cannot reach the audio.
+- **A raising processor must not cost the transcript.** If `process` raises mid-chain,
+  the chain is abandoned and the **last good text** proceeds to injection. §8's
+  persist-before-inject ordering already ran, so the words survive regardless; the
+  error is surfaced in the tray (§5.4) and recorded, not swallowed silently.
+
+`TranscriptionEngine` got `load` / `warm_up` / `is_loaded` because someone thought about
+its lifecycle. This is that thinking for the boundary that will actually grow — rules,
+vocabulary, and whatever the Phase 3 edit-rate report demands.
 
 ```python
 class TranscriptionEngine(ABC):
@@ -472,7 +521,29 @@ class DictationController:
     def abort_session(self) -> None: ...
 ```
 
-`AppConfig` is a singleton loaded once at startup, exposed via `AppConfig.get()`.
+**Configuration is loaded once and passed explicitly** (resolved 2026-07-31,
+choice-story #3). `load_config() -> AppConfig` returns a **frozen** dataclass at
+startup. There is no `AppConfig.get()` and no module-level instance.
+
+```python
+cfg = load_config()                      # frozen, validated, once
+ctrl = DictationController(config=cfg, engine=..., injector=..., ...)
+injector = MacOSInjector(cfg.injection)  # narrow slice, not the whole config
+```
+
+The PRD previously specified a singleton exposed via `AppConfig.get()` *and*
+constructor injection into `DictationController`, one sentence apart, without saying
+which was authoritative — Service Locator beside Dependency Injection, which is the
+pattern DI was formulated against. Both would have been used, and a reader at any call
+site could not tell which instance was in play.
+
+Components receive the narrowest slice they need. `RuleBasedPostProcessor` cannot read
+`[injection]` because it is never handed it — a structural boundary rather than a
+convention. The cost is real and accepted: `restore_delay_ms` reaches
+`injection/macos.py` through a parameter rather than an ambient lookup, and §5.3's
+config policy is now slightly more expensive to extend. That expense is the point;
+choice-story #6 notes the policy ratchets precisely because adding a key currently
+costs nothing.
 
 #### Concurrency model
 
@@ -511,7 +582,7 @@ amanuensis/
 ├── src/amanuensis/
 │   ├── __main__.py
 │   ├── cli.py
-│   ├── config.py                 # AppConfig singleton, TOML load + validation
+│   ├── config.py                 # load_config() -> frozen AppConfig, TOML + validation
 │   ├── models/
 │   │   ├── session.py            # DictationSession, LatencyBreakdown
 │   │   └── results.py            # InjectionResult, PermissionStatus
@@ -778,6 +849,20 @@ auth. What does apply:
 - Model weights are downloaded once at install over HTTPS with checksum verification, from
   a pinned revision. Never at runtime.
 - History DB is created `0600`. Audio storage defaults off.
+- **Both artefacts of an utterance, stated together** (choice-story #7). They are
+  handled asymmetrically and the asymmetry is deliberate, so it belongs in one place
+  rather than split across §5.3 and §8:
+  - **Audio** is never written unless `store_audio` is explicitly enabled. It is the
+    higher-sensitivity artefact and nothing in the product requires retaining it.
+  - **The transcript** is written before injection, unconditionally, for every session
+    that reaches injection — that is §8's crash guarantee and it is not user-disableable.
+    `retain = false` makes the write transient (temp file, unlinked after success,
+    §5.5); it does not make it optional.
+  - Sessions that never reach injection leave neither artefact.
+
+  The honest note, from objection O10: a transcript of what someone dictated into a
+  password manager is not obviously less sensitive than a recording of it. The
+  asymmetry is justified by durability, not by the transcript being safe.
 - The daemon holds microphone access permanently. Recording state must be unambiguous in
   the UI at all times (§5.4).
 - No `eval`/`exec` of anything derived from transcripts. Transcripts are injected as text
@@ -870,8 +955,9 @@ signatures are written against it rather than against an assumption.
 **Gate:** `manu --help` runs, `mypy --strict src/` is clean, config loads and rejects a
 malformed file with a useful error.
 
-**Rejects if:** any of the three fails, or a config/history path is hardcoded rather
-than resolved through `platformdirs`. All are mechanical; there is no judgment here.
+**Rejects if:** any of the three fails, a config/history path is hardcoded rather
+than resolved through `platformdirs`, or `config.py` exposes a module-level instance or
+a `.get()` accessor (§6.3). All are mechanical; there is no judgment here.
 
 ### Phase 1 — Prove the ASR path
 `AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`. No hotkey, no injection.
@@ -1091,7 +1177,7 @@ below; none was made silently.
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 2 accepted, 4 merged, 1 deferred |
 | Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — 5 accepted, 8 pending |
+| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — 9 accepted, 4 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 
@@ -1147,4 +1233,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **Choice-story #12 accepted.** The pre-Phase-0 probe now writes `docs/gates/probe.md` — hardware, resolved model, measured time, verdict, and the floor caveat — before its code is deleted. It also gains the *Rejects if* line it was the only gate in §9 to lack. |
 | 2026-07-31 | **Choice-story #13 accepted.** §7 gains a **"Where a decision goes"** routing table splitting the six decision surfaces by granularity, with the collision rule *a gate record reports, an ADR decides, §7 governs*. §14's counts are now generated by `scripts/regenerate-sentinel-index.py` and checked in CI. The §7-versus-ADR mutability tension is recorded as standing, not claimed as resolved. |
 | 2026-07-31 | **Choice-story #8 accepted.** The hardware tier split is stated as **positioning** in §4 and required in the Phase 4 README, not left in §2's measurement note — §4's privacy-motivated and offline-constrained user correlates with unaccelerated hardware. The CPU tier gains **G1-CPU (provisional): p50 ≤ 2 000 ms**, derived from §4's own not-slower-than-typing bar, and a tier missing it is dropped rather than shipped. |
+| 2026-07-31 | **Choice-story #3 accepted.** `AppConfig` becomes a **frozen dataclass from `load_config()`**, passed explicitly — no singleton, no `.get()`. Components receive the narrowest slice they need, so a post-processor structurally cannot read `[injection]`. Phase 0's *Rejects if* now fails on a module-level instance or an ambient accessor. |
+| 2026-07-31 | **Choice-story #4 accepted.** The single ABC rationale is restated as **three rules** — replacement, platform selection, composition — each carrying its own contract. `TextPostProcessor` finally gets one: order is significant, `process` is pure with respect to the session, and a mid-chain raise abandons the chain and injects the last good text. |
+| 2026-07-31 | **Choice-story #5 accepted.** When `retain = false` the transient transcript goes to a `0600` temp file and never enters `history.db`, rather than relying on SQLite `DELETE` — which marks pages free rather than erasing bytes, making "nothing persists" a claim the mechanism did not support. |
+| 2026-07-31 | **Choice-story #7 accepted.** The pre-injection write is **scoped to sessions that reach injection**, so aborted and misfired sessions leave nothing — closing the half of O10 that was deferred. §7.6 now states both artefacts' handling together, including that the asymmetry is justified by durability rather than by transcripts being safe. |
 | 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |

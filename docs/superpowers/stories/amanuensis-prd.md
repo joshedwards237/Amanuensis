@@ -17,18 +17,18 @@ stories:
   - id: 3
     lens: [coherence, patterns]
     title: AppConfig deferred to a nonexistent review mode
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: frozen dataclass, no ambient accessor. §6.3 now specifies load_config() -> frozen AppConfig, passed explicitly; there is no AppConfig.get() and no module-level instance. Components receive the narrowest slice they need — MacOSInjector(cfg.injection) rather than the whole config — so RuleBasedPostProcessor cannot read [injection] because it is never handed it. That is the structural boundary the story asked for, replacing a convention. The contradiction is resolved by choosing the mechanism §6.3 already used for its four collaborators rather than the one bolted on beside it: Singleton-with-.get() is Service Locator, the pattern DI was formulated against, and the PRD held both halves of that debate one sentence apart without saying which governed. Costs accepted and stated in the PRD: restore_delay_ms reaches injection/macos.py through a parameter, and §5.3's config policy is now marginally more expensive to extend — which choice-story #6 identifies as a feature, since the policy ratchets precisely because adding a key currently costs nothing. Phase 0's Rejects-if line now fails on a module-level instance or a .get() accessor, so the decision is enforced at the gate that would otherwise have fixed the pattern against it."
   - id: 4
     lens: [patterns, alternatives]
     title: An ABC kept for an unscheduled port
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: restate as three rules. §6.3 now classifies every ABC by which of three jobs it does — replacement (TranscriptionEngine, via registry.py, one at a time), platform selection (TextInjector and HotkeyListener, via factory.py, one per process), composition (TextPostProcessor, ordered chain, several at once). The test before adding an ABC is now which of the three it is, and if it is none it is symmetry and does not get one. That also gives hotkey/base.py the classification the single rule never applied to it. The story's substantive point — that composition needs a contract the other two do not — is adopted rather than deferred, and the three open questions it listed are answered in the PRD: order is significant because chain is ordered and each processor transforms the same value; process must be pure with respect to the session, so a chain is replayable against a stored transcript and a processor cannot reach the audio; and a processor raising mid-chain abandons the chain and sends the last good text to injection, with the error surfaced in the tray rather than swallowed. §8's persist-before-inject ordering already ran, so the words survive regardless."
   - id: 5
     lens: [defaults, consequences]
     title: SQLite delete became a privacy mechanism
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: temp file outside the database. When retain = false the pre-injection transcript goes to a 0600 temp file, unlinked once injection succeeds, and never enters history.db. The story identified the real problem precisely: 'nothing persists' had become a privacy claim resting on SQLite DELETE, which marks pages free for reuse rather than erasing bytes, with secure_delete, VACUUM and WAL checkpoint behaviour all bearing on the answer and none specified. Rather than specify all three correctly — more work, and easier to get subtly wrong — the transient path simply does not use the shared file. A component chosen silently for retention convenience should not become load-bearing for a privacy promise. The story's option (c), narrowing the claim to 'not queryable through manu history', was available and declined: it is honest but weaker than what a privacy-motivated §4 user will read into it."
   - id: 6
     lens: [forces, consequences]
     title: Config policy survived collision by redefining a key
@@ -37,8 +37,8 @@ stories:
   - id: 7
     lens: [forces, consequences]
     title: Audio never stored, transcripts always written
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: scope the write to sessions that reach injection, and state both artefacts together. (1) SCOPING — §8's guarantee protects words the user has committed to; a session aborted before injection (abort_session(), an empty transcript, a mic disconnect mid-capture) has no such claim and now leaves nothing on either path. This closes the half of objection O10 that was explicitly deferred: previously every misfired session was written to disk before the user had seen it, and retained for thirty days by default. (2) SYMMETRY OF STATEMENT — §7.6 now carries both artefacts in one place rather than split across §5.3 and §8, including the honest note O10 raised and set aside: a transcript of what someone dictated into a password manager is not obviously less sensitive than a recording of it, and the asymmetry is justified by durability rather than by the transcript being safe. NOT adopted, and left open: the story's option (c), revisiting store_audio on the grounds that a bounded audio ring is a smaller marginal step now that transcripts are written unconditionally. That would reopen a default §5.3 and §7.6 argue well, and it should be driven by a real Phase 3 debugging need rather than by symmetry."
   - id: 8
     lens: [forces, consequences]
     title: Tier-conditional G1 splits promise from differentiator
