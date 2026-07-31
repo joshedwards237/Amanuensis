@@ -3,8 +3,10 @@
 Measured 2026-07-31 on Apple M3 Max / 36 GB, in response to the question: *can
 Amanuensis do the Wispr-Flow-style cleanup pass locally, and what would it cost?*
 
-**Answer: yes, technically. The blocker is not latency or hardware — it is
-fidelity.**
+**Answer: technically yes, but NOT with this design.** Measured end-to-end on real
+ASR output it fails catastrophically — see *End-to-end result* below, added after the
+rest of this record was written. The hand-written cases in the middle of this document
+all passed; the real ones did not, and the gap between those two facts is the finding.
 
 ## Why this was measured at all
 
@@ -113,6 +115,73 @@ Not implementation detail; these are the constraints that make the feature safe:
 
 Constraints 2 and 3 are cheap deterministic checks around a probabilistic step,
 and they turn the failure mode from *silent corruption* into *visible no-op*.
+
+## End-to-end result — the pass makes transcription 5–28× WORSE
+
+Added 2026-07-31 after running the cleanup over real `tiny.en` and `small.en` output
+across all six corpus samples. Everything above this section used **hand-written**
+disfluent inputs. Those worked. Real ASR output did not.
+
+| ASR | raw WER | after cleanup |
+|---|---|---|
+| `tiny.en` (+VAD) | 19.6% | **110.0%** |
+| `small.en` (+VAD) | 6.1% | **171.1%** |
+
+Four failure modes, none of which appeared in hand-written testing:
+
+1. **Chat preamble leaks into the output.** `"Here is the cleaned text:"` emitted as
+   literal text — which, in this product, is pasted into whatever the user was typing.
+2. **Wholesale hallucination.** `05-noisy` came back as *"I'd like to start by saying
+   that I'm excited to be here today..."* — 93 invented words with no relationship to
+   the audio. The raw transcript was correct.
+3. **Refusal.** `06-short` produced *"I don't see any dictated speech provided. Please
+   provide the text, and I'll clean it up according to the rules you specified."*
+4. **Content deletion.** `04-fast` lost half its sentence.
+
+**Latency was also understated.** The 718 ms figure above assumed hand-written inputs.
+Real transcripts are longer, so the pass generates more tokens: measured
+`tiny.en` + cleanup ranged **373–2,201 ms**, and `small.en` + cleanup up to 4,795 ms.
+The 700 ms Phase 5 budget is not marginally missed; it is missed by 3×.
+
+### The safety constraints work, and they are mandatory
+
+The four constraints proposed above were written *before* this test, from three
+hand-written cases. They caught **every** catastrophic failure:
+
+| Sample | tiny.en | small.en |
+|---|---|---|
+| 01-natural | passed, WER unchanged | passed, WER unchanged |
+| 02-code | `INVENT` (8 words) | `INVENT` (6) |
+| 03-proper-nouns | passed, WER unchanged | passed, WER *improved* |
+| 04-fast | `SHRINK` (51%) | passed, +2% |
+| 05-noisy | `INVENT` (93) | `INVENT` (46) |
+| 06-short | `SHRINK` (43%) | `INVENT` (19) |
+
+No catastrophic output escaped. That is not luck: **deletion-only is a checkable
+property**, and every failure violated it by inserting words absent from the raw
+transcript or by removing too many. The two samples that passed the checks were
+genuinely improved or neutral.
+
+**With the fallback wired in, the worst case is "the user gets the raw transcript."
+Without it, the worst case is hallucinated text silently pasted into their document.**
+
+### What this means for Phase 5
+
+The feature is **not shippable as scoped**. A 3B instruct model with a directive
+prompt is the wrong instrument: it is a *generator* being asked to perform a
+*deletion*, and nothing in its architecture constrains it to that. Options, none yet
+tested:
+
+- **Constrained decoding** — restrict output to a subsequence of the input, making
+  insertion structurally impossible rather than merely checked.
+- **A fine-tuned deletion model** — seq2seq trained on disfluency removal, which is a
+  well-studied task with public datasets, rather than a general instruct model.
+- **Token-level classification** — label each input token keep/delete. Fast, bounded,
+  auditable, and cannot hallucinate. Loses self-correction resolution.
+- **Keep rules-only** and accept that Amanuensis is a verbatim transcriber.
+
+The self-correction resolution that motivated un-deferring Phase 5 is real and the 3B
+model can do it. But it cannot do *only* that, and "only that" is the requirement.
 
 ## What is still unknown
 
