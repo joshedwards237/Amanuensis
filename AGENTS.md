@@ -53,6 +53,38 @@
   after a batch of accepted objections — a single pass maps the document as written, not
   what the fixes bring in.
 
+- **When a latency budget is missed, check defaults before changing design.** Every
+  serious latency problem in this project was an unchecked default. `vad_filter=False`
+  cost 11x (`base.en` 6,039 ms -> 541 ms on a 25 s sample; `small.en` 23,886 -> 1,438 ms)
+  because the decoder repetition-loops on silence. CTranslate2 defaults to **4 threads**
+  regardless of core count — worth 1.8x on a 14-core machine. And §7.2's model table was
+  wrong by ~7x because CTranslate2 has **no Metal backend**, so "Apple Silicon" was a CPU
+  tier named after an accelerator. A config flag, a thread count, and a smaller model —
+  none of it needed a design change. Found 2026-07-31.
+
+- **Measure the tail, not the median.** A p50 from one clean sample said GO; the p95 over
+  six real samples was 14x worse and said the opposite. `base.en` measured 352 ms p50 on
+  the probe and 5,810 ms p95 on the corpus. A bare median has already misled this project
+  once — any latency figure entering the PRD carries p50 *and* p95, or is labelled a floor.
+
+- **Hand-written test cases for an LLM feature will pass while real pipeline output
+  fails.** The Phase 5 cleanup pass handled three self-authored disfluent inputs
+  correctly and then made real ASR output **5-28x worse** (WER 19.6% -> 110%), emitting
+  chat preamble into the document, hallucinating 93 words on a sample the ASR got right,
+  and refusing outright. Test against frozen real output before recommending, not after.
+  A self-authored n=3 is worse than no test: it manufactures confidence.
+
+- **Wrap a probabilistic step in deterministic checks, and design them before you need
+  them.** Four constraints written *before* the Phase 5 test — persist raw, reject output
+  containing words absent from the input, fall back if >25% of content words vanish, and
+  one-keystroke undo — caught **every** catastrophic failure. Deletion-only is a checkable
+  property; that is what made the failures catchable at all. They turned silent corruption
+  into a visible no-op.
+
+- **Freeze the input before comparing approaches.** `experiments/asr-baseline.json` holds
+  the `tiny.en` transcripts once, so candidate post-processing approaches are compared on
+  identical data rather than each re-running ASR and measuring its variance too.
+
 - **Check the command doc for output paths, not the agent's suggestion.** The
   cost-estimator recommended `observability/costs/`; the canonical path in
   `commands/cost-estimate.md` is `cost-estimates/<YYYY-MM-DD>-<slug>-estimate.md`.

@@ -1,0 +1,10 @@
+- **Date**: 2026-07-31
+- **Agent**: main session (probe, engine benchmark)
+- **Task**: Measured whether G1 (p50 ≤ 400 ms) is reachable on target hardware, across five candidate ASR models.
+- **Surprise**: Every serious latency problem this project had was a **default nobody had checked**, not a limit of the hardware or the model.
+  1. **`vad_filter` was the whole p95 story.** `base.en` on a 25 s sample: 6,039 ms off, **541 ms** on. `small.en`: 23,886 → 1,438 ms. The cause is decoder repetition looping on silence — `condition_on_previous_text=False` alone recovers most of it. Without VAD *no* candidate passed G1's p95; with it, `tiny.en` passes both p50 (328 ms) and p95 (420 ms). The PRD called trimming "a free latency win on every mode"; it is actually what stands between the product and a 26-second worst case.
+  2. **CTranslate2 defaults to 4 threads.** On a 14-core M3 Max that cost 1.8× — 4,413 ms vs 2,412 ms for the identical model. The probe's first run returned NO-GO on that default, which would have fired the project's top risk on a library setting rather than on physics.
+  3. **The spec's own model table was wrong by ~7×.** §7.2 sent Apple Silicon to `distil-large-v3` (2,412 ms) where `base.en` does the job in 352 ms — because **CTranslate2 has no Metal backend**, so "Apple Silicon" was a CPU tier wearing an accelerator's name.
+- **Proposal**: For GOTCHAS — when a latency budget is missed, check library defaults and preprocessing flags *before* changing model or architecture. The three fixes above were a config flag, a thread count, and a smaller model. None required a design change.
+- **Improvement**: Latency work should start by measuring the **tail**, not the median. A p50 from one clean sample said GO; the p95 over six real samples said the opposite, and the p95 is what a user feels. The probe measured only p50 because it only had one clip — the corpus is what exposed it.
+- **Constraint**: proposed — any latency figure entering the PRD carries both p50 and p95, or is labelled as a floor. A bare median has already misled this project once.
