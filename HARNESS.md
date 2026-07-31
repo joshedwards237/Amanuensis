@@ -117,6 +117,23 @@
 - **Tool**: none yet
 - **Scope**: commit
 
+### Sentinel index is not stale
+
+- **Rule**: PRD §14's sentinel-record index must match the actual disposition
+  counts in `docs/superpowers/{slices,objections,stories}/`. The index is
+  generated, never hand-edited — it was hand-maintained for one day and went
+  stale three times in that day, and a stale count reads as current
+  (choice-story #13).
+- **Enforcement**: deterministic
+- **Tool**: `python3 scripts/regenerate-sentinel-index.py --check`
+- **Scope**: pr
+- **Notes**: Counts are parsed from each record's YAML frontmatter using the
+  four-space indentation rule, so a `disposition:` token quoted inside an
+  `evidence:` or `claim:` string is never counted. A naive grep over the whole
+  file counts both — in 2026-05 that trap made a fully-resolved record report
+  three pending items. Added 2026-07-31; previously enforced in CI but
+  undeclared here, which the 2026-07-31 audit flagged as reverse drift.
+
 ### No secrets in source
 
 - **Rule**: No API keys, tokens, passwords, or private keys may appear
@@ -695,9 +712,14 @@ Run /reservoir for an on-demand read, or /reservoir tune to edit this block.
 <!-- Auto-updated by /harness-audit — do not edit manually -->
 
 Last audit: 2026-07-31
-Constraints enforced: 3/5 declared (1 deterministic, 2 agent, 2 unverified) — of
-  which 1 actually runs automatically (secrets, advisory Stop hook, non-blocking);
-  the 2 agent constraints have no PR trigger and have never gated a merge
+Constraints enforced: 4/6 declared (2 deterministic, 2 agent, 2 unverified).
+  The sentinel-index check was enforced in CI but undeclared at audit time; it is
+  now declared, which is what moves this from 3/5 to 4/6. Of the four, exactly
+  ONE gates a merge — the sentinel-index step in
+  .github/workflows/harness.yml, which runs on pull_request and fails the job.
+  The secrets check runs via an advisory Stop hook and is non-blocking. The 2
+  agent constraints pass on content (32/32 dispositions resolved) but have no PR
+  trigger and have never gated a merge.
 Garbage collection active: 4/14 (2 broken as declared, 8 have no target in this
   pre-implementation repo)
 Drift detected: yes

@@ -1,0 +1,3 @@
+# Per-machine affordance recorder log. HARNESS.md declares this LOCAL
+# (per-machine only) — session invocation noise, not project state.
+observability/affordance-invocations.json
