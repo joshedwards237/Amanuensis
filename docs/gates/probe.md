@@ -64,19 +64,25 @@ accelerator's name. That is the root cause of the mis-sizing, and it means
 objection O1's G1/G1-CPU split is drawn along the wrong axis on macOS: there is
 no acceleration here, only more or fewer CPU cores.
 
-### 3. Cost is per 30-second window, not per second of audio
+### 3. Latency is per 30-second window, not per second of audio
 
 `base.en` takes 352 ms for 10 s and 517 ms for 26 s — 1.5×, not 2.6×. Whisper's
 encoder always processes a padded 30-second window; only the decoder scales with
 output length.
 
+("Cost" throughout this record means **elapsed time and CPU**, never money. The
+product makes no network calls and has no paid dependency at runtime — G3.
+Dollar figures in this repo appear only in `cost-estimates/`, which estimates
+the token spend of *building* Amanuensis through the agent pipeline, not of
+running it.)
+
 Consequences the PRD does not account for:
 
-- **A 2-second utterance costs nearly what a 25-second one does.** Most real
-  dictation is short, so the common case pays close to the worst case.
+- **A 2-second utterance takes nearly as long as a 25-second one.** Most real
+  dictation is short, so the common case pays close to the worst-case latency.
 - **§7.4's VAD silence trimming is worth far more than "a free latency win."**
-  It is the difference between paying for a 30 s window and paying for the
-  speech. Slicing record S5 argued trimming belongs in Phase 1 rather than
+  It is the difference between spending 30 s of window on every utterance and
+  spending only what the speech needs. Slicing record S5 argued trimming belongs in Phase 1 rather than
   Phase 3 and was left open; this is evidence for it.
 - **§2's 10-second utterance basis is close to arbitrary**, since anything under
   30 s costs about the same, and §7.1's 15–30 s revisit trigger tests the same
