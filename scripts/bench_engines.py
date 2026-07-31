@@ -159,6 +159,19 @@ CORPUS_MIN_RECOMMENDED = 5
 # 95% two-sided normal quantile, for the Wilson interval below.
 Z_95 = 1.959963984540054
 
+# Display labels for the environment block. `.title()` produces "Ctranslate2"
+# and "Logical Cpus", which look like a machine wrote them without looking.
+ENV_LABELS = {
+    "platform": "Platform",
+    "machine": "Architecture",
+    "python": "Python",
+    "logical_cpus": "Logical CPUs",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "faster_whisper": "`faster-whisper`",
+    "ctranslate2": "`ctranslate2`",
+}
+
 
 # --------------------------------------------------------------------------
 # Environment
@@ -634,7 +647,7 @@ def run_model(
         # Warm-up: discarded for timing, kept for WER. A resident daemon is
         # always warm (PRD §9), so the cold run is not the user's experience.
         transcript, warm_ms = transcribe(data)
-        latencies = []
+        latencies: list[float] = []
         for _ in range(runs):
             _text, elapsed = transcribe(data)
             latencies.append(elapsed)
@@ -800,7 +813,7 @@ def print_console_report(
     print()
     print("Machine")
     for key, value in env.items():
-        print(f"  {key:<16} {value}")
+        print(f"  {strip_markdown(ENV_LABELS.get(key, key)):<16} {value}")
     print(f"  {'cpu_threads':<16} {threads}  — {threads_basis}")
     print(f"  {'device':<16} cpu  — CTranslate2 has no Metal backend (PRD §7.2)")
     print(f"  {'compute_type':<16} {COMPUTE_TYPE}")
@@ -827,22 +840,27 @@ def print_console_report(
     print(f"  of the {G1_P50_MS:.0f} ms p50 budget after transcription is shown as headroom.")
     print()
     header = (
-        f"  {'model':<20} {'p50':>9} {'p95':>9} {'min':>9} {'max':>9} "
-        f"{'headroom':>9} {'G1':>5} {'G1-CPU':>7} {'tier':>5}"
+        f"  {'model':<20} {'p50':>10} {'p95':>10} {'min':>10} {'max':>10} "
+        f"{'headroom':>10} {'G1':>5} {'G1-CPU':>7} {'tier':>5}"
     )
     print(header)
     print("  " + "-" * (len(header) - 2))
     for result in results:
         if result.error:
-            print(f"  {result.model:<20} unavailable — {result.error[:40]}")
+            print(f"  {result.model:<20} unavailable — {result.error[:44]}")
             continue
         p50, p95 = result.p50_ms, result.p95_ms
         g1, g1_cpu = verdict(p50, p95)
-        headroom = G1_P50_MS - p50
+        cells = [
+            f"{p50:.1f}ms",
+            f"{p95:.1f}ms",
+            f"{min(result.all_latencies):.1f}ms",
+            f"{max(result.all_latencies):.1f}ms",
+            f"{G1_P50_MS - p50:+.1f}ms",
+        ]
         print(
-            f"  {result.model:<20} {p50:8.1f}ms {p95:8.1f}ms "
-            f"{min(result.all_latencies):8.1f}ms {max(result.all_latencies):8.1f}ms "
-            f"{headroom:8.1f}ms {g1:>5} {g1_cpu:>7} {tier_for(p50):>5}"
+            f"  {result.model:<20} " + " ".join(f"{c:>10}" for c in cells)
+            + f" {g1:>5} {g1_cpu:>7} {tier_for(p50):>5}"
         )
     if ok:
         n_obs = len(ok[0].all_latencies)
@@ -877,21 +895,25 @@ def print_console_report(
     inside = [r for r in ok if r.p50_ms <= G1_P50_MS]
     if inside:
         best = min(inside, key=lambda r: r.p50_ms)
-        print(f"  Tier A (transcribe only) — {len(inside)} of {len(ok)} candidates land")
-        print(f"  inside the {G1_P50_MS:.0f} ms p50 budget. Fastest: {best.model} "
-              f"at {best.p50_ms:.0f} ms.")
-        print( "  A tier is decided by the SELECTED model, so this is Tier A only if the")
-        print( "  model the ADR selects is one of them — and only if postprocess + inject")
-        print(f"  fit in the {G1_P50_MS - best.p50_ms:.0f} ms that remain.")
+        names = ", ".join(r.model for r in inside)
+        print(f"  Tier A (transcribe only). {len(inside)} of {len(ok)} candidates land inside")
+        print(f"  the {G1_P50_MS:.0f} ms p50 budget: {names}.")
+        print(f"  Fastest is {best.model} at {best.p50_ms:.0f} ms.")
+        print()
+        print("  A tier is decided by the model the ADR SELECTS, not by the fastest one")
+        print("  measured — so this is Tier A only if the selected model is in that list,")
+        print(f"  and only if postprocess + inject fit in the "
+              f"{G1_P50_MS - best.p50_ms:.0f} ms that remain.")
     elif ok:
         best = min(ok, key=lambda r: r.p50_ms)
-        print(f"  Tier B (transcribe only) — no candidate lands inside {G1_P50_MS:.0f} ms.")
         g1_cpu = "inside" if best.p50_ms <= G1_CPU_P50_MS else "OUTSIDE"
-        print(f"  Fastest: {best.model} at {best.p50_ms:.0f} ms, {g1_cpu} the "
+        print(f"  Tier B (transcribe only). No candidate lands inside {G1_P50_MS:.0f} ms.")
+        print(f"  Fastest is {best.model} at {best.p50_ms:.0f} ms — {g1_cpu} the "
               f"{G1_CPU_P50_MS:.0f} ms G1-CPU floor.")
+        print()
         print( "  PRD §9: a Tier B miss does not reject the gate; it is recorded and")
-        print(f"  published. Missing G1-CPU is different — PRD §2 drops that machine")
-        print( "  class in §3 rather than shipping it.")
+        print( "  published. Missing G1-CPU is a different matter — PRD §2 drops that")
+        print( "  machine class in §3 rather than shipping it.")
     else:
         print("  No model completed. Nothing to report.")
     print()
@@ -931,7 +953,7 @@ def build_markdown(
     add("|---|---|")
     add(f"| Date | {time.strftime('%Y-%m-%d')} |")
     for key, value in env.items():
-        add(f"| {key.replace('_', ' ').title()} | {value} |")
+        add(f"| {ENV_LABELS.get(key, key)} | {value} |")
     add(f"| `cpu_threads` | {threads} — {threads_basis} |")
     add("| `device` | `cpu` — CTranslate2 has no Metal backend (PRD §7.2) |")
     add(f"| `compute_type` | `{COMPUTE_TYPE}` |")
@@ -999,9 +1021,7 @@ def build_markdown(
 
     add("## Accuracy (WER)")
     add("")
-    for caveat in corpus_caveats(samples, results):
-        add(f"> {caveat}")
-        add(">")
+    add("\n>\n".join(f"> {caveat}" for caveat in corpus_caveats(samples, results)))
     add("")
     add("| Model | WER | 95% CI | Substitutions | Deletions | Insertions |")
     add("|---|---|---|---|---|---|")
@@ -1050,7 +1070,7 @@ def build_markdown(
                 ratio = f"{result.p50_ms / baseline.p50_ms:.2f}×"
             else:
                 ratio = "—"
-            marker = "  ← resolved default" if result.cpu_threads == threads else ""
+            marker = " *(resolved default)*" if result.cpu_threads == threads else ""
             add(f"| {result.cpu_threads}{marker} | `{result.model}` | "
                 f"{result.p50_ms:.0f} ms | {result.p95_ms:.0f} ms | {ratio} |")
         add("")
@@ -1084,9 +1104,9 @@ def parse_thread_list(raw: str, default_threads: int) -> list[int]:
         try:
             values = sorted({int(v) for v in raw.replace(",", " ").split()})
         except ValueError as exc:
-            raise SystemExit(f"--sweep-threads: expected integers, got {raw!r}") from exc
-        if any(v < 1 for v in values):
-            raise SystemExit("--sweep-threads: values must be >= 1")
+            raise ValueError(f"--sweep-threads: expected integers, got {raw!r}") from exc
+        if not values or any(v < 1 for v in values):
+            raise ValueError("--sweep-threads: values must be integers >= 1")
         return values
     total = os.cpu_count() or default_threads
     candidates = {4, default_threads, total, max(1, default_threads // 2)}
@@ -1223,6 +1243,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: --runs must be >= 1", file=sys.stderr)
         return 2
 
+    # Validate the sweep arguments BEFORE anything expensive. They are only used
+    # at the very end, and a typo discovered after a twenty-minute benchmark has
+    # already run is a twenty-minute typo.
+    thread_values: list[int] = []
+    sweep_model = ""
+    if args.sweep_threads is not None:
+        try:
+            thread_values = parse_thread_list(args.sweep_threads, threads)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        sweep_model = args.sweep_model or models[0]
+
     env = describe_machine() | library_versions()
     if env.get("faster_whisper") == "NOT INSTALLED":
         print(
@@ -1259,9 +1292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
 
     sweep_results: list[ModelResult] = []
-    if args.sweep_threads is not None:
-        sweep_model = args.sweep_model or models[0]
-        thread_values = parse_thread_list(args.sweep_threads, threads)
+    if thread_values:
         if verbose:
             print(f"\nsweeping cpu_threads {thread_values} on {sweep_model}", flush=True)
         for value in thread_values:

@@ -1292,14 +1292,39 @@ the README that packet capture covers Amanuensis's own sockets only, and that
 transcripts transit the system clipboard by default where another process may capture
 them (§7.3). An unqualified "G3 verified" is the failure O12 described.
 
-### Phase 5 — Optional LLM post-processing — **DEFERRED**
+### Phase 5 — LLM second pass — **UN-DEFERRED 2026-07-31**
 
-**Deferred indefinitely, 2026-07-31** (slicing record S7). Not scheduled, not cut. It
-blocks nothing, and choice-story #9 shows its budget cannot be failed by construction —
-p50 ≤ 700 ms is G1 plus the ceiling, while §7.5's own tolerance argument rejects the
-latency the budget now permits. Revisit when Phase 3 has produced a real edit rate
-showing what the rules chain provably could not fix; that number is the evidence this
-decision currently lacks. The `[postprocess.llm]` config block stays reserved.
+Deferred earlier the same day (slicing record S7) on the reasoning that it blocks
+nothing and its budget cannot be failed by construction. **That disposition is
+reversed**, for a reason S7 did not weigh: the second pass is not polish, it is a
+**core feature of the product §1 measures against**. A verbatim transcriber and a tool
+that resolves your self-corrections are different products, and a user comparing them
+will not grade on the distinction.
+
+Feasibility is measured, not assumed — `docs/gates/phase5-feasibility.md`. Summary: an
+MLX-backed `Llama-3.2-3B-Instruct-4bit` resolves self-corrections correctly at
+**278–390 ms** on Apple Silicon, because **MLX has a Metal backend and CTranslate2 does
+not** — the second pass runs on the GPU the transcription cannot use.
+
+**The blocker is fidelity, not latency.** The measured failure mode is that the pass
+*rewrites* rather than merely cleaning: it dropped "on it" from one input and "let's
+meet" from another, silently. In a dictation tool that is strictly worse than leaving
+fillers in — a user can see and delete an "um", but cannot see a clause removed before
+the text reached the screen. Same hazard class as §7.3's clipboard exposure, and it
+falls under §7.6's surfacing-versus-preventing doctrine.
+
+Four constraints therefore ship *with* the feature, not after it:
+
+1. **The pre-injection write stores the RAW transcript** (§8), never the cleaned one.
+2. **No-invent check**: if cleaned output contains content words absent from the raw
+   transcript, discard it and inject raw. Deletion is intended; insertion is a
+   hallucination.
+3. **Length floor**: if cleaning removes more than ~25% of content words, treat it as
+   over-editing and fall back to raw.
+4. **One-keystroke undo to the raw text**, because the user cannot know what was removed.
+
+Constraints 2 and 3 are cheap deterministic checks wrapped around a probabilistic step.
+They convert the failure mode from silent corruption into a visible no-op. The `[postprocess.llm]` config block stays reserved.
 
 `LocalLLMPostProcessor` with the latency ceiling from §7.5.
 
@@ -1383,7 +1408,7 @@ below; none was made silently.
 <!-- BEGIN sentinel-index (generated) -->
 | Record | Path | State |
 |---|---|---|
-| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 2 accepted, 4 merged, 1 deferred |
+| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
 | Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
@@ -1449,6 +1474,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **Choice-story #6 accepted.** §5.3 gains **one bounded exception**: behaviour a stated guarantee depends on is not user-settable, with §8's persist-before-inject as the first instance. Prefer the exception to another rename — O10 resolved the first collision by redefining a key, which would otherwise have become the precedent. The `[experimental]` tier is *not* adopted; §5.2's flag mechanism gap stays open. |
 | 2026-07-31 | **Choice-story #9 accepted.** §7.5 now records that Phase 5's budget is arithmetic rather than chosen, that its own 900 ms tolerance line contradicts the 1100 ms p95, and that the gate cannot fail it by construction. Deliberately unresolved while Phase 5 is deferred — whoever revives it sets the budget from tolerance first and derives `max_latency_ms` from that. |
 | 2026-07-31 | **Choice-story #11 accepted.** §7.6 names the **surfacing-versus-preventing doctrine**, including the clause that matters — unless prevention is free *or the user has no viable action* — and records that §7.3 sits at its edge. §7.3's orphaned G3 obligation is assigned to the **Phase 4 gate**: an unqualified "G3 verified" is itself the failure O12 described. |
+| 2026-07-31 | **Phase 5 un-deferred, and scoped from measurement.** Reverses slicing record S7, decided earlier the same day. S7 treated the LLM second pass as polish; it is a **core feature of the product §1 measures against**, which S7 could not weigh because §1 names Wispr Flow as the comparison without saying which of its features constitute it. Feasibility measured in `docs/gates/phase5-feasibility.md`: MLX + `Llama-3.2-3B-Instruct-4bit` resolves self-corrections at **278–390 ms**, since MLX has a Metal backend and CTranslate2 does not. **The blocker is fidelity, not latency** — the pass silently rewrites and drops content, so four constraints ship with it: raw transcript persisted, no-invent check, 25% length floor, one-keystroke undo. |
+| 2026-07-31 | **VAD filtering is not an optimisation, it prevents catastrophic tails.** Measured: `base.en` on a 25 s sample takes **6,039 ms** without VAD and **541 ms** with it; `small.en` goes 23,886 → 1,438 ms. The cause is decoder repetition looping on silence — `condition_on_previous_text=False` alone recovers most of it. Without VAD **no candidate model passes G1's p95**; with it, `tiny.en` passes both p50 (328 ms) and p95 (420 ms). |
 | 2026-07-31 | **Probe amendments 1–5 accepted** (`docs/gates/probe.md`). **§7.2's `model = "auto"` table re-derived from measurement** — the Apple Silicon row selected `distil-large-v3` at 2,412 ms, six times over budget; `base.en` measures 352 ms. Table is marked provisional and selects on latency alone; the model choice is **not** final until the Phase 1 corpus exists. |
 | 2026-07-31 | **`cpu_threads` added to §5.3**, defaulting to performance-core count rather than CTranslate2's default of 4 — worth **1.8×**, and the probe's first run returned NO-GO on that default. `device = "mps"` removed; CTranslate2 has no Metal backend, so it was never reachable. |
 | 2026-07-31 | **Tiers are now measured, not named after silicon** (§2, §7.2) — revising objection O1. "Apple Silicon" and "CPU only" were the same execution path, and macOS has no CUDA, so the old split would have left **no gated tier at all in v1**. Tier A = measures inside the budget at install; Tier B = does not. O1's reasoning is unchanged; only the axis moved. |
