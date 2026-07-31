@@ -7,8 +7,8 @@ stories:
   - id: 1
     lens: [defaults, consequences]
     title: Python inherited from the ASR ecosystem
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: ratify Python, and record the rationale §7 would have contained. New §7.0 states the argument for (the ASR ecosystem is Python-first — faster-whisper/CTranslate2, ONNX for Silero, sounddevice, llama.cpp bindings — which is exactly what keeps §7.2's engine swap a scheduling decision rather than a rewrite), the argument against (a daemon holding a real-time audio callback, a hotkey listener, a tray run loop and a multi-hundred-millisecond inference call is a concurrency problem, and Python is where concurrency costs the most reasoning per line), and the three rejected alternatives: Rust/Go core with Python behind FFI, Swift-native on Core ML or whisper.cpp, and Python orchestration with a compiled hot path. The story's sharpest observation is recorded in §7.0 verbatim in substance: O6's move to macOS-only made the Swift option MORE attractive by writing off the portability cost, and the decision was not reopened. Also recorded: the pre-Phase-0 probe runs on this runtime, so a 'go' from it ratifies Python by default — the decision is being made in §7.0 rather than there. The story's note that this may trace to a standing global Python-backend convention rather than to anything about Amanuensis is acknowledged; the §7.0 argument stands on its own merits regardless of origin."
   - id: 2
     lens: [patterns, forces]
     title: Unstated threading model now argues against alternatives
@@ -32,8 +32,8 @@ stories:
   - id: 6
     lens: [forces, consequences]
     title: Config policy survived collision by redefining a key
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: admit a bounded exception. §5.3 now states that behaviour a stated guarantee depends on is not user-settable, with §8's persist-before-inject as the first instance. The story's diagnosis is adopted: the rule met its first real collision in O10 and won by REDEFINING A KEY rather than admitting a limit, which set a precedent the next collision would inherit — and a rule with no stated exception does not stop generating keys whose plain meaning contradicts a guarantee elsewhere, it just turns each one into a naming problem. §5.3 now says to prefer the exception over another rename. NOT adopted: the [experimental] config tier. §5.2's 'ship vad_auto behind a flag' still has no mechanism and everything remains a flag; that is a real gap the story identified and it is left open rather than fixed in the same pass. The ratcheting cost is acknowledged in §5.3 as knowingly accepted rather than denied — §4's user is comfortable with a config file, and configurability is how this PRD discharges tradeoffs it cannot resolve."
   - id: 7
     lens: [forces, consequences]
     title: Audio never stored, transcripts always written
@@ -47,8 +47,8 @@ stories:
   - id: 9
     lens: [forces, alternatives]
     title: Phase 5's budget was computed, not chosen
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: record the contradiction, decide at revival. §7.5 now states plainly that the 700/1100 ms budget is arithmetic — G1 plus max_latency_ms, twice — that it describes what the mechanism costs rather than what a user will tolerate, that the section's own 900 ms line and the new 1100 ms p95 contradict each other, and that the gate cannot fail the budget by construction because base-plus-ceiling IS the worst case. The story established all four points and none is disputed. It is not resolved now for two stated reasons: Phase 5 is deferred so nobody is building against it, and the evidence to decide — a real Phase 3 edit rate showing what the rules chain provably could not fix — does not exist. The instruction to whoever revives Phase 5 is recorded: set the budget from tolerance FIRST and derive max_latency_ms from it, not the reverse. §7.5 also notes where that likely lands — if the 900 ms line is binding the implied ceiling is nearer 100-200 ms, and the honest conclusion may be that the pass does not fit, which is worth knowing before building it rather than after."
   - id: 10
     lens: [patterns, coherence]
     title: A key documented to mean something else
@@ -57,8 +57,8 @@ stories:
   - id: 11
     lens: [patterns, forces]
     title: Disclosure chosen over prevention, now twice
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: name the doctrine and assign the orphaned G3 obligation. (1) DOCTRINE — §7.6 now states it: privacy-relevant conditions are surfaced rather than prevented, unless prevention is free OR THE USER HAS NO VIABLE ACTION. The second clause is the story's actual finding and is the reason the doctrine is worth writing down rather than left as precedent: at §5.4 the user's action is free (stop talking), while at §7.3 the only remedy is keystroke, which §7.3 itself argues the §4 secondary user should not take. §7.6 records that §7.3 therefore sits at the EDGE of the doctrine rather than comfortably inside it, and that if a transient or concealed clipboard type proves workable on macOS, prevention becomes cheap and the doctrine says to prefer it. (2) GATE ASSIGNMENT — §7.3's obligation that 'whatever gate verifies G3 must cover the cross-process path or explicitly state that it does not' belonged to no gate; it is now assigned to Phase 4's G3 verification, which must qualify the claim in both the gate record and the README's privacy section. An unqualified 'G3 verified' is itself the failure O12 described. NOT adopted in this pass, and left open: reducing the exposure via a concealed clipboard type, and strategy-by-transcript-length. Both remain live options the doctrine now points toward."
   - id: 12
     lens: [coherence, consequences]
     title: The probe deletes its own instrument

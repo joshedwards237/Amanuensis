@@ -227,9 +227,26 @@ Config-selectable, one active at a time:
 
 ### 5.3 Configuration
 
-Single TOML file at `~/.config/amanuensis/config.toml`. Every behavioral decision in this
-PRD that could reasonably go either way is a config key with a sane default. No behavior is
-hardcoded that a user might want to change.
+Single TOML file at the platform config directory (`platformdirs`; `~/.config/amanuensis/config.toml`
+on macOS — see §7.3's portability floor). Every behavioral decision in this PRD that could
+reasonably go either way is a config key with a sane default. No behavior is hardcoded that
+a user might want to change.
+
+**One bounded exception** (added 2026-07-31, choice-story #6): **behaviour that a stated
+guarantee depends on is not user-settable.** §8's persist-before-inject is the first
+instance — the write happens regardless, and `retain` governs only whether the row is
+kept (§5.5).
+
+The exception exists because the rule met that collision and resolved it by *redefining
+a key* rather than admitting a limit, which set a precedent that the next collision
+would inherit. A rule with no stated exception does not stop generating keys whose plain
+meaning contradicts a guarantee stated elsewhere; it just makes each one a naming
+problem. Prefer this exception to another rename.
+
+The rule remains otherwise absolute, and it does ratchet: any future decision that
+"could reasonably go either way" becomes a key, and the surface only grows. That cost is
+accepted knowingly — §4's primary user is comfortable with a config file, and
+configurability is how this PRD discharges tradeoffs it cannot resolve.
 
 ```toml
 [hotkey]
@@ -661,6 +678,39 @@ govern the same decision. The split above is by *granularity*, which keeps them 
 meeting — but a decision that migrates from implementation-level to product-level will
 sit awkwardly across both, and there is no rule for that yet.
 
+### 7.0 Python, and what it costs
+
+Recorded 2026-07-31 (choice-story #1). §8 states "Python 3.11+" as a table row between
+two performance targets, and until now it was the only technical decision in this
+document with no argument attached — while §7 recorded rejected alternatives for
+streaming, engines, injection, VAD, post-processing, platform scope and two latency
+budgets. The implementation language of a latency-critical, always-resident daemon
+deserves the same treatment, especially as it is the **least reversible** commitment
+here: every other §7 decision sits behind an ABC, and the runtime sits under all of them.
+
+**The argument for.** The ASR ecosystem is Python-first — faster-whisper/CTranslate2,
+ONNX Runtime for Silero, sounddevice over PortAudio, llama.cpp bindings. Choosing
+Python minimises integration cost and is precisely what keeps §7.2's engine swap a
+scheduling decision rather than a rewrite. A Moonshine or Parakeet evaluation is a
+dependency change here and a porting project elsewhere.
+
+**The argument against, stated honestly.** A daemon holding a real-time audio callback,
+a global hotkey listener, a tray run loop and a several-hundred-millisecond inference
+call is a concurrency problem, and Python is the language in which concurrency costs
+the most reasoning per line. §6.3's concurrency model exists partly because of this.
+
+**Rejected:** (a) a Rust or Go core with Python confined to inference behind FFI or a
+subprocess — the line whisper.cpp and nerd-dictation sit on the other side of, both on
+§13's required-reading list; (b) a Swift-native macOS app on Core ML or whisper.cpp
+directly, which O6's move to macOS-only makes *more* attractive than it was, since the
+portability cost has just been written off as a non-goal, and which would also dissolve
+§11.3's ~1.5 GB Python distribution problem; (c) Python orchestration with the hot path
+as a compiled extension.
+
+**Note what ratifies this if nobody decides.** The pre-Phase-0 probe (§9) runs on this
+runtime, and a "go" from it commits the project to Python without anyone having chosen.
+That is the decision being made here rather than there.
+
 ### 7.1 Batch transcription, not streaming (v1)
 
 Transcribe the complete buffer on hotkey release. Streaming with partial hypotheses is
@@ -761,14 +811,22 @@ comprehensive — absence of a warning means "no known manager detected", never
 **This is also a G3 verification gap, not only a risk.** G3's method is packet
 capture on this app; the egress occurs in another process, so the headline
 privacy claim would verify green while the leak is live. §2's G3 row now scopes
-the claim accordingly. Whatever gate ends up verifying G3 must cover the
-cross-process path or explicitly state that it does not.
+the claim accordingly.
+
+**The obligation to say so is assigned to the Phase 4 gate** (2026-07-31,
+choice-story #11) — it previously belonged to no gate at all. Phase 4's G3
+verification must state explicitly, in the gate record and in the README's privacy
+section, that packet capture covers this process only, and that transcripts transit
+the system clipboard by default where another process may capture them. An
+unqualified "G3 verified" in a gate record is itself the failure this objection
+describes.
 
 **Platform: macOS only for v1** (resolved 2026-07-30, objection O6; §3, §11.1). The
 original reasoning stands — macOS's permissions model (Accessibility + Input
 Monitoring) is the most restrictive and surfaces the hardest problems earliest — but
-"first" implied a second platform that no phase in §9 ever scheduled. Windows and
-Linux are now explicit non-goals.
+"first" implied a second platform that no phase in §9 ever scheduled. Windows is
+**post-v1 intent** and Linux a plain non-goal (§3, amended 2026-07-31); neither ships
+code in v1.
 
 `TextInjector` remains an ABC, so a later port stays a scheduling decision rather
 than an architectural one. That claim covers **injection only**. `HotkeyListener`, the
@@ -839,6 +897,25 @@ above is right; the numbers as originally written did not implement it.
   running the pass or letting it finish. It is still the right trade — a bounded
   overrun beats an unbounded one — but the bound is on the overrun, not a saving.
 
+**Unresolved, and left that way deliberately** (choice-story #9, 2026-07-31). The
+700/1100 ms budget above is *arithmetic* — G1 plus `max_latency_ms`, twice. It states
+what the mechanism costs, not what a user will tolerate, and those coincide only by
+luck. This section's own argument names the tolerance directly ("a dictation tool that
+sometimes takes 900 ms is worse than one that is consistently 350 ms and slightly
+rougher") and the p95 budget of 1100 ms **permits a latency this section rejects**.
+
+Both statements are in this section and they contradict. The gate also cannot fail the
+budget by construction: base-plus-ceiling *is* the worst case, so any run respecting the
+deadline is inside it.
+
+This is not resolved now because Phase 5 is deferred (§9) and nobody is building against
+it, and because the evidence to decide — a real Phase 3 edit rate showing what rules
+could not fix — does not exist yet. **Whoever revives Phase 5 sets the budget from
+tolerance first and derives `max_latency_ms` from it, not the reverse.** If §7.5's own
+900 ms line is taken as binding, the implied ceiling is nearer 100–200 ms, and the
+honest conclusion may be that the pass does not fit. That is worth knowing before
+building it rather than after.
+
 ### 7.6 Security posture
 
 Standard Firebase/cloud rules mostly do not apply — there is no backend, no secrets, no
@@ -867,6 +944,24 @@ auth. What does apply:
   the UI at all times (§5.4).
 - No `eval`/`exec` of anything derived from transcripts. Transcripts are injected as text
   and never interpreted as commands in v1.
+
+**Surfacing versus preventing — the stated doctrine** (added 2026-07-31,
+choice-story #11). Two decisions in this PRD resolved a privacy exposure by making it
+visible rather than by removing it: §5.4's recording indicator, and §7.3's
+clipboard-manager warning. §7.3 reasons from §5.4 as precedent, which is how a doctrine
+forms without anyone deciding to adopt one. Stating it means the third case is judged
+against a policy rather than inheriting a shape:
+
+> **Privacy-relevant conditions are surfaced rather than prevented, unless prevention is
+> free or the user has no viable action.**
+
+The second clause is the part that matters, and it is where the two existing cases
+differ. At §5.4 the user's action is free — stop talking. At §7.3 the only remedy is
+`keystroke`, which §7.3 itself argues the §4 secondary user should not take. Notice
+without a viable alternative shifts responsibility rather than reducing risk, so §7.3
+sits at the edge of this doctrine rather than comfortably inside it. If a transient or
+concealed clipboard type proves workable on macOS, prevention becomes cheap and this
+doctrine says to prefer it.
 
 ---
 
@@ -1084,6 +1179,11 @@ before an audience sees it, and the tray toolkit and install path are both new
 dependency surface introduced since. Report the result in the README's privacy
 section rather than only at the gate.
 
+**Qualify the claim explicitly** (choice-story #11): state in both the gate record and
+the README that packet capture covers Amanuensis's own sockets only, and that
+transcripts transit the system clipboard by default where another process may capture
+them (§7.3). An unqualified "G3 verified" is the failure O12 described.
+
 ### Phase 5 — Optional LLM post-processing — **DEFERRED**
 
 **Deferred indefinitely, 2026-07-31** (slicing record S7). Not scheduled, not cut. It
@@ -1177,7 +1277,7 @@ below; none was made silently.
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 2 accepted, 4 merged, 1 deferred |
 | Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — 9 accepted, 4 pending |
+| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 
@@ -1237,4 +1337,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **Choice-story #4 accepted.** The single ABC rationale is restated as **three rules** — replacement, platform selection, composition — each carrying its own contract. `TextPostProcessor` finally gets one: order is significant, `process` is pure with respect to the session, and a mid-chain raise abandons the chain and injects the last good text. |
 | 2026-07-31 | **Choice-story #5 accepted.** When `retain = false` the transient transcript goes to a `0600` temp file and never enters `history.db`, rather than relying on SQLite `DELETE` — which marks pages free rather than erasing bytes, making "nothing persists" a claim the mechanism did not support. |
 | 2026-07-31 | **Choice-story #7 accepted.** The pre-injection write is **scoped to sessions that reach injection**, so aborted and misfired sessions leave nothing — closing the half of O10 that was deferred. §7.6 now states both artefacts' handling together, including that the asymmetry is justified by durability rather than by transcripts being safe. |
+| 2026-07-31 | **Choice-story #1 accepted.** New **§7.0** records the Python decision with its rejected alternatives — the one irreversible commitment in the document, previously the only unargued one. Notes that macOS-only made the Swift-native option *more* attractive without it being reopened, and that the pre-Phase-0 probe ratifies the runtime by default if nobody decides. |
+| 2026-07-31 | **Choice-story #6 accepted.** §5.3 gains **one bounded exception**: behaviour a stated guarantee depends on is not user-settable, with §8's persist-before-inject as the first instance. Prefer the exception to another rename — O10 resolved the first collision by redefining a key, which would otherwise have become the precedent. The `[experimental]` tier is *not* adopted; §5.2's flag mechanism gap stays open. |
+| 2026-07-31 | **Choice-story #9 accepted.** §7.5 now records that Phase 5's budget is arithmetic rather than chosen, that its own 900 ms tolerance line contradicts the 1100 ms p95, and that the gate cannot fail it by construction. Deliberately unresolved while Phase 5 is deferred — whoever revives it sets the budget from tolerance first and derives `max_latency_ms` from that. |
+| 2026-07-31 | **Choice-story #11 accepted.** §7.6 names the **surfacing-versus-preventing doctrine**, including the clause that matters — unless prevention is free *or the user has no viable action* — and records that §7.3 sits at its edge. §7.3's orphaned G3 obligation is assigned to the **Phase 4 gate**: an unqualified "G3 verified" is itself the failure O12 described. |
 | 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |
