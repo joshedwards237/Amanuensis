@@ -1,0 +1,38 @@
+[
+  {
+    "id": "01-natural",
+    "reference": "I'm testing a local dictation tool and I want to see whether it can keep up with the way I actually talk. The whole point is that the audio never leaves this machine. No account, no network, nothing uploaded to a server somewhere. If it takes more than about four hundred milliseconds I'll notice, and I'll go back to typing.",
+    "raw_asr": "I'm testing a local dictation tool and I want to see whether it can keep up with the way I actually talk. The whole point is that the audio never leaves this machine. No account, no network, nothing uploaded to a server somewhere. If it takes more than about 400 milliseconds, I'll notice and I'll go back to typing.",
+    "raw_wer": 3.33
+  },
+  {
+    "id": "02-code",
+    "reference": "Open the file at src slash amanuensis slash engines slash faster underscore whisper dot py and change the compute type from int eight to float sixteen. Then run pytest dash dash cov equals src and check that the coverage stays above eighty percent. If the CI job fails, look at the GitHub Actions log before you push again.",
+    "raw_asr": "Open the file at the src slash aminesis slash engines slash faster underscore whisper dot py and change the compute type from int eight to flip 16 Then run py test dash clv equals src and check that the coverage stays above 80%. If the cij job fails, look at the github actions log before you push again.",
+    "raw_wer": 18.97
+  },
+  {
+    "id": "03-proper-nouns",
+    "reference": "Amanuensis uses faster whisper and CTranslate2 under the hood, with Silero VAD running through ONNX Runtime. We benchmarked it against Moonshine and Parakeet on an M3 Max. Josh Edwards set this up in July. The alternatives we looked at were nerd dictation, Talon Voice, and Wispr Flow.",
+    "raw_asr": "and requested analysis uses faster whisper and CT translate to under the hood with cellular ovad running through o and an x runtime. We benchmarked it against moonshine and parakeet on an m3 max. Josh Edwards set this up in July. The alternatives we looked at were near nerd dictation, talent voice, and whisper flow.",
+    "raw_wer": 31.91
+  },
+  {
+    "id": "04-fast",
+    "reference": "Okay so the thing is I talk pretty fast when I'm thinking out loud and I don't really stop between sentences which means the transcription has to figure out where one thought ends and the next one starts without much help from me and honestly that's the hard part.",
+    "raw_asr": "Okay, so the thing is I talk pretty fast when I'm thinking out loud and I don't really stop between sentences Which means the transcription has to figure out where one thought ends and the next one starts without much help for me and honestly That's the hard part",
+    "raw_wer": 2.04
+  },
+  {
+    "id": "05-noisy",
+    "reference": "This sample is recorded with background noise on purpose. There should be music or a fan or conversation happening behind me while I read this sentence. A dictation tool that only works in a silent room is not a dictation tool that works.",
+    "raw_asr": "This sample is recorded with background noise on purpose. There should be music or a fan or a competition happening behind me or I read this sentence. A dictation tool that only works in a silent news topic detection tool that works.",
+    "raw_wer": 18.6
+  },
+  {
+    "id": "06-short",
+    "reference": "Send that to Josh and copy me.",
+    "raw_asr": "So that's a Josh and copy me.",
+    "raw_wer": 42.86
+  }
+]
