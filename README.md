@@ -41,20 +41,28 @@ which is acceptable.
 - **faster-whisper** by default, behind an abstraction so the engine can be
   swapped (§7.2)
 - **Clipboard paste** by default with a keystroke fallback (§7.3)
-- **Deterministic post-processing** first; an optional local LLM pass is
-  specified but deferred (§7.5, §9)
+- **Deterministic post-processing** first. An optional local LLM cleanup pass —
+  the Wispr-style "remove my false starts" behaviour — is specified but **does
+  not work yet**: tested 2026-07-31, it made transcription 5–28× worse on real
+  output. Four alternative approaches are recorded and untested
+  ([`docs/gates/phase5-feasibility.md`](docs/gates/phase5-feasibility.md))
 
 ## Targets
 
-Every number below is a **pre-implementation estimate**, not a measurement.
-Replacing them with real numbers is what the first phases are for.
+| Goal | Target | Status |
+|---|---|---|
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met in part**: `tiny.en` + VAD measures p50 328 ms / p95 420 ms on an M3 Max, *transcription only* |
+| Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | provisional |
+| Accuracy | edit rate ≤ 5% | **provisional** — inherited from a WER figure it was never converted from |
+| Network traffic at runtime | zero, verified by packet capture | gated at two phases; unbuilt |
 
-| Goal | Target |
-|---|---|
-| Latency (accelerated: Apple Silicon / CUDA) | p50 ≤ 400 ms, p95 ≤ 800 ms, hotkey release → text present, 10 s utterance |
-| Latency (CPU-only) | p50 ≤ 2 000 ms — published, not gated; a tier missing it is dropped rather than shipped |
-| Accuracy | edit rate ≤ 5% (provisional) |
-| Network traffic at runtime | zero, verified by packet capture |
+Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Metal
+backend, so "Apple Silicon" was never a distinct execution path — a machine's tier
+is decided by what it measures at install.
+
+The latency figure above covers transcription only. G1 also includes
+post-processing and injection, neither of which exists yet, and it was measured
+on one speaker in one room.
 
 **The latency claim is hardware-conditional and that is a real caveat**, not a
 footnote. Privacy motivation and offline constraint correlate with older
