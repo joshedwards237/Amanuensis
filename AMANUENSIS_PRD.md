@@ -1409,7 +1409,8 @@ below; none was made silently.
 | Record | Path | State |
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
+| Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — 9 pending |
+| Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
