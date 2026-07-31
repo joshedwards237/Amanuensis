@@ -9,6 +9,7 @@ rather than a comment.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 
 import numpy as np
@@ -87,6 +88,60 @@ def test_injection_result_reports_failure_with_a_reason() -> None:
 
     assert ok.succeeded and ok.error is None
     assert not bad.succeeded and bad.error == "clipboard was locked"
+
+
+def test_a_fresh_session_is_not_complete() -> None:
+    assert not _session().completed.is_set()
+
+
+def test_wait_returns_false_on_timeout_and_true_once_signalled() -> None:
+    """§6.3, objection A6: completion is signalled, never polled.
+
+    Before this existed, "callers observe completion through the session"
+    described an interface that was not there — the only available reading was
+    spinning on a mutable dataclass across a thread boundary, which is the thing
+    Half-Sync/Half-Async is chosen to avoid.
+    """
+    session = _session()
+
+    assert session.wait(timeout=0.01) is False
+
+    session.completed.set()
+
+    assert session.wait(timeout=0.01) is True
+
+
+def test_the_worker_thread_writes_before_it_signals() -> None:
+    """The ordering rule: fields first, event last.
+
+    Nothing else guards the fields, so a thread that sees the event set must be
+    guaranteed a fully written session. Asserted against a real thread rather
+    than by inspection, because this is the one invariant the whole model rests
+    on.
+    """
+    session = _session()
+
+    def worker() -> None:
+        session.raw_transcript = "hello world"
+        session.timings.transcribe_ms = 328.0
+        session.completed.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+
+    assert session.wait(timeout=2.0) is True
+    assert session.raw_transcript == "hello world"
+    assert session.timings.transcribe_ms == 328.0
+    thread.join()
+
+
+def test_two_sessions_do_not_share_a_completion_event() -> None:
+    """A default_factory bug here would make every session complete at once."""
+    first, second = _session(), _session()
+
+    first.completed.set()
+
+    assert not second.completed.is_set()
 
 
 def test_permission_status_is_not_granted_until_every_permission_is() -> None:

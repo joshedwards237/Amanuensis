@@ -7,6 +7,19 @@ OS event tap. So the session object is what callers observe completion
 through; the call returning tells them nothing. Freezing it would force
 either a blocking call or a second object to carry the result.
 
+**Completion is signalled, never polled.** The session carries a
+`threading.Event`, and the ordering rule is the entire synchronisation story:
+the worker writes every field *first* and sets the event *last*, so any thread
+that observes the event set is guaranteed a fully written session. Nothing else
+guards the fields, and nothing else needs to.
+
+An earlier revision of PRD §6.3 said "callers observe completion through the
+session" while the session had no flag, no event and no lock — which left
+spinning on a mutable dataclass across a thread boundary as the only available
+reading, and that is precisely what Half-Sync/Half-Async is chosen to avoid.
+The gap was found by adversarial review (objection A6) after this file had
+already been written to the contract as stated.
+
 `LatencyBreakdown` exists because G1 cannot be defended without per-stage
 timings. It is a product requirement, not a debugging nicety (PRD §5.5), and
 it carries two summary properties that a later reader will be tempted to
@@ -18,6 +31,7 @@ utterance.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
@@ -63,6 +77,23 @@ class DictationSession:
     final_text: str | None = None
     timings: LatencyBreakdown = field(default_factory=LatencyBreakdown)
     error: str | None = None
+    #: Set by the worker, *last*, after every field above is written. A thread
+    #: that sees this set is guaranteed a fully populated session; that ordering
+    #: is the only synchronisation rule in the model (§6.3).
+    completed: threading.Event = field(default_factory=threading.Event)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Block until the worker finishes this session.
+
+        Returns True if it completed, False on timeout — the same contract as
+        `threading.Event.wait`, deliberately, so a caller who already knows that
+        API has nothing new to learn.
+
+        Never call this from the event-tap thread. Blocking that thread on macOS
+        stalls input system-wide, which is the reason `end_session()` is
+        non-blocking in the first place.
+        """
+        return self.completed.wait(timeout)
 
     def duration_seconds(self) -> float:
         """How long the user spoke. Zero when nothing was captured."""

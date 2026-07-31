@@ -10,29 +10,29 @@ objections:
     severity: critical
     claim: "The 2026-07-31 tier redefinition makes Phase 1's 'Rejects if' unreachable — Tier A is defined as 'measures inside G1's budget', so a machine cannot be both Tier A and miss G1, and a Tier B miss explicitly does not reject."
     evidence: "§7.2: 'Tier A — the selected model transcribes a 10-second utterance inside G1's budget on this machine.' §9 Phase 1: 'Rejects if: G1 is missed on a Tier A machine. A Tier B miss does not reject.' §10: 'the Phase 1 gate remains the real go/no-go... A miss here does stop the project.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Verified against the PRD text before disposition. Tier A is redefined as an absolute measured bar (p50 <= 350 ms, p95 <= 700 ms, transcription share, VAD on) rather than a restatement of G1, and Phase 1's reject line now gates G1 on the machine the phase is built on, whatever tier it recorded. The tier became a recorded fact, not a gate condition."
   - id: A2
     category: premise
     severity: critical
     claim: "§9's Phase 5 section and §7.5 both contradict the feasibility record they cite: §9 schedules a design that record calls 'not shippable as scoped', and §7.5 still states Phase 5 is deferred."
     evidence: "§9: 'Feasibility is measured, not assumed... resolves self-corrections correctly at 278–390 ms.' phase5-feasibility.md: 'Answer: technically yes, but NOT with this design... it fails catastrophically', 'WER 19.6% → 110.0%', 'missed by 3×'. §7.5: 'This is not resolved now because Phase 5 is deferred (§9) and nobody is building against it.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Verified. Phase 5 is now recorded as UNRESOLVED and corpus-blocked, carrying the four experiment results and the reason they are inconclusive rather than negative. Section 7.5's 'deferred, nobody is building against it' is corrected in place with a note on why both clauses were false when written."
   - id: A3
     category: implementation
     severity: high
     claim: "§7.2's re-derived model = \"auto\" table still selects base.en for the only v1 execution path, while the same-day benchmark records tiny.en + VAD as the only candidate meeting G1 — and the accuracy figure that would arbitrate lives in two irreconcilable aggregates."
     evidence: "§7.2 table: '| Apple Silicon / CPU | base.en, int8 | 352 ms |'. Revision log 2026-07-31: 'with it, tiny.en passes both p50 (328 ms) and p95 (420 ms).' phase5-feasibility.md: 'tiny.en with VAD is the only ASR candidate inside G1.' HANDOFF.md: 'tiny.en... has the worst WER (14.8%)' vs the same file's fixture line 'mean 19.62%'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Verified. The model = auto table now selects tiny.en + VAD at 328 ms p50 / 420 ms p95 for a single collapsed macOS row, with the still-provisional warning retained and strengthened. WER is declared macro-average throughout; the 14.8 percent micro-weighted figure is withdrawn."
   - id: A4
     category: specification quality
     severity: high
     claim: "The install-time tier check — the mechanism the whole tier redefinition rests on — is specified only by reference to the probe, which was a warmed median of five runs on one pre-recorded clip, with no p95, no VAD, and no injection stage."
     evidence: "§7.2: 'The tier is decided once, at install, by running the same measurement the pre-Phase-0 probe ran.' probe.md: 'Median of 5 runs, warmed, beam_size=1... This is transcription only.' Revision log: 'base.en on a 25 s sample takes 6,039 ms without VAD and 541 ms with it.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Resolved together with A1, whose fix required specifying the install check to state what it compares against. Section 7.2 now fixes the audio, VAD state, warm-up, run count, model and comparison basis, and excludes model download from the timed measurement."
   - id: A5
     category: specification quality
     severity: high
@@ -45,8 +45,8 @@ objections:
     severity: high
     claim: "The Half-Sync/Half-Async model names a pattern but leaves its handoff contract unspecified: end_session() returns a mutable session another thread populates, with no completion signal, no synchronisation rule, and a second queue that is described but not named."
     evidence: "§6.3: 'end_session() hands the buffer to the worker and returns... the session object, populated asynchronously — callers observe completion through the session, not by the call returning.' §6.3: '§6.2's AudioCapture ring buffer is already that queue' vs the table's 'one worker thread, draining sessions'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Verified against Phase 0 code committed the same day, which had encoded the defect faithfully. DictationSession gains a threading.Event with a stated write-then-signal ordering rule and a wait() method; the two queues are now named separately; and the overlapping-session hazard is resolved for v1 by declining to inject when the focused application changed between capture and injection."
   - id: A7
     category: risk
     severity: high
