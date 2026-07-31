@@ -1,3 +1,40 @@
 # Per-machine affordance recorder log. HARNESS.md declares this LOCAL
 # (per-machine only) — session invocation noise, not project state.
 observability/affordance-invocations.json
+
+# Probe environment. The pre-Phase-0 probe (PRD §9) is throwaway by
+# instruction; its venv is not a project artefact. Phase 0 introduces a real
+# pyproject.toml.
+.venv/
+
+# Voice recordings — deliberately never committed.
+#
+# This is a public repository. A voice recording is not something you can
+# unpublish: once cloned, cached and indexed, it is out. The Phase 1 engine
+# benchmark (PRD §2, accuracy-measurement note) needs a desk-mic corpus so
+# YOUR results are reproducible by you — it does not need strangers to be
+# able to replay your voice.
+#
+# To regenerate the corpus on a new machine, record ~10s of natural dictation
+# per sample at 16 kHz mono 16-bit PCM:
+#
+#   ffmpeg -f avfoundation -list_devices true -i ""      # find your mic index
+#   ffmpeg -f avfoundation -i ":0" -t 10 -ar 16000 -ac 1 \
+#          -c:a pcm_s16le tests/fixtures/asr/sample-01.wav
+#
+# Use the mic you actually dictate with. A Bluetooth headset has a different
+# acoustic profile from a desk mic, and a corpus recorded on one measures that
+# one — PRD §2 specifies desk-mic English.
+#
+# Reference transcripts (*.txt) ARE committed: they carry no voice, and WER is
+# meaningless without them.
+tests/fixtures/asr/*.wav
+tests/fixtures/asr/*.m4a
+tests/fixtures/asr/*.flac
+probe.wav
+
+# Local voice recordings (see note above). Never committed.
+.audio/
+
+# macOS directory metadata
+.DS_Store
