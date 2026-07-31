@@ -1060,8 +1060,8 @@ doctrine says to prefer it.
 | Requirement | Target |
 |---|---|
 | Idle CPU | < 1% |
-| Idle RSS | < 1.5 GB with model resident (GPU) |
-| Cold daemon start to ready | < 15 s |
+| Idle RSS | < 1.5 GB with model resident (GPU). **Revisit**: Phase 5 adds a second resident model (~1.8 GB on disk for the 4-bit 3B), so this figure predates the design it now has to cover. |
+| Cold daemon start to ready | < 15 s — **measured 3.43 s** with `tiny.en` + `Llama-3.2-3B-4bit` both loaded and warmed (2026-07-31, `docs/gates/phase5-feasibility.md`) |
 | Recovery from mic disconnect | Automatic, no restart |
 | Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] retain` (§5.5) |
 | Python | 3.11+ |

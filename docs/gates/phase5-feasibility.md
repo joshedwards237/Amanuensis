@@ -39,9 +39,20 @@ representative dictation-length inputs:
 | Qwen2.5-1.5B-Instruct-4bit | **154–301 ms** | Removes fillers and stutters. Fails self-corrections. |
 | **Llama-3.2-3B-Instruct-4bit** | **278–390 ms** | Resolves self-corrections correctly with a directive prompt. Over-edits. |
 
-Model load: 48 s cold for 3B, one-time — it stays resident like the ASR model
-(§6.1). This lands on the "cold daemon start to ready < 15 s" NFR (§8), which
-already had no headroom and now has two models to load.
+**Cold start is not a problem, contrary to the first reading here.** The 48 s
+figure originally recorded was the one-time weight *download*, not the load.
+Measured warm, with weights cached:
+
+| | import + load | first inference |
+|---|---|---|
+| `tiny.en` (int8, 10 threads) | 0.77 s | 0.22 s |
+| `Llama-3.2-3B-Instruct-4bit` (MLX) | 2.11 s | 0.33 s |
+| **daemon cold start to ready** | **3.43 s** | NFR §8: **< 15 s** |
+
+Roughly 11 s of headroom with **both** models resident. The NFR that looked
+threatened is comfortably met. This correction matters because "two resident
+models blows the cold-start budget" was briefly treated as an argument against
+the feature; it is not one.
 
 ### Against the budget
 
