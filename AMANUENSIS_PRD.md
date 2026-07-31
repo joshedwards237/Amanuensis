@@ -760,21 +760,60 @@ therefore the earliest point a Hugging Face cache-miss fetch would fire. G3 is t
 goal that carries the product premise (§1) and until now no gate verified it.
 Confirm the model resolves from a local path, not a repository ID.
 
-### Phase 2 — Hotkey and injection (the product becomes real)
-`HotkeyListener`, `MacOSInjector`, permission checks with actionable
-error messages, `DictationController` wiring the loop.
+### Phase 2a — Text at the cursor, no hotkey yet
+
+Split from the original Phase 2 on 2026-07-31 (slicing record S2/S3). On macOS these
+are **two distinct permissions** — Accessibility for injection, Input Monitoring for
+global key capture — with two failure modes and two remediation messages. Adjudicating
+them together means a failure in either is diagnosed as a failure of "Phase 2".
+
+`MacOSInjector` (clipboard strategy with save/restore, `keystroke` fallback),
+non-destructive permission check with copy-pasteable remediation, clipboard-manager
+detection and the §5.4 tray exposure indicator. Triggered from the CLI —
+`manu transcribe --inject` — not from a hotkey.
+
+**Also here: the §8 persist-before-inject write** (slicing record S4, merged). A
+minimum `HistoryStore` write lands with the injector, not two phases later. Phase 2a is
+the first point at which there is a transcript to lose, and shipping an injection path
+that structurally cannot honour §8 — because the thing it must persist to does not
+exist yet — is not a scheduling detail. Retention, purge, and `manu history` stay in
+Phase 3.
 
 **Gate:** Dictate into TextEdit, VS Code, Chrome, and a terminal. Report where it fails.
-Confirm clipboard save/restore behavior with a clipboard manager running.
+Confirm clipboard save/restore behavior with a clipboard manager running, and that the
+detection and tray indicator from §7.3 fire correctly. Confirm the transcript survives
+a deliberately failed injection.
 
 **Rejects if:** injection fails in **two or more** of the four named applications, or
 fails in a *native* text field. G4 claims "works in any focused application"; two of
 four is not that, and a native-field failure means the injector is broken rather than
 the target being hostile. A single Electron or Java failure is a known-hazard finding
-(§10) and does not reject — enumerate it and carry a per-app strategy override.
+(§10) and does not reject — enumerate it and carry a per-app strategy override. Also
+rejects if a transcript is lost when injection fails.
 
-Also confirm the clipboard-manager detection and tray indicator from §7.3 fire
-correctly, since this is the first gate at which they exist.
+### Phase 2b — Close the loop with the hotkey
+
+`HotkeyListener` (Input Monitoring), `push_to_talk` only, `DictationController` wiring
+press → capture → transcribe → inject.
+
+**Also here: the minimum recording indicator** (slicing record S4, merged). §5.4 calls
+unambiguous recording state non-negotiable and grounds it in privacy "regardless of
+where the audio goes." Phase 2b is where a daemon first holds the microphone on a
+global hotkey, and Phase 3's gate is ten real dictations of ≥ 60 seconds — dogfooding,
+not a dry run. A visible indicator, not the full `TrayApp`, which stays in Phase 4.
+
+**Gate:** **First end-to-end G1 measurement** as §2 actually defines it — hotkey release
+to text fully present, via `g1_ms`, on accelerated hardware, with `chain = ["rules"]`.
+Confirm the recording indicator is visible without opening a menu.
+
+**Rejects if:** G1 is missed on accelerated hardware, or recording state is ambiguous at
+any point while the mic is live.
+
+Note what this gate means for Phase 1 (slicing record S1/S3): Phase 1 populates at most
+two of `LatencyBreakdown`'s four stages, so its G1 check is a **lower bound**. This is
+the first full-path number. Decide *before* Phase 1 what happens if it passes at 360 ms
+and Phase 2b lands at 520 ms — whether the go/no-go is re-run or was already spent —
+and record that decision in `docs/gates/phase-1.md`.
 
 ### Phase 3 — Post-processing and history
 `RuleBasedPostProcessor`, `VocabularyPostProcessor`, `HistoryStore`, silence trimming via VAD.
@@ -813,7 +852,15 @@ before an audience sees it, and the tray toolkit and install path are both new
 dependency surface introduced since. Report the result in the README's privacy
 section rather than only at the gate.
 
-### Phase 5 — Optional LLM post-processing
+### Phase 5 — Optional LLM post-processing — **DEFERRED**
+
+**Deferred indefinitely, 2026-07-31** (slicing record S7). Not scheduled, not cut. It
+blocks nothing, and choice-story #9 shows its budget cannot be failed by construction —
+p50 ≤ 700 ms is G1 plus the ceiling, while §7.5's own tolerance argument rejects the
+latency the budget now permits. Revisit when Phase 3 has produced a real edit rate
+showing what the rules chain provably could not fix; that number is the evidence this
+decision currently lacks. The `[postprocess.llm]` config block stays reserved.
+
 `LocalLLMPostProcessor` with the latency ceiling from §7.5.
 
 **Gate:** A/B against Phase 3 output on the same audio. If quality gain does not justify
@@ -895,7 +942,7 @@ below; none was made silently.
 
 | Record | Path | State |
 |---|---|---|
-| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 7 pending |
+| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — **all 7 disposed** (4 merged, 2 accepted, 1 deferred) |
 | Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all 12 accepted** |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | **second pass** — 13 stories, 13 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
@@ -942,3 +989,4 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-30 | **O3 accepted.** §7.1 now records pre-release inference — inference during the hold, nothing displayed — as a weighed alternative, deliberately not built for v1. Phase 1's "renegotiate §7.1" instruction previously pointed only at full streaming with retraction, the most expensive available response. |
 | 2026-07-30 | **O7 accepted.** G2 is restated as **edit rate ≤ 5%**, matching the Phase 3 gate; WER is no longer the product goal. A small committed desk-mic corpus (`tests/fixtures/asr/`) serves the Phase 1 engine benchmark for *relative* comparison only. The 5% threshold is recorded as **provisional** — inherited from the old WER number, not converted from it — and is confirmed or moved at Phase 3. |
 | 2026-07-30 | **O9 accepted.** Every gate in §9 gains a **Rejects if** line, and every gate writes `docs/gates/phase-<n>.md` carrying its measurements, decision, and what the phase revealed that this PRD got wrong. Phase 4's gate also fixes observer conduct in advance so it measures the README rather than the tester. |
+| 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |

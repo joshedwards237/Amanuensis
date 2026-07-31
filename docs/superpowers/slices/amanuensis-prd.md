@@ -12,52 +12,52 @@ slices:
     decision_focus: "Does batch local ASR clear G1 here, on which engine, and how much of §6.3/§6.4 do we freeze before we know?"
     lens_used: decision-boundary
     sequencing_note: "Hard blocker on everything else. A miss re-opens §7.1 (streaming), which changes the TranscriptionEngine contract itself."
-    disposition: pending
-    disposition_rationale: null
+    disposition: merged
+    disposition_rationale: "Merged into the pre-Phase-0 probe plus Phase 1. Human decision, 2026-07-31. The slice's substantive complaint — that the go/no-go sits behind a scaffold it could invalidate — was already answered by objection O4, which put a throwaway probe ahead of Phase 0. Phase 0's ABC and §6.4 freeze stays WHOLE: the scaffold (tooling, config, CLI skeleton) survives a pivot to streaming, and §7.1 now records pre-release inference (O3) as a cheaper renegotiation target than full streaming, which narrows the blast radius of a G1 miss on the §6.3 contracts. Explicitly NOT adopted: the slice's option of deferring the ABC freeze until after Phase 1. That was weighed and declined — the transcribe(audio, sample_rate) -> str signature is accepted as a risk rather than hedged, on the grounds that a second design pass costs more than the amendment would. If Phase 1 forces streaming, §6.3 gets amended at the gate under §7's existing discipline."
     file_as_issue: pending
     issue_url: null
-    merged_into: null
+    merged_into: "probe + Phase 1"
   - id: S2
     title: "First text at the cursor, triggered without a hotkey"
     scope: "TextInjector for one platform, invoked from the CLI (`manu transcribe --inject` or equivalent). Clipboard strategy with save/restore, keystroke fallback, non-destructive permission check with actionable remediation. No hotkey."
     decision_focus: "Which platform first, which injection strategy is the default, and what counts as an acceptable set of applications where paste fails?"
     lens_used: decision-boundary
     sequencing_note: "Depends on S1 producing a transcript. Isolates the Accessibility permission surface from the Input Monitoring one."
-    disposition: pending
-    disposition_rationale: null
+    disposition: merged
+    disposition_rationale: "Merged into new Phase 2a. Human decision, 2026-07-31. The slice's finding is adopted in full: the original Phase 2 bundled two distinct macOS permissions — Accessibility for injection, Input Monitoring for global key capture — with two failure modes and two remediation messages, so a failure in either was diagnosed as a failure of 'Phase 2'. Phase 2a is now the injector triggered from the CLI (manu transcribe --inject), with the permission check, clipboard save/restore, keystroke fallback, and the O12 clipboard-manager detection and tray indicator. The temporary CLI trigger is the whole cost of the split."
     file_as_issue: pending
     issue_url: null
-    merged_into: null
+    merged_into: "Phase 2a"
   - id: S3
     title: "Close the core loop with the hotkey and measure real G1"
     scope: "HotkeyListener for the default binding, push_to_talk only, DictationController wiring press → capture → transcribe → inject. First end-to-end G1 measurement from hotkey release to first character."
     decision_focus: "Does the full-path G1 number still clear the budget once hotkey-release and injection latency are in it, and what happens if it does not?"
     lens_used: decision-boundary
     sequencing_note: "Depends on S2. This is the first slice that can measure G1 as §2 actually defines it."
-    disposition: pending
-    disposition_rationale: null
+    disposition: merged
+    disposition_rationale: "Merged into new Phase 2b. Human decision, 2026-07-31. HotkeyListener, push_to_talk only, DictationController wiring the loop. The slice's measurement finding is adopted and written into the gate: this is the FIRST point at which G1 is measurable as §2 defines it, because Phase 1 populates at most two of LatencyBreakdown's four stages and its G1 check is therefore a lower bound. Phase 2b's gate carries the first full-path number, and §9 now instructs that the pass-at-360ms / land-at-520ms question be decided BEFORE Phase 1 and recorded in docs/gates/phase-1.md rather than argued after the fact."
     file_as_issue: pending
     issue_url: null
-    merged_into: null
+    merged_into: "Phase 2b"
   - id: S4
     title: "Safety floor for a mic-holding, injecting daemon"
     scope: "Minimum unambiguous recording indicator visible without opening a menu (§5.4), and HistoryStore persistence wired to run before TextInjector.inject() (§8). Not the full TrayApp; not history retention, purge, or query surfaces."
     decision_focus: "Do the two hard constraints the PRD marks non-negotiable land with the slice that first makes them applicable, or are they knowingly suspended for two phases?"
     lens_used: decision-boundary
     sequencing_note: "The scheduling question IS the decision. Candidate to fold into S2 and S3 rather than follow them."
-    disposition: pending
-    disposition_rationale: null
+    disposition: merged
+    disposition_rationale: "Merged into Phase 2a and Phase 2b, which is the disposition the slice itself identified as the live question. Human decision, 2026-07-31. The §8 persist-before-inject write lands in Phase 2a with the injector — Phase 2a is the first point at which there is a transcript to lose, and an injection path that structurally cannot honour §8 because HistoryStore does not exist yet is not a scheduling detail. The minimum recording indicator lands in Phase 2b, where a daemon first holds the mic on a global hotkey; §5.4 grounds it in privacy 'regardless of where the audio goes', and Phase 3's gate is ten real dictations of >= 60 seconds, which is dogfooding rather than a dry run. Scope held to the floor the slice specified: a write, not retention or purge or manu history; an indicator, not the full TrayApp. Both remain in Phase 3 and Phase 4 respectively. The alternative — knowingly suspending two stated-non-negotiable constraints for two phases — was available and declined."
     file_as_issue: pending
     issue_url: null
-    merged_into: null
+    merged_into: "Phase 2a + Phase 2b"
   - id: S5
     title: "Deterministic post-processing measured by edit rate"
     scope: "RuleBasedPostProcessor and VocabularyPostProcessor in an ordered chain, plus initial_prompt plumbing. Ten real dictations of ≥ 60 seconds, reporting what fraction of output needed manual correction and what kind."
     decision_focus: "What edit rate is acceptable before the LLM pass is even considered, and which correction classes are rules territory versus model territory?"
     lens_used: acceptance-criterion
     sequencing_note: "Depends on S3 for realistic long-form dictation input. VAD silence trimming deliberately excluded — see S1."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted as Phase 3, unchanged in scope. Human decision, 2026-07-31. RuleBasedPostProcessor and VocabularyPostProcessor in an ordered chain plus initial_prompt plumbing, gated on edit rate over ten real dictations of >= 60 seconds. Objection O7 already supplied what the slice's acceptance-criterion lens was reaching for: G2 is now stated in edit-rate terms and the Phase 3 gate has a Rejects-if line. NOT YET DECIDED, and carried forward as an open item: the slice argues VAD silence trimming should move from Phase 3 to Phase 1, on the grounds that trimming affects latency while the Phase 3 gate measures edit rate, so two things measured by different gates should not share one. That finding was not among the two structural changes adopted in this pass and remains open."
     file_as_issue: pending
     issue_url: null
     merged_into: null
@@ -67,8 +67,8 @@ slices:
     decision_focus: "Hugging Face at first run versus bundled installer (§11.3), and whether the repo is public before or after this lands (§11.4)."
     lens_used: decision-boundary
     sequencing_note: "Depends on S5. First slice whose user is not the author."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted as Phase 4, unchanged in scope. Human decision, 2026-07-31. Install path with checksummed pinned model download, README documenting the clipboard-restore race as an unsolved cost, remaining capture modes, TrayApp. The slice's point that this is the strongest gate in the PRD because it cannot be self-graded is preserved and strengthened: objection O9 fixed observer conduct in advance — observe silently, no hints, stop at 30 minutes, note the starting environment — so the gate measures the README rather than the tester. Objection O5 added the second G3 packet-capture verification here. The slice's own note that the recording indicator does NOT belong in this phase is honoured; S4 moved it to Phase 2b, three phases earlier."
     file_as_issue: pending
     issue_url: null
     merged_into: null
@@ -78,8 +78,8 @@ slices:
     decision_focus: "Does the measured quality gain justify the measured latency cost, or does this ship disabled with that stated in the README?"
     lens_used: independence
     sequencing_note: "Blocks nothing. Can land any time after S5, or never. The only slice whose acceptable outcome is 'built and turned off'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: deferred
+    disposition_rationale: "Deferred indefinitely, 2026-07-31 — not scheduled, and not cut. §9 Phase 5 is marked DEFERRED in place and the [postprocess.llm] config block stays reserved. The slice correctly identified this as the one piece that blocks nothing and whose acceptable outcome is 'built and turned off'. Two things sharpen that since the slicing record was written: objection O11 established that G1 is defined with the pass off and gave Phase 5 its own budget, and choice-story #9 then showed that budget cannot be failed by construction — p50 <= 700 ms is simply G1 plus max_latency_ms, while §7.5's own tolerance argument names 900 ms as unacceptable and the new p95 permits 1100. Building against a gate that cannot fail is not a use of the time. Revisit trigger recorded in §9: a real Phase 3 edit rate showing what the rules chain provably could not fix. That number is the evidence this decision currently lacks."
     file_as_issue: pending
     issue_url: null
     merged_into: null
