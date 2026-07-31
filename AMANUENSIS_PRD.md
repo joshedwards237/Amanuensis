@@ -148,11 +148,18 @@ derived when it was inherited is worse than one labelled as a guess.
 - Real-time streaming transcription with partial results on screen
 - Speaker diarization or multi-speaker meeting transcription
 - Mobile
-- **Windows and Linux** — v1 is macOS-only (resolved 2026-07-30, objection O6).
-  `TextInjector` remains an ABC so the port stays a scheduling decision (§7.3),
-  but no phase in §9 builds a second platform and §6.4 no longer stubs the files.
-  `injection/factory.py` raises an actionable error naming the unsupported
-  platform rather than failing obscurely.
+- **Windows and Linux in v1** — v1 is macOS-only (resolved 2026-07-30,
+  objection O6; amended 2026-07-31). No phase in §9 builds a second platform,
+  §6.4 stubs no files for one, and `injection/factory.py` raises an actionable
+  error naming the unsupported platform rather than failing obscurely.
+
+  **Windows is post-v1 intent, not a rejected platform.** It ships no code in
+  v1 and gates nothing, but §7.3's *portability floor* keeps the port from
+  becoming a redesign. Linux remains a straightforward non-goal — no stated
+  intent either way.
+
+  The distinction matters because "not now" and "not ever" imply different
+  work today. The floor is the entire difference, and it is four items long.
 - Cloud sync of history or settings
 - Voice commands that control the OS ("open Chrome")
 - Text-to-speech (see §12 for where Kokoro actually belongs)
@@ -300,7 +307,9 @@ there is no version of that which is acceptable.
 
 ```
 manu daemon    # long-running background process
-manu toggle    # IPC to the daemon (unix socket) — for external hotkey managers
+manu toggle    # IPC to the daemon — for external hotkey managers.
+               # Transport is platform-resolved (unix socket on macOS,
+               # named pipe on Windows); see §7.3 portability floor.
 manu status
 manu history
 ```
@@ -433,6 +442,36 @@ class DictationController:
 
 `AppConfig` is a singleton loaded once at startup, exposed via `AppConfig.get()`.
 
+#### Concurrency model
+
+Named 2026-07-31 (choice-story #2, §7.3 portability floor item 1). The PRD previously
+specified none, which meant the daemon's most architecturally consequential property
+would have been settled by whoever wrote Phase 2b first.
+
+The daemon is **Half-Sync/Half-Async** (POSA vol. 2, Schmidt et al. 2000): a
+synchronous service layer, an asynchronous I/O layer, and a queue between them. §6.2's
+`AudioCapture` ring buffer is already that queue.
+
+| Concern | Thread |
+|---|---|
+| `TrayApp` run loop | main — a macOS status item requires it |
+| `HotkeyListener` | OS event tap; posts press/release into the controller |
+| `AudioCapture` | PortAudio callback thread, writing the ring buffer |
+| Transcription, post-processing, injection | one worker thread, draining sessions |
+
+Consequences that follow, and are therefore requirements rather than choices:
+
+- `DictationController`'s methods are called from the event-tap thread and **must not
+  block it**. `end_session()` hands the buffer to the worker and returns; it does not
+  wait for transcription. The `-> DictationSession` return in the contract above is the
+  session object, populated asynchronously — callers observe completion through the
+  session, not by the call returning.
+- `TranscriptionEngine.load()` is documented "Blocking" and runs on the worker at
+  startup. `is_loaded` exists so the tray can show *transcribing* versus *not ready*.
+- Nothing touching the UI is called off the main thread.
+- Nothing in this table is macOS-specific except which thread the tray needs. That is
+  the point: Windows changes one row.
+
 ### 6.4 Repository layout
 
 ```
@@ -466,6 +505,7 @@ amanuensis/
 │   │                             # raises an actionable error off macOS
 │   ├── hotkey/
 │   │   ├── base.py
+│   │   ├── factory.py            # platform detection → listener (§7.3 floor)
 │   │   └── listener.py
 │   ├── storage/
 │   │   └── history.py            # HistoryStore
@@ -599,11 +639,32 @@ Monitoring) is the most restrictive and surfaces the hardest problems earliest �
 Linux are now explicit non-goals.
 
 `TextInjector` remains an ABC, so a later port stays a scheduling decision rather
-than an architectural one. Two caveats on that claim, since it is no longer load-bearing
-for v1 and should not be trusted without evidence: the ABC covers injection only, and
-`HotkeyListener`, the tray, and the `manu toggle` unix socket (§6.1) are each
-platform-shaped with no equivalent factory. Whoever ports first will find out how
-much of the claim was true.
+than an architectural one. That claim covers **injection only**. `HotkeyListener`, the
+tray, the IPC transport and the config paths are each platform-shaped, and the ABC does
+nothing for them.
+
+**Portability floor** (added 2026-07-31). Windows is post-v1 intent (§3), so v1 builds
+no Windows code — but four things must not become macOS-specific *by accident*, because
+each is cheap now and expensive after Phase 2b:
+
+1. **The threading model is named, not implied** (§6.3). A macOS status item
+   conventionally owns the process main thread; Windows has no equivalent constraint.
+   A model that is never written down gets re-derived rather than ported, and it would
+   be re-derived for the one class §6.3 says owns the loop. This is the item that would
+   actually corner the project.
+2. **No hardcoded XDG paths.** §5.3 and §5.5 name `~/.config/amanuensis/` and
+   `~/.local/share/amanuensis/` as the macOS locations. Resolve them through
+   `platformdirs` from Phase 0. Changing this after users have config files on disk is
+   a migration, not an edit.
+3. **The IPC transport is abstracted** (§6.1). `manu toggle` uses a unix socket on
+   macOS; that is a POSIX assumption and must not appear in the CLI contract as though
+   it were the interface.
+4. **`HotkeyListener` gets a `factory.py`**, mirroring `injection/factory.py`. §6.4
+   declares `hotkey/base.py` while §6.2 and §6.3 never contract it — the one ABC the
+   §6.3 "real chance we replace the implementation" test was never applied to.
+
+None of the four builds Windows support. All four are the difference between a port
+and a rewrite.
 
 ### 7.4 VAD: Silero, optional
 
@@ -726,10 +787,16 @@ probe is ambiguous, treat it as a pass and let Phase 1 decide.
 Repo structure per §6.4, `pyproject.toml`, ruff + black + mypy strict, `AppConfig` with TOML
 load and validation, CLI skeleton, all ABCs defined with no implementations.
 
+Also here, from §7.3's portability floor: config and history paths resolved through
+`platformdirs` rather than hardcoded, and `hotkey/factory.py` alongside
+`injection/factory.py`. The concurrency model in §6.3 is now specified, so the ABC
+signatures are written against it rather than against an assumption.
+
 **Gate:** `manu --help` runs, `mypy --strict src/` is clean, config loads and rejects a
 malformed file with a useful error.
 
-**Rejects if:** any of the three fails. All are mechanical; there is no judgment here.
+**Rejects if:** any of the three fails, or a config/history path is hardcoded rather
+than resolved through `platformdirs`. All are mechanical; there is no judgment here.
 
 ### Phase 1 — Prove the ASR path
 `AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`. No hotkey, no injection.
@@ -989,4 +1056,6 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-30 | **O3 accepted.** §7.1 now records pre-release inference — inference during the hold, nothing displayed — as a weighed alternative, deliberately not built for v1. Phase 1's "renegotiate §7.1" instruction previously pointed only at full streaming with retraction, the most expensive available response. |
 | 2026-07-30 | **O7 accepted.** G2 is restated as **edit rate ≤ 5%**, matching the Phase 3 gate; WER is no longer the product goal. A small committed desk-mic corpus (`tests/fixtures/asr/`) serves the Phase 1 engine benchmark for *relative* comparison only. The 5% threshold is recorded as **provisional** — inherited from the old WER number, not converted from it — and is confirmed or moved at Phase 3. |
 | 2026-07-30 | **O9 accepted.** Every gate in §9 gains a **Rejects if** line, and every gate writes `docs/gates/phase-<n>.md` carrying its measurements, decision, and what the phase revealed that this PRD got wrong. Phase 4's gate also fixes observer conduct in advance so it measures the README rather than the tester. |
+| 2026-07-31 | **O6 amended; portability floor added.** Windows moves from a flat §3 non-goal to **post-v1 intent** — it still ships no code in v1 and gates nothing, but §7.3 now carries a four-item portability floor: name the threading model, resolve paths via `platformdirs`, abstract the `manu toggle` IPC transport, and give `HotkeyListener` a factory. Linux remains a plain non-goal. None of the four builds Windows support; all four are the difference between a port and a rewrite. |
+| 2026-07-31 | **Concurrency model named** (§6.3), closing choice-story #2 and floor item 1. The daemon is Half-Sync/Half-Async: tray on main, hotkey on the OS event tap, capture on the PortAudio callback, and one worker draining transcribe → post-process → inject. `end_session()` must not block the event-tap thread. Previously unspecified, which meant Phase 2b would have settled it by default. |
 | 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |
