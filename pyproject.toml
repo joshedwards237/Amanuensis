@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amanuensis"
+version = "0.1.0"
+description = "Fully local dictation for macOS. Hotkey, speak, text at the cursor."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12"
+authors = [{ name = "Amanuensis contributors" }]
+keywords = ["dictation", "speech-to-text", "local", "privacy", "whisper"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Phase 0 is scaffolding: contracts and toolchain. The heavy runtime
+# dependencies (faster-whisper, sounddevice, onnxruntime, rumps) arrive with
+# the phase that first needs them, so that `pip install -e .` stays fast and a
+# broken ASR wheel cannot block work on the CLI.
+dependencies = [
+    "numpy>=1.24",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.0",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+manu = "amanuensis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/joshedwards237/Amanuensis"
+Source = "https://github.com/joshedwards237/Amanuensis"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amanuensis"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations — mypy --strict wants them anyway
+    "RUF",
+]
+ignore = [
+    "ANN401",  # Any is occasionally the honest annotation
+    # This project's prose uses en-dashes and section signs throughout, to
+    # match the PRD it is implementing. Flagging them as ambiguous unicode
+    # would mean either mangling the prose or drowning in noqa comments.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may leave return annotations off assertions-only helpers.
+"tests/**" = ["ANN201"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

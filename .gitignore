@@ -38,3 +38,18 @@ probe.wav
 
 # macOS directory metadata
 .DS_Store
+
+# Python build and tool artefacts. None of these are project state; all are
+# regenerable from pyproject.toml and the source tree.
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Per-experiment virtualenvs (Track 2). Each experiment gets its own so that
+# concurrent installs cannot collide; none of them is a project artefact.
+.venv-*/
