@@ -38,10 +38,12 @@
   - **Property**: assert on **`LatencyBreakdown.g1_ms`**, never `total_ms`.
     `total_ms` includes `capture_ms` and would compare a ~10,400 ms figure
     against a 400 ms budget for a 10-second utterance (objection O8).
-  - **Hardware tier**: G1 (p50 ≤ 400 ms, p95 ≤ 800 ms) binds on **accelerated**
-    hardware only — CUDA and Apple Silicon. The CPU-only tier is measured and
-    published but **not** gated, so a CPU-tier assertion must not fail the
-    suite (objection O1).
+  - **Hardware tier**: G1 (p50 ≤ 400 ms, p95 ≤ 800 ms) binds on **Tier A** only —
+    machines that measured inside the budget at the install-time check
+    (PRD §7.2). Tier B is measured and published but **not** gated, so a Tier B
+    assertion must not fail the suite (objection O1, revised 2026-07-31 —
+    tiers are measured, not named after silicon; CTranslate2 has no Metal
+    backend, so "Apple Silicon" was never a distinct execution path).
   - **Post-processing chain**: G1 assumes `chain = ["rules"]`. With the LLM
     pass enabled the applicable budget is Phase 5's — p50 ≤ 700 ms,
     p95 ≤ 1100 ms (PRD §7.5, objection O11). Asserting G1 against an

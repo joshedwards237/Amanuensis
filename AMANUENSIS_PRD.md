@@ -57,7 +57,7 @@ Phase 1 gate and this paragraph is where the correction lands.
 
 | # | Goal | Measurement |
 |---|---|---|
-| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance, **on accelerated hardware** (CUDA / Apple Silicon), with the **default post-processing chain** (`["rules"]`). Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
+| G1 | Text appears fast enough to feel like typing | p50 ≤ 400 ms, p95 ≤ 800 ms from hotkey release to **text fully present** in the focused application, for a 10-second utterance, **on a Tier A machine** (§7.2 — measured, not named after silicon), with the **default post-processing chain** (`["rules"]`). Measured as `LatencyBreakdown.g1_ms` (§6.3) — `capture_ms` is excluded. See the G1 measurement note below. |
 | G2 | Transcription is accurate enough to not require editing | **Edit rate ≤ 5%** — the fraction of words requiring manual correction across the Phase 3 dictation set. WER is *not* the product goal; see the accuracy-measurement note below. |
 | G3 | Zero network traffic at runtime | Verified by packet capture with the app under load. **Scope:** this verifies Amanuensis's own sockets only. Transcript egress through a third-party clipboard manager happens in another process and is invisible to this method — see §7.3. |
 | G4 | Works in any focused application | Native fields, Electron apps, terminals, browsers |
@@ -86,31 +86,40 @@ Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
 
 Two further scoping decisions, resolved the same day:
 
-4. **G1 is tier-conditional** (objection O1). It binds on **accelerated
-   hardware** — the CUDA and Apple Silicon rows of §7.2's `model = "auto"`
-   table. On **CPU-only** hardware, G1 is *not* a pass/fail criterion: that tier
-   ships with a **measured, documented latency expectation** instead, per §10.
-   §9's "if G1 is missed here, stop" therefore means *stop for the tiers G1
-   binds on*. It does not halt the project over a CPU-tier miss.
+4. **G1 is tier-conditional, and tiers are measured** (objection O1, revised
+   2026-07-31 from probe evidence). It binds on **Tier A** — machines where the
+   selected model transcribes a 10-second utterance inside the budget, decided
+   once at install (§7.2). On **Tier B** machines it is *not* a pass/fail
+   criterion: that tier ships with a **measured, published latency expectation**
+   instead, per §10. §9's "if G1 is missed here, stop" therefore means *stop for
+   Tier A*. It does not halt the project over a Tier B miss.
+
+   **What changed and why.** O1 originally split on *accelerated versus
+   CPU-only*, naming CUDA and Apple Silicon as the gated tiers. The probe showed
+   that boundary does not exist: CTranslate2 has no Metal backend, so Apple
+   Silicon is a CPU path, and macOS — the only v1 platform — has no CUDA. The
+   old split would have left **no gated tier at all in v1**, which is the
+   opposite of what O1 was accepted to achieve. O1's reasoning is unchanged; only
+   the axis moved, from what chip a machine has to what it measured.
 
    Why: §1's differentiator is locality, and the §4 user who is
    offline-constrained or privacy-motivated frequently has no fast alternative
    at all. Shipping them a slower tool with an honest number serves them;
    shipping them nothing does not. Previously §2 and §9 demanded parity
-   unconditionally while §10 quietly permitted the CPU tier to ship anyway —
+   unconditionally while §10 quietly permitted the slow tier to ship anyway —
    which meant the gate could not fail, because any miss was redescribable as
    "a documented latency expectation." The escape hatch is now a stated scope
    boundary rather than an unstated one.
 
-   **The CPU tier still needs a published number, and a bar to clear.**
-   "Not gated by G1" is not "unmeasured" — the Phase 1 gate reports CPU-tier
-   latency alongside the accelerated figure, and the README states it.
+   **Tier B still needs a published number, and a bar to clear.**
+   "Not gated by G1" is not "unmeasured" — the Phase 1 gate reports the Tier B
+   figure alongside the Tier A one, and the README states both.
    §10's escape clause is that a tier "unusable rather than merely slow" should
    be dropped in §3, and *unusable* was undefined in exactly the way objection
    O9 rejected for gates. So:
 
    > **G1-CPU (provisional): p50 ≤ 2 000 ms**, same measurement basis as G1.
-   > A CPU tier that misses this is dropped in §3 rather than shipped.
+   > A Tier B machine class that misses this is dropped in §3 rather than shipped.
 
    The derivation, since the number should not be a guess: §4's own bar is that
    the tool must not be "slower than typing." A 10-second utterance is roughly
@@ -188,8 +197,7 @@ tool that is slower than typing.
 
 **Hardware splits this group, and the split is a positioning fact rather than an
 implementation detail** (2026-07-31, choice-story #8). G1's budgets bind on accelerated
-hardware — Apple Silicon and CUDA — and the CPU-only tier ships against the separate,
-looser G1-CPU bar in §2. Note the tension that creates: privacy motivation and offline
+machines (Tier A, §7.2) and Tier B ships against the separate, looser G1-CPU bar in §2. Note the tension that creates: privacy motivation and offline
 constraint correlate with older and cheaper machines, so the users the product exists
 *for* are disproportionately the ones who get the slower tier. The README states both
 numbers and which hardware each applies to, in the same place it makes the speed claim
@@ -261,7 +269,9 @@ max_duration_seconds = 300
 [engine]
 backend = "faster_whisper"  # faster_whisper | moonshine | parakeet
 model = "auto"              # "auto" resolves per §7.2
-device = "auto"             # auto | cpu | cuda | mps
+device = "auto"             # auto | cpu | cuda
+cpu_threads = "auto"        # "auto" = performance-core count. NOT the library
+                            # default of 4 — see §7.2. Worth ~1.8x.
 language = "en"
 initial_prompt = ""         # biases vocabulary; see §5.6
 
@@ -748,21 +758,88 @@ the dear one.
 `faster_whisper` (CTranslate2) is the default because it is fast, mature, quantizes well,
 and supports CPU and CUDA from one API.
 
-`model = "auto"` resolves as:
+#### Tiers are measured, not named after silicon
 
-| Hardware | Model |
-|---|---|
-| CUDA, ≥8 GB VRAM | `large-v3-turbo`, float16 |
-| CUDA, <8 GB VRAM | `distil-large-v3`, int8_float16 |
-| Apple Silicon | `distil-large-v3`, int8 |
-| CPU only | `small.en`, int8 |
+Revised 2026-07-31 from probe evidence (`docs/gates/probe.md`). The table below
+previously had four rows keyed on hardware — two CUDA, one "Apple Silicon", one
+"CPU only" — and that classification was wrong in a way that mattered:
+
+**CTranslate2 has no Metal backend.** "Apple Silicon" and "CPU only" are the same
+execution path with different core counts and memory bandwidth, not two paths.
+And macOS, the only v1 platform (§3), has no CUDA at all. So the old table's four
+rows described two real paths, one of which has **zero v1 users**.
+
+A tier is therefore defined by **what a machine measures**, not by what chip it
+contains:
+
+> **Tier A** — the selected model transcribes a 10-second utterance inside G1's
+> budget on this machine. **G1 binds and is gated.**
+>
+> **Tier B** — it does not. **G1-CPU applies** (§2): the number is measured,
+> published, and told to the user at install; it does not halt the project.
+
+The tier is decided **once, at install**, by running the same measurement the
+pre-Phase-0 probe ran, and recorded. It is not re-derived per session — a machine
+that is momentarily busy must not flip tiers, and a machine near the boundary
+must not oscillate. `manu status` reports the recorded tier; re-running the
+install check is how it changes.
+
+This supersedes the accelerated-versus-CPU-only split from objection O1. **O1's
+reasoning survives unchanged** — a slow machine gets an honest published number
+rather than a halt, and shipping the offline-constrained §4 user a slower tool
+beats shipping them nothing. What changes is the boundary: it moves from *what
+chip* to *what it measured*, because the probe showed the chip does not determine
+the answer.
+
+#### `model = "auto"`
+
+Starting guesses, **verified at install** by the tier check above. Where a row is
+marked *measured*, that number is real; the rest are still model-card estimates
+and are labelled so.
+
+| Hardware | Model | 10 s transcribe | Basis |
+|---|---|---|---|
+| CUDA, ≥8 GB VRAM | `large-v3-turbo`, float16 | — | estimate, **unmeasured** |
+| CUDA, <8 GB VRAM | `distil-large-v3`, int8_float16 | — | estimate, **unmeasured** |
+| Apple Silicon / CPU | `base.en`, int8 | **352 ms** | *measured*, M3 Max, n=1 |
+| Slower CPU | `tiny.en`, int8 | **190 ms** | *measured*, M3 Max, n=1 |
+
+`distil-large-v3` — the previous Apple Silicon selection — measured **2,412 ms**,
+six times over budget on an M3 Max. That row was a model-card guess and it was
+wrong by roughly 7×.
+
+**This table is provisional and selects on latency alone.** `base.en` was not
+detectably worse than `distil-large-v3` on the probe sample, but that is **one
+speaker, one room, one microphone, one paragraph**. Accuracy has no measurement
+yet (objection O7). **Do not finalise the model choice until the Phase 1 corpus
+exists** — doing so would repeat, on the accuracy axis, exactly the mistake this
+revision is correcting on the latency axis.
+
+#### `cpu_threads` is load-bearing and was never specified
+
+Added 2026-07-31. CTranslate2 defaults to **4 threads**. On a 14-core M3 Max that
+default measured 4,413 ms; setting `cpu_threads` to the performance-core count
+took the identical model to 2,412 ms. **A 1.8× factor**, from a parameter this
+PRD did not mention.
+
+The first run of the pre-Phase-0 probe returned **NO-GO on that default**. The
+project's top risk (§10) would have fired on a library default rather than on
+physics.
+
+`cpu_threads = "auto"` resolves to the **performance-core count**, not the total
+core count and not the library default. On macOS that is
+`sysctl -n hw.perflevel0.logicalcpu`; elsewhere, physical cores. Efficiency cores
+are deliberately excluded — scheduling inference across heterogeneous cores
+typically costs more than it returns. The value was not tuned beyond "match the
+performance cores" and is not claimed optimal; Phase 1 should sweep it.
+
+Note `device = "mps"` was removed from §5.3's options. CTranslate2 has no Metal
+backend, so it was never a reachable value.
 
 **Moonshine** is a real alternative on CPU for short utterances and is the reason
-`TranscriptionEngine` is an ABC rather than a module of functions. Benchmark it against
-`small.en` in Phase 1 and record the result in an ADR.
-
-**Note:** these are pre-implementation estimates from the model cards, not measured on
-target hardware. Phase 1 exists to replace them with numbers.
+`TranscriptionEngine` is an ABC rather than a module of functions. Benchmark it in
+Phase 1 against `base.en` — not `small.en`, which the probe showed is 2.2× over
+budget — and record the result in an ADR.
 
 ### 7.3 Injection: clipboard paste, with a keystroke fallback
 
@@ -859,8 +936,21 @@ and a rewrite.
 ### 7.4 VAD: Silero, optional
 
 Silero VAD via ONNX runtime. Small, fast, no GPU. Used for `vad_auto` mode and to trim
-leading/trailing silence before transcription — the latter is a free latency win on every
-mode, since Whisper pads to 30-second windows.
+leading/trailing silence before transcription.
+
+**Trimming is the dominant latency lever, not a free bonus** (revised 2026-07-31 from
+probe evidence; slicing record S5). The original wording called it "a free latency win",
+which understated it. Whisper's encoder always processes a **padded 30-second window**;
+only the decoder scales with output length. Measured: `base.en` takes 352 ms for a
+10-second utterance and 517 ms for a 26-second one — 1.5×, not 2.6×.
+
+The consequence is that **a 2-second utterance costs nearly what a 25-second one does**.
+Most real dictation is short, so without trimming the common case pays close to the
+worst case on every single utterance.
+
+**Therefore trimming moves to Phase 1**, from Phase 3. It has to land before the phase
+that measures latency, because it changes what that measurement means — Phase 1 without
+trimming measures a padded window rather than the product.
 
 ### 7.5 Post-processing: rules first, LLM behind a flag
 
@@ -1055,26 +1145,44 @@ than resolved through `platformdirs`, or `config.py` exposes a module-level inst
 a `.get()` accessor (§6.3). All are mechanical; there is no judgment here.
 
 ### Phase 1 — Prove the ASR path
-`AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`. No hotkey, no injection.
+`AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`, VAD silence trimming
+(§7.4), the install-time tier check (§7.2). No hotkey, no injection.
 `manu transcribe --seconds 10` records from the mic and prints the transcript plus timings.
 
 **Gate:** Report measured latency on your actual hardware against G1. Benchmark
 faster-whisper vs. Moonshine and write `docs/adr/0001-engine-selection.md`. **If G1 is
 missed here, stop and renegotiate §7.1 before continuing** — no later phase makes this faster.
 
-Scope of that stop (objection O1): G1 binds on **accelerated hardware only**. A miss
-there stops the project. Also measure and report the **CPU-only** tier — it is not
-gated, but it ships with a published number (§2, §10), and "not gated" is not
-"unmeasured." When renegotiating §7.1, weigh **pre-release inference** before full
+Scope of that stop (objection O1, revised 2026-07-31): G1 binds on **Tier A only** —
+machines that measure inside the budget at the install-time check (§7.2). A miss there
+stops the project. Also measure and report **Tier B** — it is not gated, but it ships
+with a published number (§2, §10), and "not gated" is not "unmeasured." When renegotiating §7.1, weigh **pre-release inference** before full
 streaming; §7.1 now records both (objection O3).
 
 Benchmark methodology (objection O7): record a small desk-mic corpus with reference
-transcripts, commit it under `tests/fixtures/asr/`, and report WER per candidate
-engine. That figure is for **relative** comparison only — the corpus is too small to
-validate an absolute threshold, and it is not a G2 measurement (§2).
+transcripts, and report WER per candidate engine. That figure is for **relative**
+comparison only — the corpus is too small to validate an absolute threshold, and it is
+not a G2 measurement (§2).
 
-**Rejects if:** G1 is missed on accelerated hardware. A CPU-tier miss does not reject;
-it is recorded and published.
+**The corpus is built BEFORE the engine is chosen** (2026-07-31). The pre-Phase-0 probe
+selected `base.en` on latency alone, from one clip by one speaker in one room. That is
+sufficient to prove G1 is reachable and **insufficient to pick a model** — accuracy is
+still unmeasured, which is the whole of objection O7. Choosing on the probe's evidence
+would repeat, on the accuracy axis, the mistake §7.2 just corrected on the latency axis.
+
+Corpus shape: five to ten samples on the microphone actually used for dictation, varied
+deliberately — a code-heavy sentence, one dense with proper nouns, one at a natural
+rambling pace, one deliberately fast, one with background noise. Reference transcripts
+(`.txt`) are committed; the audio is **not** (see `.gitignore` — a voice recording in a
+public repository cannot be unpublished).
+
+Phase 1 also carries, from the probe's findings: **VAD silence trimming** (§7.4, moved
+here from Phase 3 — it changes what this gate measures), the **`cpu_threads` default**
+(§7.2), and the **install-time tier check** that decides Tier A versus Tier B (§7.2).
+Report the tier this machine lands in.
+
+**Rejects if:** G1 is missed on a Tier A machine. A Tier B miss does not reject; it is
+recorded and published.
 
 **Also at this gate — first G3 verification** (added 2026-07-30, objection O5).
 Run the daemon under packet capture through a full transcribe cycle and report
@@ -1126,10 +1234,10 @@ global hotkey, and Phase 3's gate is ten real dictations of ≥ 60 seconds — d
 not a dry run. A visible indicator, not the full `TrayApp`, which stays in Phase 4.
 
 **Gate:** **First end-to-end G1 measurement** as §2 actually defines it — hotkey release
-to text fully present, via `g1_ms`, on accelerated hardware, with `chain = ["rules"]`.
+to text fully present, via `g1_ms`, on a Tier A machine, with `chain = ["rules"]`.
 Confirm the recording indicator is visible without opening a menu.
 
-**Rejects if:** G1 is missed on accelerated hardware, or recording state is ambiguous at
+**Rejects if:** G1 is missed on a Tier A machine, or recording state is ambiguous at
 any point while the mic is live.
 
 Note what this gate means for Phase 1 (slicing record S1/S3): Phase 1 populates at most
@@ -1210,8 +1318,8 @@ the signal to ship disabled.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| G1 unachievable on **accelerated** hardware | High | The pre-Phase-0 probe (§9) answers this to an order of magnitude in about an hour, before the scaffold is built; the Phase 1 gate remains the real go/no-go. A miss here does stop the project (§9). |
-| CPU-only tier is slow enough to be unusable | Medium | G1 does not bind on this tier (§2, objection O1). It ships with a smaller model and a **measured, published** latency expectation rather than a broken promise. The Phase 1 gate reports the CPU number even though it does not gate on it; if that number turns out to be unusable rather than merely slow, the honest response is to drop the tier in §3, not to ship it silently. |
+| G1 unachievable on any hardware class | High | The pre-Phase-0 probe (§9) answers this to an order of magnitude in about an hour, before the scaffold is built; the Phase 1 gate remains the real go/no-go. A miss here does stop the project (§9). |
+| Tier B machines are slow enough to be unusable | Medium | G1 does not bind on Tier B (§2, §7.2). It ships with a smaller model and a **measured, published** latency expectation rather than a broken promise. The Phase 1 gate reports the Tier B number even though it does not gate on it; if that number is unusable rather than merely slow, the honest response is to drop the class in §3, not to ship it silently. |
 | Silent network egress from a transitive dependency | High | Packet capture is now a gate criterion at Phase 1 and again at Phase 4 (§9). Model weights resolve from a pinned local path, never a repository ID at runtime (§7.6). |
 | Transcript captured and cloud-synced by a third-party clipboard manager | High | Clipboard-manager detection at startup with a persistent tray indicator (§5.4, §7.3). Not covered by G3's packet capture — the egress is in another process. |
 | macOS permissions are opaque and users get stuck | High | Permission check at startup with copy-pasteable remediation, not a generic failure. |
@@ -1341,4 +1449,9 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **Choice-story #6 accepted.** §5.3 gains **one bounded exception**: behaviour a stated guarantee depends on is not user-settable, with §8's persist-before-inject as the first instance. Prefer the exception to another rename — O10 resolved the first collision by redefining a key, which would otherwise have become the precedent. The `[experimental]` tier is *not* adopted; §5.2's flag mechanism gap stays open. |
 | 2026-07-31 | **Choice-story #9 accepted.** §7.5 now records that Phase 5's budget is arithmetic rather than chosen, that its own 900 ms tolerance line contradicts the 1100 ms p95, and that the gate cannot fail it by construction. Deliberately unresolved while Phase 5 is deferred — whoever revives it sets the budget from tolerance first and derives `max_latency_ms` from that. |
 | 2026-07-31 | **Choice-story #11 accepted.** §7.6 names the **surfacing-versus-preventing doctrine**, including the clause that matters — unless prevention is free *or the user has no viable action* — and records that §7.3 sits at its edge. §7.3's orphaned G3 obligation is assigned to the **Phase 4 gate**: an unqualified "G3 verified" is itself the failure O12 described. |
+| 2026-07-31 | **Probe amendments 1–5 accepted** (`docs/gates/probe.md`). **§7.2's `model = "auto"` table re-derived from measurement** — the Apple Silicon row selected `distil-large-v3` at 2,412 ms, six times over budget; `base.en` measures 352 ms. Table is marked provisional and selects on latency alone; the model choice is **not** final until the Phase 1 corpus exists. |
+| 2026-07-31 | **`cpu_threads` added to §5.3**, defaulting to performance-core count rather than CTranslate2's default of 4 — worth **1.8×**, and the probe's first run returned NO-GO on that default. `device = "mps"` removed; CTranslate2 has no Metal backend, so it was never reachable. |
+| 2026-07-31 | **Tiers are now measured, not named after silicon** (§2, §7.2) — revising objection O1. "Apple Silicon" and "CPU only" were the same execution path, and macOS has no CUDA, so the old split would have left **no gated tier at all in v1**. Tier A = measures inside the budget at install; Tier B = does not. O1's reasoning is unchanged; only the axis moved. |
+| 2026-07-31 | **VAD silence trimming moved from Phase 3 to Phase 1** (§7.4, §9; slicing record S5's open finding). Whisper's encoder always processes a padded 30-second window, so a 2-second utterance costs nearly what a 25-second one does — trimming is the dominant latency lever, not "a free win", and it changes what Phase 1 measures. |
+| 2026-07-31 | **The Phase 1 corpus is built before the engine is chosen** (§9; objection O7). The probe picked `base.en` on latency from one clip by one speaker — enough to prove G1 reachable, not enough to pick a model. |
 | 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |
