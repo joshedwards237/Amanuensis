@@ -38,8 +38,8 @@ objections:
     severity: high
     claim: "G1-CPU (p50 ≤ 2 000 ms) is presented as derived from §4's not-slower-than-typing bar, but that derivation licenses roughly 27 seconds, not two; and the bar carries no p95 on the tier whose documented failure mode is the tail."
     evidence: "§2: 'A 10-second utterance is roughly 25 words; at 40 wpm that is ~37 seconds to type. Two seconds is comfortably inside that.' §2's own G2 note: 'a number presented as derived when it was inherited is worse than one labelled as a guess.' HANDOFF.md: 'Any latency figure entering the PRD carries p50 and p95, or is labelled a floor.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted for the fix, not the framing. The relabel is correct and applied: 2,000 ms is a judgement about felt responsiveness, not an arithmetic result, and stating it as derived repeated the error section 2's own G2 note warns against. A p95 of 4,000 ms is added because a median-only bar cannot fail on the repetition-looping excursion this project has already measured. The objection's implied range is not accepted -- reading 'not slower than typing' as pure throughput licenses ~27 s, which was never the live alternative."
   - id: A6
     category: implementation
     severity: high
@@ -52,22 +52,22 @@ objections:
     severity: high
     claim: "The retain = false temp-file path reproduces the defect it was written to fix — unlink() no more erases bytes than DELETE does — while adding an orphan class on failed injection that no purge command reaches, and removing the recovery interface §8's guarantee exists for."
     evidence: "§5.5: 'written to a 0600 temp file and unlinked once injection succeeds', rejecting SQLite DELETE because it 'marks pages free for reuse rather than erasing bytes'. §8: 'If injection fails the user can still recover their words.' §5.5: 'manu history --purge wipes it' (the DB)."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted with revision. The erasure critique is correct: unlink() releases blocks exactly as DELETE marks pages free, so section 5.5 now states plainly that no secure-erasure claim is made and points at full-disk encryption as the actual mechanism. 'Reproduces the defect' overstates -- dropping a long-lived shared database from the privacy claim was a real gain and is kept. The two genuinely new gaps are closed: orphans from failed injections are swept at daemon start, the path resolves through platformdirs into a named pending/ directory, and manu history surfaces them so section 8's recovery promise is reachable."
   - id: A8
     category: specification quality
     severity: medium
     claim: "cpu_threads = \"auto\" branches on operating system, not on whether the sysctl it names exists, leaving no defined value for macOS machines without performance-core levels — and its failure direction is the library default of 4 that produced the probe's NO-GO."
     evidence: "§7.2: 'On macOS that is sysctl -n hw.perflevel0.logicalcpu; elsewhere, physical cores.' §3: v1 is macOS-only. probe.md: 'The first run measured 4,413 ms and returned NO-GO. That was CTranslate2 defaulting to 4 threads.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted. Resolution now branches on whether hw.perflevel0.physicalcpu resolves rather than on the OS, falling back to the total core count. The old wording's 'elsewhere' branch covered no shipping configuration, and a homogeneous Mac fell through to CTranslate2's default of 4 -- the value whose first probe run returned NO-GO. The efficiency-core exclusion is additionally labelled as generalised from n=1, with Phase 1's sweep required to cover a second core topology."
   - id: A9
     category: specification quality
     severity: medium
     claim: "The tier redefinition was applied in §2 and §7.2 but not in §4, §7.5, §9's probe gate or §9's Phase 4 README instruction, all of which still key on 'accelerated hardware' — a category §7.2 now says does not exist on the only v1 platform."
     evidence: "§4 (amended 2026-07-31): 'G1's budgets bind on accelerated machines (Tier A, §7.2).' §7.5: 'on the same accelerated-hardware and measurement basis as G1.' §9 probe: 'Rejects if: ...on accelerated hardware.' §7.2: 'CTranslate2 has no Metal backend... macOS, the only v1 platform, has no CUDA at all.'"
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted. Applied to all four sites: section 4's positioning paragraph, section 7.5's Phase 5 budget basis, section 9's probe Rejects-if line, and section 9's Phase 4 README instruction. Historical references describing what O1 originally split on are deliberately left intact. The probe's reject line was the sharpest instance -- added the same day specifically because it was the one gate lacking one, and rendered unevaluable by an amendment made hours later."
 ---
 
 > **Provenance.** Produced by the `advocatus-diaboli` sentinel on 2026-07-31,
