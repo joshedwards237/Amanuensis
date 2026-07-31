@@ -37,22 +37,37 @@ headset: those use a voice-optimised codec with heavy noise suppression and a
 different acoustic profile from a desk mic, so a corpus recorded on one benchmarks
 that headset rather than your setup. PRD §2 specifies desk-mic English.
 
-```bash
-# 1. Confirm your desk mic is the input device and note its index
-ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A5 "audio devices"
+**Address the microphone by name, not by index.** Device indexes renumber
+whenever something connects — an iPhone on Continuity, AirPods pairing, a virtual
+audio device. On this machine index `0` is *Josh's iPhone 15 Pro Microphone* and
+the built-in mic is `1`, so a hardcoded `:0` silently records the corpus through a
+phone. `avfoundation` accepts the device name and that is stable.
 
-# 2. Record each sample. Read the matching .txt, then Ctrl-C when done —
-#    or set -t to a fixed length if you prefer.
+```bash
+# 1. List devices and pick yours by NAME.
+#    The "Error opening input" at the end is expected — -list_devices always
+#    exits that way after printing the list. The listing is what you want.
+ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A6 "audio devices"
+
+MIC="MacBook Pro Microphone"    # <- set to your device's exact name
+
+# 2. Record each sample. Read the matching .txt, then Ctrl-C when finished.
 for n in 01-natural 02-code 03-proper-nouns 04-fast 05-noisy 06-short; do
-  echo "=== $n ==="; cat "tests/fixtures/asr/$n.txt"; echo
-  read -r -p "press enter, then read it aloud..." _
-  ffmpeg -hide_banner -loglevel error -f avfoundation -i ":0" \
+  printf '\n=== %s ===\n' "$n"; cat "tests/fixtures/asr/$n.txt"; echo
+  read -r -p "press enter, read it aloud, then Ctrl-C..." _
+  ffmpeg -hide_banner -loglevel error -f avfoundation -i ":$MIC" \
          -ar 16000 -ac 1 -c:a pcm_s16le "tests/fixtures/asr/$n.wav"
 done
 
-# 3. Verify: every file should read 16000 Hz, 1 ch, Int16
-for f in tests/fixtures/asr/*.wav; do echo "$f"; afinfo "$f" | grep "Data format"; done
+# 3. Verify: every file should read 1 ch, 16000 Hz, Int16, and a plausible length
+for f in tests/fixtures/asr/*.wav; do
+  printf '%-42s %s\n' "$f" "$(afinfo "$f" | grep -E 'Data format|estimated duration' | tr -s ' ' | tr '\n' ' ')"
+done
 ```
+
+macOS prompts once for microphone access for your terminal. That is the same
+Accessibility/Input-Monitoring permission wall Phase 2a exists to front-load, so
+treat it as a preview of the real thing.
 
 16 kHz mono 16-bit PCM matches what `AudioCapture` will feed the engine
 (`[audio] sample_rate = 16000`, PRD §5.3). Recording at a different rate measures
