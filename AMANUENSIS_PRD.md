@@ -259,8 +259,10 @@ Config-selectable, one active at a time:
 
 ### 5.3 Configuration
 
-Single TOML file at the platform config directory (`platformdirs`; `~/.config/amanuensis/config.toml`
-on macOS — see §7.3's portability floor). Every behavioral decision in this PRD that could
+Single TOML file at the platform config directory, resolved through `platformdirs`
+(`~/Library/Application Support/amanuensis/config.toml` on macOS — see §7.3's
+portability floor). `$AMANUENSIS_CONFIG_DIR` overrides it; that is the one setting
+that cannot live in the config file, because it is what finds the config file. Every behavioral decision in this PRD that could
 reasonably go either way is a config key with a sane default. No behavior is hardcoded that
 a user might want to change.
 
@@ -339,7 +341,9 @@ is ambiguous about recording state is a privacy problem regardless of where the 
 
 ### 5.5 History
 
-Local SQLite at `~/.local/share/amanuensis/history.db`. Stores timestamp, transcript,
+Local SQLite at the platform data directory, resolved through `platformdirs`
+(`~/Library/Application Support/amanuensis/history.db` on macOS), overridable with
+`$AMANUENSIS_DATA_DIR`. Stores timestamp, transcript,
 duration, engine, and latency breakdown. Audio is **not** stored unless explicitly enabled.
 `manu history --purge` wipes it.
 
@@ -427,7 +431,8 @@ on.
 Users have proper nouns the model will never get right. Two mechanisms:
 
 1. `initial_prompt` passed to the ASR engine — cheap, works today, limited length.
-2. A post-processing replacement map (`~/.config/amanuensis/vocabulary.toml`) applying
+2. A post-processing replacement map (`vocabulary.toml`, beside `config.toml` in the
+   `platformdirs` config directory) applying
    case-insensitive whole-word substitutions.
 
 Both. They fail in different places.
@@ -791,6 +796,14 @@ sit awkwardly across both, and there is no rule for that yet.
 
 ### 7.0 Python, and what it costs
 
+**The floor is 3.12, raised from 3.11 at the Phase 0 gate (2026-07-31).** Not a
+preference: the installed numpy's type stubs use PEP 695 `type` statements, which mypy
+only parses under a 3.12+ target. Under `python_version = "3.11"` the Phase 0 gate
+condition `mypy --strict src/` fails on numpy's own stubs before reaching a line of this
+project's code — a *named gate condition* rendered unsatisfiable for reasons unrelated
+to the code being gated. 3.11 also buys nothing here: `tomllib` is 3.11+, and 3.12 is
+the oldest release still receiving security fixes for the lifetime of a v1.
+
 Recorded 2026-07-31 (choice-story #1). §8 states "Python 3.11+" as a table row between
 two performance targets, and until now it was the only technical decision in this
 document with no argument attached — while §7 recorded rejected alternatives for
@@ -1102,8 +1115,11 @@ each is cheap now and expensive after Phase 2b:
    A model that is never written down gets re-derived rather than ported, and it would
    be re-derived for the one class §6.3 says owns the loop. This is the item that would
    actually corner the project.
-2. **No hardcoded XDG paths.** §5.3 and §5.5 name `~/.config/amanuensis/` and
-   `~/.local/share/amanuensis/` as the macOS locations. Resolve them through
+2. **No hardcoded XDG paths.** §5.3 and §5.5 originally named `~/.config/amanuensis/`
+   and `~/.local/share/amanuensis/` as the *macOS* locations, which is where `platformdirs`
+   puts them on Unix and not on macOS — this section stated the rule and then wrote down
+   the paths the rule forbids. Corrected 2026-07-31 at the Phase 0 gate. Resolve them
+   through
    `platformdirs` from Phase 0. Changing this after users have config files on disk is
    a migration, not an edit.
 3. **The IPC transport is abstracted** (§6.1). `manu toggle` uses a unix socket on
@@ -1256,7 +1272,7 @@ doctrine says to prefer it.
 | Cold daemon start to ready | < 15 s — **measured 3.43 s** with `tiny.en` + `Llama-3.2-3B-4bit` both loaded and warmed (2026-07-31, `docs/gates/phase5-feasibility.md`) |
 | Recovery from mic disconnect | Automatic, no restart |
 | Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] retain` (§5.5) |
-| Python | 3.11+ |
+| Python | **3.12+** (raised from 3.11 at the Phase 0 gate — see §7.0) |
 
 Note the crash-order requirement: persist first, inject second. If injection fails the user
 can still recover their words.
@@ -1728,6 +1744,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **A7 accepted with revision.** §5.5 now states plainly that **Amanuensis does not claim secure erasure** of the pre-injection transcript — `unlink()` releases blocks exactly as `DELETE` marks pages free, so the original change moved the claim down a layer rather than repairing it. What it genuinely bought (a shared database no longer load-bearing for a privacy promise) is kept. Three gaps closed: the path resolves through `platformdirs` into a named `pending/` directory, orphans from failed injections are swept at daemon start, and `manu history` surfaces them so §8's recovery promise is reachable. |
 | 2026-07-31 | **A8 accepted.** `cpu_threads = "auto"` branches on **whether `hw.perflevel0.physicalcpu` resolves**, not on which OS is running, falling back to the total core count. §3 makes macOS the only v1 platform, so the old "elsewhere" branch covered nothing and a homogeneous Mac fell through to CTranslate2's default of 4 — the value whose first probe run returned NO-GO. The efficiency-core exclusion is labelled as generalised from n=1 on a 10P/4E machine, and Phase 1's sweep must cover a second topology. |
 | 2026-07-31 | **A9 accepted.** The tier vocabulary is propagated to the four sites still keyed on "accelerated hardware": §4's positioning paragraph, §7.5's Phase 5 budget basis, §9's probe **Rejects if** line, and §9's Phase 4 README instruction. §7.2 retired that category the same day — CTranslate2 has no Metal backend and macOS has no CUDA — which had left the probe's reject condition conditioning on a hardware class with no members, and would have had Phase 4 publish a user-facing distinction the product does not make. |
+| 2026-07-31 | **Phase 0 gate findings applied.** §5.3, §5.5 and §5.6 named `~/.config/amanuensis/` and `~/.local/share/amanuensis/` as the *macOS* paths while instructing the implementation to use `platformdirs`, which returns neither on macOS — §7.3's portability floor stated the rule and the same sections wrote down the paths it forbids. All now resolve through `platformdirs`, with `$AMANUENSIS_CONFIG_DIR` / `$AMANUENSIS_DATA_DIR` overrides named, since the location of the config file cannot itself be a config key. |
+| 2026-07-31 | **Python floor raised to 3.12** (Phase 0 gate). numpy's type stubs use PEP 695 `type` statements that mypy cannot parse under a 3.11 target, which made the named gate condition `mypy --strict src/` fail on numpy's own stubs before reaching this project's code. §7.0 and §8 updated. |
 | 2026-07-30 | Initial draft |
 | 2026-07-30 | Added §14 indexing the four sentinel records. Navigational only — no decision in §1–§13 was amended, and all 29 dispositions remain pending. |
 | 2026-07-30 | **O8 accepted.** G1 redefined as hotkey release to *text fully present*, measured by the new `LatencyBreakdown.g1_ms` (§6.3); `total_ms` is diagnostics only. Added the G1 measurement note to §2, including an explicit precedence statement that §2's 10 s budget and §7.1's 15–30 s revisit trigger are separate signals. HARNESS.md corrected to assert against `g1_ms`. |

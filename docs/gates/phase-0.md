@@ -5,7 +5,13 @@
 **Hardware:** Apple M3 Max, 14 cores (10 performance / 4 efficiency), macOS 27.0
 **Interpreter:** CPython 3.14.5 (package targets ≥ 3.12 — see finding 2)
 
-**Verdict: PASS.**
+**Verdict: PASS — gate closed 2026-07-31.**
+
+All six gate conditions met. Both findings requiring a PRD amendment are **applied**
+(§5.3, §5.5, §5.6, §7.0, §7.3, §8 — see the revision log). The adversarial review that
+was outstanding when this record was first written **ran and was adjudicated**: nine
+objections, all nine accepted, one of which (A6) landed on code committed inside this
+phase and was fixed before the gate closed. Phase 1 may begin.
 
 ---
 
@@ -90,7 +96,7 @@ Not built, and their absence is not an omission:
 
 §9's standing question. Six findings, the first two needing an amendment.
 
-### 1. §5.3's macOS config path contradicts its own instruction — **amendment needed**
+### 1. §5.3's macOS config path contradicted its own instruction — **applied**
 
 §5.3 says, in one sentence:
 
@@ -103,15 +109,16 @@ on Unix. §5.5 has the same problem for `~/.local/share/amanuensis/history.db`.
 
 The gate resolves it — a hardcoded path is an explicit reject — so the
 implementation follows `platformdirs` and the PRD's stated macOS paths are now
-wrong. **§5.3 and §5.5 should be amended to drop the literal paths**, or to name
-`~/Library/Application Support/amanuensis/` if the intent was to document where
-files actually land.
+wrong. **Applied 2026-07-31**: §5.3, §5.5 and §5.6 now resolve through `platformdirs` and
+name the macOS location correctly, with the `$AMANUENSIS_*_DIR` overrides stated.
+§7.3's floor item 2 records that it stated the rule and then wrote down the paths the
+rule forbids.
 
 This is worth more than a typo correction: portability floor item 2 exists because
 "changing this after users have config files on disk is a migration, not an edit."
 The PRD stated the correct rule and then wrote down the path the rule forbids.
 
-### 2. The floor is Python 3.12, not 3.11 — **amendment needed if §7.0 names a version**
+### 2. The floor is Python 3.12, not 3.11 — **applied**
 
 `requires-python = ">=3.12"`, not `>=3.11`. Not a preference: the installed numpy's
 type stubs use PEP 695 `type` statements, which mypy only parses under a 3.12+
@@ -173,15 +180,52 @@ probe's measured optimum and 2.5× CTranslate2's default of 4.
 
 ---
 
-## Outstanding at this gate
+## The adversarial review — resolved, and it did land here
 
-**The 2026-07-31 PRD amendments still have no independent adversarial review.**
-Phase 0 hardens against §6.3's ABC classification, §6.3's config decision, and
-§7.3's portability floor — all amended on 2026-07-31, all applied
-recommendation → approval → document with no review step. An `advocatus-diaboli`
-pass was dispatched alongside this phase; its record is not in hand at the time of
-writing. **If it lands objections against §6.3 or §7.3, this scaffold is where they
-land**, and the cost of changing it is at its lowest right now.
+When this record was first written the 2026-07-31 amendments had no independent
+review, and this section said that if objections landed against §6.3 or §7.3, the
+scaffold was where they would land. **One did.**
+
+`advocatus-diaboli` returned nine objections against the amendment set
+(`docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md`), seven high
+or critical. All nine were adjudicated and accepted. Three bear on Phase 0:
+
+**A6 — accepted, and it was a defect in code committed by this phase.** §6.3 said
+"callers observe completion through the session" while `DictationSession` had no
+flag, no event and no lock — leaving polling a mutable dataclass across a thread
+boundary as the only available reading, which is the thing Half-Sync/Half-Async is
+chosen to avoid. `models/session.py` had implemented that contract faithfully,
+docstring and all. The session now carries a `threading.Event` with an explicit
+write-then-signal ordering rule and a `wait()` method, covered by four tests
+including one that asserts the ordering against a real thread. The spec was wrong
+and the code was faithful to it; only review caught that.
+
+**A1 — accepted.** §7.2 defined Tier A by the same predicate §9's Phase 1 gate
+tested, so the project's top risk had a mitigation with no reachable failing state.
+Phase 0 did not encode this — it is a spec defect — but Phase 1 would have started
+against it, which is the phase this gate releases.
+
+**A8 — accepted, and the code was already right.** §7.2 said `cpu_threads = "auto"`
+branches on OS; `config.py` branches on whether the sysctl resolves and falls back
+to the total core count, never to CTranslate2's default of 4. The spec was amended
+to match the implementation rather than the reverse. The spec also said
+`hw.perflevel0.logicalcpu` where the code queries `physicalcpu`; on Apple Silicon
+both return 10, and physical is the more defensible of the two.
+
+**This is the argument for running the sentinel before the scaffold hardens, made
+concrete.** A6's fix cost one field, one method and four tests because nothing had
+been built on the old contract yet. After Phase 2b it would have been a change to
+the threading model of a running daemon.
+
+## Gate decision
+
+**PASS, closed 2026-07-31.** Conditions met, findings applied, review adjudicated.
+
+Phase 1 is released. It inherits one known-open item that is not a Phase 0 defect:
+Phase 5 is `UNRESOLVED, corpus-blocked` (§9), pending 6–10 samples of spontaneous
+unscripted speech. Nothing in Phase 1 depends on it — every candidate approach
+satisfies the `TextPostProcessor.process(text, session) -> str` contract frozen
+here, which is why it was safe to freeze before the experiments returned.
 
 ## Rollback
 
