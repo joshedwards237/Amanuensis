@@ -102,9 +102,23 @@ Two further scoping decisions, resolved the same day:
    "a documented latency expectation." The escape hatch is now a stated scope
    boundary rather than an unstated one.
 
-   **The CPU tier still needs a published number.** "Not gated by G1" is not
-   "unmeasured" — the Phase 1 gate reports CPU-tier latency alongside the
-   accelerated figure, and the README states it.
+   **The CPU tier still needs a published number, and a bar to clear.**
+   "Not gated by G1" is not "unmeasured" — the Phase 1 gate reports CPU-tier
+   latency alongside the accelerated figure, and the README states it.
+   §10's escape clause is that a tier "unusable rather than merely slow" should
+   be dropped in §3, and *unusable* was undefined in exactly the way objection
+   O9 rejected for gates. So:
+
+   > **G1-CPU (provisional): p50 ≤ 2 000 ms**, same measurement basis as G1.
+   > A CPU tier that misses this is dropped in §3 rather than shipped.
+
+   The derivation, since the number should not be a guess: §4's own bar is that
+   the tool must not be "slower than typing." A 10-second utterance is roughly
+   25 words; at 40 wpm that is ~37 seconds to type. Two seconds is comfortably
+   inside that while still reading as a tool rather than a batch job. Like G2's
+   5%, this is **provisional** — Phase 1 confirms or moves it with a stated
+   reason in `docs/gates/phase-1.md`. It is a floor for shipping the tier at
+   all, not a claim that 2 000 ms feels good.
 
 5. **G1 assumes post-processing is off** (objection O11). The budgets above are
    measured with `chain = ["rules"]`, the default. The optional LLM pass adds
@@ -171,6 +185,17 @@ derived when it was inherited is worse than one labelled as a guess.
 **Primary:** Developers and writers who already know what dictation is, are privacy-motivated
 or offline-constrained, and are comfortable with a config file. They will not tolerate a
 tool that is slower than typing.
+
+**Hardware splits this group, and the split is a positioning fact rather than an
+implementation detail** (2026-07-31, choice-story #8). G1's budgets bind on accelerated
+hardware — Apple Silicon and CUDA — and the CPU-only tier ships against the separate,
+looser G1-CPU bar in §2. Note the tension that creates: privacy motivation and offline
+constraint correlate with older and cheaper machines, so the users the product exists
+*for* are disproportionately the ones who get the slower tier. The README states both
+numbers and which hardware each applies to, in the same place it makes the speed claim
+— not only in §2 where implementers read it. A tool marketed on locality whose speed
+promise holds only with an accelerator needs that caveat where users are, not where
+tests are.
 
 **Secondary:** Users with RSI or motor impairment for whom dictation is not a convenience.
 This group raises the bar on reliability — a dropped transcription is not a minor annoyance.
@@ -239,9 +264,10 @@ restore_delay_ms = 150
 warn_on_clipboard_manager = true   # tray indicator when a manager is detected; see §7.3
 
 [history]
-enabled = true              # RETENTION only; the pre-injection write in §8 is
-                            # unconditional. false = write, then delete after
-                            # successful injection. See §5.5.
+retain = true               # false: the transcript is still written before
+                            # injection (§8, unconditional) and deleted once
+                            # injection succeeds. Renamed from `enabled`
+                            # 2026-07-31 — see §5.5.
 retain_days = 30
 store_audio = false         # off by default; audio is the sensitive artifact
 ```
@@ -269,10 +295,17 @@ duration, engine, and latency breakdown. Audio is **not** stored unless explicit
 Latency breakdown is a product requirement, not a debugging nicety — G1 cannot be defended
 without per-stage timings.
 
-**`enabled` controls retention, not the write** (resolved 2026-07-30, objection
-O10). The pre-injection write in §8 happens **unconditionally**. `enabled = false`
-means the row is deleted immediately after injection succeeds — so nothing
-persists, and the crash guarantee still holds on the path where it matters.
+**`retain` controls retention, not the write** (resolved 2026-07-30, objection
+O10; key renamed 2026-07-31, choice-story #10). The pre-injection write in §8 happens
+**unconditionally**. `retain = false` means the row is deleted immediately after
+injection succeeds — so nothing persists, and the crash guarantee still holds on the
+path where it matters.
+
+The key was originally `enabled`, which required this section to instruct readers to
+read it as *retain* rather than *use* — a gloss that would have had to survive into the
+README, the tray, any settings UI (§11.2) and every validation message, each a fresh
+opportunity for the plain reading to win. The name is the interface; renaming it while
+Phase 0 has not started and no user has a config file cost nothing.
 
 The alternative reading — that `enabled = false` disables the write — would have
 made §8's "never lose a transcript" silently conditional on a setting the user was
@@ -282,8 +315,7 @@ secondary user with motor impairment, for whom "a dropped transcription is not a
 minor annoyance," is the one who most needs the recovery path. Neither would have
 been told the trade existed.
 
-Read the key as *retain* history, not *use* history. It costs one write and one
-delete on the disabled path.
+It costs one write and one delete on the non-retaining path.
 
 ### 5.6 Custom vocabulary
 
@@ -529,6 +561,35 @@ amanuensis/
 Each decision records the alternative rejected. If implementation shows a decision was
 wrong, bring evidence to the gate and amend this section with a dated note.
 
+### Where a decision goes
+
+Added 2026-07-31 (choice-story #13). This project accumulated six places a decision can
+land, each justified on its own and none compared to the others: §7 amended in place,
+`docs/adr/`, `docs/gates/`, and the three sentinel records. The failure mode of six
+unrouted surfaces is not confusion — it is *silence*: a contributor unsure where a
+decision belongs writes it in none, which is the intent debt all six exist to prevent.
+
+| Surface | Receives | Mutable? |
+|---|---|---|
+| **PRD §7** | Product-level decisions — anything that changes what the product *is* or what a user experiences | Yes, via dated revision-log rows |
+| **`docs/adr/`** | Implementation-level decisions below PRD granularity — which quantization, which ONNX opset, which clipboard API | No; superseded by a later ADR |
+| **`docs/gates/`** | Measurements and the pass/reject call at each gate, plus what the phase revealed the PRD got wrong | No; one file per gate, append-only |
+| **`docs/superpowers/*`** | Review artefacts produced by sentinels, and the human dispositions on them | Dispositions written once |
+
+The rule when they collide: **a gate record reports, an ADR decides, and §7 governs.**
+Phase 1 is the first live collision — §7.2 already holds the engine decision,
+`0001-engine-selection.md` is a required deliverable, and `docs/gates/phase-1.md` must
+carry the measurements. So: the gate record carries the numbers, the ADR carries the
+engine choice and its reasoning, and §7.2 is amended only if the outcome changes the
+product-level decision rather than merely confirming it. An ADR that contradicts §7 is a
+finding for the gate, not a silent override.
+
+Note the standing tension, since it is not resolved by the table: §7's amend-in-place
+convention and the ADR discipline of immutable-and-superseded (Nygard, 2011) cannot both
+govern the same decision. The split above is by *granularity*, which keeps them from
+meeting — but a decision that migrates from implementation-level to product-level will
+sit awkwardly across both, and there is no rule for that yet.
+
 ### 7.1 Batch transcription, not streaming (v1)
 
 Transcribe the complete buffer on hotkey release. Streaming with partial hypotheses is
@@ -732,13 +793,13 @@ auth. What does apply:
 | Idle RSS | < 1.5 GB with model resident (GPU) |
 | Cold daemon start to ready | < 15 s |
 | Recovery from mic disconnect | Automatic, no restart |
-| Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] enabled` (§5.5) |
+| Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] retain` (§5.5) |
 | Python | 3.11+ |
 
 Note the crash-order requirement: persist first, inject second. If injection fails the user
 can still recover their words.
 
-This guarantee is **not** conditional on the `[history] enabled` config key. That key
+This guarantee is **not** conditional on the `[history] retain` config key. That key
 governs *retention* — when it is false the row is written before injection and deleted
 after injection succeeds (§5.5, objection O10). A guarantee whose mechanism a user can
 switch off without being told is not a guarantee.
@@ -771,6 +832,20 @@ elapsed transcribe time. Delete it afterwards; it is not a deliverable.
 
 **Gate:** Does transcription complete in a few hundred milliseconds, or in several
 seconds? An order of magnitude is all this needs to answer.
+
+**Rejects if:** transcription of a 10-second utterance takes longer than the CPU-tier
+bar in §2 on *accelerated* hardware. That would mean the accelerated path is slower
+than the floor set for the unaccelerated one, which is not a slow result — it is a
+broken setup, and no amount of Phase 0 scaffolding fixes it.
+
+**Writes `docs/gates/probe.md` before the script is deleted** (choice-story #12): the
+date, the hardware, the model `auto` resolved to, the input file, the measured
+transcribe time, and the verdict — plus the standing caveat that this number skips
+capture, model residency, post-processing and injection and is therefore a **floor**.
+Delete the code, keep the answer. This produces the earliest kill decision in the
+project; O9 required every other gate to leave a record precisely because a number that
+lives only in a conversation cannot be compared against later, and this is the number
+with the least surrounding context to reconstruct it from.
 
 The reasoning: §10 rates G1-unachievability as the top risk and offers the Phase 1
 gate as the mitigation, but that gate sits *after* the entire Phase 0 scaffold and
@@ -901,6 +976,10 @@ not.
 `TrayApp`, `toggle` and `vad_auto` modes, error surfacing, README with the clipboard caveat
 documented, install path with checksummed model download.
 
+The README also carries the **per-tier latency table** — the accelerated G1 figures and
+the CPU-tier G1-CPU figure, each labelled with the hardware it applies to (§2, §4,
+choice-story #8) — and the privacy section from §9's Phase 4 G3 verification.
+
 **Gate:** A second person installs it from the README without your help.
 
 **Rejects if:** they cannot reach a first successful dictation from the README alone,
@@ -1007,12 +1086,18 @@ disposition — resolving one is a human act, and their read-only tool boundary 
 what enforces that. Every amendment made in response appears in the revision log
 below; none was made silently.
 
+<!-- BEGIN sentinel-index (generated) -->
 | Record | Path | State |
 |---|---|---|
-| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — **all 7 disposed** (4 merged, 2 accepted, 1 deferred) |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all 12 accepted** |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | **second pass** — 13 stories, 13 pending |
+| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 2 accepted, 4 merged, 1 deferred |
+| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
+| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — 5 accepted, 8 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
+<!-- END sentinel-index (generated) -->
+
+<!-- Regenerate with: python3 scripts/regenerate-sentinel-index.py
+     Counts are parsed from each record's YAML frontmatter, never from prose.
+     Do not hand-edit the rows above; they are overwritten. -->
 
 **Both critical objections are resolved.** `O8` (G1 was not operationally defined
 against the instrument built to measure it) and `O12` (the default clipboard
@@ -1058,4 +1143,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-30 | **O9 accepted.** Every gate in §9 gains a **Rejects if** line, and every gate writes `docs/gates/phase-<n>.md` carrying its measurements, decision, and what the phase revealed that this PRD got wrong. Phase 4's gate also fixes observer conduct in advance so it measures the README rather than the tester. |
 | 2026-07-31 | **O6 amended; portability floor added.** Windows moves from a flat §3 non-goal to **post-v1 intent** — it still ships no code in v1 and gates nothing, but §7.3 now carries a four-item portability floor: name the threading model, resolve paths via `platformdirs`, abstract the `manu toggle` IPC transport, and give `HotkeyListener` a factory. Linux remains a plain non-goal. None of the four builds Windows support; all four are the difference between a port and a rewrite. |
 | 2026-07-31 | **Concurrency model named** (§6.3), closing choice-story #2 and floor item 1. The daemon is Half-Sync/Half-Async: tray on main, hotkey on the OS event tap, capture on the PortAudio callback, and one worker draining transcribe → post-process → inject. `end_session()` must not block the event-tap thread. Previously unspecified, which meant Phase 2b would have settled it by default. |
+| 2026-07-31 | **Choice-story #10 accepted.** `[history] enabled` renamed to **`retain`**. The key now states its own semantics, and §5.5's instruction to read it as retain-rather-than-use is deleted. Free to do before Phase 0; the gloss would otherwise have had to survive into the README, the tray, a settings UI and every validation message. |
+| 2026-07-31 | **Choice-story #12 accepted.** The pre-Phase-0 probe now writes `docs/gates/probe.md` — hardware, resolved model, measured time, verdict, and the floor caveat — before its code is deleted. It also gains the *Rejects if* line it was the only gate in §9 to lack. |
+| 2026-07-31 | **Choice-story #13 accepted.** §7 gains a **"Where a decision goes"** routing table splitting the six decision surfaces by granularity, with the collision rule *a gate record reports, an ADR decides, §7 governs*. §14's counts are now generated by `scripts/regenerate-sentinel-index.py` and checked in CI. The §7-versus-ADR mutability tension is recorded as standing, not claimed as resolved. |
+| 2026-07-31 | **Choice-story #8 accepted.** The hardware tier split is stated as **positioning** in §4 and required in the Phase 4 README, not left in §2's measurement note — §4's privacy-motivated and offline-constrained user correlates with unaccelerated hardware. The CPU tier gains **G1-CPU (provisional): p50 ≤ 2 000 ms**, derived from §4's own not-slower-than-typing bar, and a tier missing it is dropped rather than shipped. |
 | 2026-07-31 | **Slicing record disposed; §9 governs the build order.** Phase 2 splits into **2a** (injector, CLI-triggered — Accessibility) and **2b** (hotkey, controller, first full-path G1 — Input Monitoring); the two macOS permission surfaces were previously adjudicated as one. The §8 persist-before-inject write moves into 2a and the minimum recording indicator into 2b, rather than lagging the phases that make them binding. **Phase 5 is deferred indefinitely** — not cut. Slices: 4 merged, 2 accepted, 1 deferred. |

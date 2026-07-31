@@ -29,13 +29,17 @@ jobs:
             exit 0
           fi
 
-      # Add deterministic tool steps here as constraints are promoted.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: "Constraint: sentinel index is not stale"
+        run: python3 scripts/regenerate-sentinel-index.py --check
+
+      # Add further deterministic tool steps here as constraints are promoted.
       # The harness-engineering plugin generates these steps when you
       # run /harness-constrain and choose a deterministic tool.
-      #
-      # Example:
-      # - name: "Constraint: Consistent formatting"
-      #   run: npx prettier --check "src/**/*.ts"
 
       - name: Summary
         if: always()

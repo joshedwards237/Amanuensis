@@ -12,8 +12,8 @@ stories:
   - id: 2
     lens: [patterns, forces]
     title: Unstated threading model now argues against alternatives
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: name the concurrency model in Phase 0. §6.3 now specifies it — Half-Sync/Half-Async, with tray on main (a macOS status item requires it), HotkeyListener on the OS event tap, AudioCapture on the PortAudio callback thread, and one worker draining transcribe -> post-process -> inject. §6.2's ring buffer was already the queue. The consequences are written as requirements rather than left implicit: DictationController must not block the event-tap thread, end_session() hands off and returns rather than waiting, and nothing touching UI runs off main. This also removes the force the story identified as most corrosive — §7.1 was using the unstated model as an argument against pre-release inference, so a deferral had started doing work in another decision. It is no longer a deferral. Adopted as item 1 of §7.3's portability floor, because only one row of that table (which thread the tray needs) is macOS-specific, which is what keeps a Windows port a port rather than a redesign."
   - id: 3
     lens: [coherence, patterns]
     title: AppConfig deferred to a nonexistent review mode
@@ -42,8 +42,8 @@ stories:
   - id: 8
     lens: [forces, consequences]
     title: Tier-conditional G1 splits promise from differentiator
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: positioning AND a CPU threshold. Both halves of the story are adopted. (1) POSITIONING — §4 now states that hardware splits the primary user group and that this is a positioning fact rather than an implementation detail, naming the tension the story identified: privacy motivation and offline constraint correlate with older, cheaper machines, so the users the product exists for are disproportionately the ones on the slower tier. §9 Phase 4 requires the README to carry a per-tier latency table labelled by hardware, in the same place it makes the speed claim. (2) THRESHOLD — the CPU tier gains G1-CPU, provisional p50 <= 2000 ms, and a tier that misses it is dropped in §3 rather than shipped. This closes the gap the story named precisely: §10's 'unusable rather than merely slow' was undefined in exactly the way objection O9 rejected for gates, leaving the CPU tier's ship/drop call as the one criterion in the document without a reject condition. The number is DERIVED rather than invented, from §4's own bar that the tool must not be slower than typing: a 10-second utterance is roughly 25 words, ~37 seconds at 40 wpm, so 2 seconds sits comfortably inside while still reading as a tool. Labelled provisional like G2's 5%; Phase 1 confirms or moves it with a stated reason."
   - id: 9
     lens: [forces, alternatives]
     title: Phase 5's budget was computed, not chosen
@@ -52,8 +52,8 @@ stories:
   - id: 10
     lens: [patterns, coherence]
     title: A key documented to mean something else
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: rename to `retain`. The key now says what it does — `[history] retain = false` still writes the transcript before injection (§8, unconditional) and deletes it once injection succeeds. §5.5's instruction to read the key as retain-rather-than-use is deleted, because it is no longer needed. The story's argument is adopted as stated: the name is the interface, and the gloss would otherwise have had to survive translation into the README, the tray, any settings UI (§11.2) and every validation error message, each a fresh opportunity for the plain reading to win — and it is the kind of mismatch config validation structurally cannot catch, because nothing is invalid. Free to do now: Phase 0 has not started and no user has a config file. The continuity cost the story weighed on the other side is one day of drafts."
   - id: 11
     lens: [patterns, forces]
     title: Disclosure chosen over prevention, now twice
@@ -62,13 +62,13 @@ stories:
   - id: 12
     lens: [coherence, consequences]
     title: The probe deletes its own instrument
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: write docs/gates/probe.md, delete the code. The probe stays throwaway as objection O4 intends — the exemption from §6.4 and HARNESS.md is deliberate and stays — but its ANSWER is now recorded: date, hardware, the model that `auto` resolved to, the input file, measured transcribe time, verdict, and the standing caveat that the number skips capture, residency, post-processing and injection and is therefore a floor. The story's argument is exactly right and is the same argument that produced docs/gates/ in the first place: O9 required every gate to leave a record because numbers living only in a conversation cannot be regressed against, and this is the number with the least surrounding context to reconstruct — it commits the project to the entire Phase 0 scaffold and would have been unreproducible an hour later. The story also caught that the probe was the one gate in §9 with no Rejects-if line; it now has one, keyed to the new G1-CPU bar, on the reasoning that an accelerated run slower than the unaccelerated floor is a broken setup rather than a slow result."
   - id: 13
     lens: [coherence, patterns]
     title: Six decision surfaces and a stale index
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-07-31: write the routing rule AND generate §14. (1) ROUTING — §7 gains a 'Where a decision goes' table splitting the six surfaces by granularity: §7 for product-level decisions, docs/adr/ for implementation-level, docs/gates/ for measurements and gate calls, docs/superpowers/* for review artefacts and their dispositions. The collision rule is stated — a gate record reports, an ADR decides, §7 governs — and applied to Phase 1, the first live collision, where §7.2, 0001-engine-selection.md and docs/gates/phase-1.md all claim the engine decision. The story's deeper point is NOT claimed as resolved and is recorded as a standing tension: §7's amend-in-place convention and Nygard's immutable-and-superseded discipline cannot both govern one decision, and the split by granularity keeps them apart rather than reconciling them. A decision migrating from implementation-level to product-level still has no rule. (2) §14 — the hand-maintained table is replaced by scripts/regenerate-sentinel-index.py, which parses each record's YAML frontmatter with the four-space indentation rule so prose occurrences of a disposition token are never counted. Wired into .github/workflows/harness.yml with --check, making it the first genuine constraint step that skeleton workflow has carried."
 ---
 
 > **Second pass.** The first pass was drawn concurrently with the

@@ -694,7 +694,10 @@ Run /reservoir for an on-demand read, or /reservoir tune to edit this block.
 
 <!-- Auto-updated by /harness-audit — do not edit manually -->
 
-Last audit: never
-Constraints enforced: 1/3
-Garbage collection active: 0/2
-Drift detected: not yet audited
+Last audit: 2026-07-31
+Constraints enforced: 3/5 declared (1 deterministic, 2 agent, 2 unverified) — of
+  which 1 actually runs automatically (secrets, advisory Stop hook, non-blocking);
+  the 2 agent constraints have no PR trigger and have never gated a merge
+Garbage collection active: 4/14 (2 broken as declared, 8 have no target in this
+  pre-implementation repo)
+Drift detected: yes
