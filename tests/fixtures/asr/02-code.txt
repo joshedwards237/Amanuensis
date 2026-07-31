@@ -1,0 +1,1 @@
+Open the file at src slash amanuensis slash engines slash faster underscore whisper dot py and change the compute type from int eight to float sixteen. Then run pytest dash dash cov equals src and check that the coverage stays above eighty percent. If the CI job fails, look at the GitHub Actions log before you push again.

@@ -1,0 +1,1 @@
+I'm testing a local dictation tool and I want to see whether it can keep up with the way I actually talk. The whole point is that the audio never leaves this machine. No account, no network, nothing uploaded to a server somewhere. If it takes more than about four hundred milliseconds I'll notice, and I'll go back to typing.

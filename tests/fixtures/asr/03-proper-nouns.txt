@@ -1,0 +1,1 @@
+Amanuensis uses faster whisper and CTranslate2 under the hood, with Silero VAD running through ONNX Runtime. We benchmarked it against Moonshine and Parakeet on an M3 Max. Josh Edwards set this up in July. The alternatives we looked at were nerd dictation, Talon Voice, and Wispr Flow.
