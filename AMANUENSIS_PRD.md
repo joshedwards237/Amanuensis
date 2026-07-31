@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (pre-implementation)
 **Owner:** Josh Edwards
-**Status:** Draft — Phase 0 not started
+**Status:** Specification complete, measured. Phase 0 not started — see `HANDOFF.md`
 **License target:** Apache-2.0 (patent grant; safer than MIT for a project bundling third-party model weights)
 
 ---

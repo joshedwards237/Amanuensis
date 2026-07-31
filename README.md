@@ -11,14 +11,19 @@ No account. No network at runtime. No audio leaving the machine.
 
 **There is no code in this repository yet.** Phase 0 has not started.
 
-What exists is the specification and the harness around it:
+What exists is a specification that has been adversarially reviewed and, in the
+parts that matter, *measured* — the latency targets are not estimates any more.
+See [`docs/gates/probe.md`](docs/gates/probe.md) and
+[`HANDOFF.md`](HANDOFF.md).
 
 | | |
 |---|---|
 | [`AMANUENSIS_PRD.md`](AMANUENSIS_PRD.md) | The standing specification — what and why |
 | [`HARNESS.md`](HARNESS.md) | The operating contract — how work is allowed to proceed |
 | [`CLAUDE.md`](CLAUDE.md) | Project conventions for AI-assisted development |
-| [`docs/superpowers/`](docs/superpowers/) | Adversarial review records against the PRD |
+| [`docs/superpowers/`](docs/superpowers/) | Adversarial review records — 32/32 dispositions resolved |
+| [`docs/gates/`](docs/gates/) | Measurement records: the pre-Phase-0 probe and the Phase 5 feasibility test |
+| [`HANDOFF.md`](HANDOFF.md) | Current state, next steps, open risks |
 
 If you are looking for a dictation tool you can use today, this is not one yet.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
