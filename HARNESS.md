@@ -109,6 +109,33 @@
      deterministic tool or an agent-based review. Start with "unverified"
      for constraints you want to declare but haven't automated yet. -->
 
+### What actually enforces anything here (audited 2026-07-31)
+
+Read this before trusting the ratio in §Status. Of the constraints declared
+below, **exactly one gates a merge**: the sentinel-index check, which runs on
+`pull_request` and fails the job. The secrets check runs automatically but via
+an advisory Stop hook — it warns, it does not block. Both agent constraints
+pass on content today (32/32 dispositions resolved) but have **no PR trigger**
+and have never gated anything; every commit so far went straight to `main`.
+
+**There is also an undeclared enforcement layer**, which the audit found and
+which is worth naming because until the CI step landed it was the project's
+*only* automatic enforcement. The enabled `ai-literacy-habitat` plugin installs
+its own hooks independent of this file: a `PreToolUse` `Write|Edit` prompt hook
+that reads this file's commit-scoped constraints and warns on violations
+(LLM-judged, warn-only), a `PostToolUse` affordance recorder, nine `Stop` hooks
+(drift-check, snapshot-staleness-check, secrets-check, gc-rotate,
+curation-nudge, reflection-prompt, framework-change-prompt,
+governance-drift-check, reservoir-check), and a `SessionStart` template check.
+
+None of that is declared here and none of it blocks. It is advisory throughout.
+Recorded so that "what enforces this project" has one honest answer rather than
+two partial ones.
+
+`gc-rotate.sh` additionally rotates **two deterministic checks that appear
+nowhere in this file** — shell syntax and strict mode — alongside the two that
+do. Rotation is by day-of-year, so on any given day at most one runs.
+
 ### Consistent formatting
 
 - **Rule**: All source files must pass the project's configured formatter
@@ -265,7 +292,19 @@ Use /governance-constrain for guided authoring of governance constraints.
      that runs these rules, where ${CLAUDE_PLUGIN_ROOT} is NOT set. This
      is what lets a deterministic GC rule run identically whether the
      plugin is vendored in-repo or installed in the versioned marketplace
-     cache. Do not rewrite these back to script paths. -->
+     cache. Do not rewrite these back to script paths.
+
+     NOT TRUE IN THIS PROJECT (audited 2026-07-31). These bare commands do
+     not resolve here: archive-promoted-reflections, harness-affordance-check,
+     harness-affordance-staleness, harness-affordance-invocations,
+     reflection-log-bounded, update-badge. All report "command not found".
+     They ship with ai-literacy-superpowers, which is NOT in enabledPlugins
+     for this project — only ai-literacy-habitat is. They exist under
+     ~/.claude/plugins/cache/ai-literacy-superpowers/.../0.66.1/bin/ and work
+     by absolute path only. Any rule below whose Tool field is one of those
+     commands cannot run here as declared. Left unrewritten deliberately:
+     absolute paths would break for anyone cloning this repo, and "declared
+     but not runnable here" is the honest state. -->
 
 ### Documentation freshness
 
@@ -561,57 +600,31 @@ Run /governance-audit quarterly to keep governance constraints fresh.
      this value). This line is human-owned and survives /harness-upgrade. -->
 
 ### gh-cli
-<!-- affordance-example -->
 
 - **Mode**: cli
-- **Identity**: runtime-resolved
-- **Audit trail**: github-audit (org audit log, 90-day retention,
-  admin-only access) — assumes credentials resolve to a real GitHub
-  identity; if `$GITHUB_TOKEN` resolves to a service account the audit
-  trail will record that account, not the user
-- **Permission**: `Bash(gh *)` (allowlist in `.claude/settings.local.json`)
-- **Last reviewed**: 2026-04-26
-- **Notes**: `gh` resolves credentials in this order: `$GITHUB_TOKEN` →
-  keychain (`gh auth login`) → fail. Confirm which path is active before
-  relying on this entry.
+- **Identity**: runtime-resolved. Two accounts are authenticated on this
+  machine (`jedwardsche`, `joshedwards237`); `gh auth switch` selects which.
+  The repo at github.com/joshedwards237/Amanuensis was created under
+  `joshedwards237`. Confirm the active account before any write operation —
+  `gh api user --jq .login`.
+- **Audit trail**: github-audit (account-level). This is a personal public
+  repo, so there is no org audit log. Commits and pushes are attributable via
+  the git author and the GitHub events API; `gh` API calls are not separately
+  logged anywhere this project can read.
+- **Permission**: `Bash(gh repo *)`, `Bash(gh auth *)`, `Bash(gh api *)`
+  (allowlist in `.claude/settings.local.json`)
+- **Last reviewed**: 2026-07-31
+- **Notes**: credentials resolve `$GITHUB_TOKEN` → keychain → fail. This
+  affordance can make a repository public and can push to `main`; both are
+  outward-facing and effectively irreversible once indexed. Confirm intent
+  before either.
 
-### honeycomb-mcp
-<!-- affordance-example -->
-
-- **Mode**: central-mcp (api.honeycomb.io)
-- **Identity**: service-account (HONEYCOMB_API_KEY shared across team)
-- **Audit trail**: honeycomb-query-log (per-team, 30-day retention,
-  team-admin access)
-- **Permission**: `mcp__honeycomb__*` (allowlist in user
-  `~/.claude/settings.json`)
-- **Last reviewed**: 2026-04-26
-
-### shell-write-to-tmp
-<!-- affordance-example -->
-
-- **Mode**: cli
-- **Identity**: current-user (the human running the Claude Code session)
-- **Audit trail**: none
-- **Permission**: `Bash(echo *)` (allowlist)
-- **Last reviewed**: 2026-04-26
-- **Notes**: ephemeral session-local writes; if persistence is required,
-  promote to a tracked artefact
-
-### sync-to-global-cache-hook
-<!-- affordance-example -->
-
-- **Mode**: hook
-- **Trigger**: Stop
-- **Identity**: current-user
-- **Audit trail**: none (hook stderr, lost at session end)
-- **Permission**: `hooks.Stop` entry in `.claude/settings.local.json`
-  invoking `${CLAUDE_PLUGIN_ROOT}/scripts/sync-to-global-cache.sh`
-  (hooks resolve `${CLAUDE_PLUGIN_ROOT}`; GC-rule Tool fields do not —
-  see the note under Garbage Collection)
-- **Last reviewed**: 2026-04-26
-- **Notes**: invokes `rsync` under the current user after every session
-
----
+<!-- The four template-example affordances that shipped with this harness
+     (gh-cli as an example, honeycomb-mcp, shell-write-to-tmp,
+     sync-to-global-cache-hook) were removed 2026-07-31. Three described
+     tooling this project does not use. The 2026-07-31 audit found the
+     inventory held zero real affordances while `gh` was in active use under
+     three allowlist patterns with no entry at all. The entry above is real. -->
 
 ## Observability
 
@@ -720,6 +733,17 @@ Constraints enforced: 4/6 declared (2 deterministic, 2 agent, 2 unverified).
   The secrets check runs via an advisory Stop hook and is non-blocking. The 2
   agent constraints pass on content (32/32 dispositions resolved) but have no PR
   trigger and have never gated a merge.
-Garbage collection active: 4/14 (2 broken as declared, 8 have no target in this
-  pre-implementation repo)
-Drift detected: yes
+Garbage collection active: 4/14. Two are broken as declared (redirect sunset
+  names a script that does not exist; reflection-log archival names a bare
+  command that does not resolve — see the note under Garbage Collection). Eight
+  have no target in a repo with no source code yet.
+Drift detected: yes — 7 items found 2026-07-31, 4 fixed. Fixed: affordance
+  inventory was 100% template residue while `gh` ran ungoverned; the local
+  affordance recorder was declared gitignored and was tracked; the plugin bin/
+  PATH claim was false here; the undeclared 15-hook enforcement layer is now
+  named. Outstanding: the template-currency check compares this file's version
+  against the habitat plugin's rather than the superpowers template's, so it
+  fires a false upgrade nudge every session; `gc-rotate.sh` runs two checks
+  (shell syntax, strict mode) declared nowhere; the two broken GC rules above
+  are left declared-but-unrunnable rather than rewritten to absolute paths,
+  which would break for anyone cloning this repo.
