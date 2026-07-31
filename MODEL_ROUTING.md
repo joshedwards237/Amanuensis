@@ -34,6 +34,36 @@
      Balanced  — mid-tier, good reasoning, moderate cost
      Efficient — fastest/cheapest, suitable for templated or mechanical tasks -->
 
+### Tier vocabulary mapping (for cost estimation)
+
+The `cost-estimation` skill's tier→model→$/token binding table is keyed on
+`Most capable`, `Standard`, and the split `Standard / Capable`, and its
+`SKILL.md` asserts that `MODEL_ROUTING.md` "names exactly two tiers". This
+project names three, and none of the labels overlap — so without this block the
+binding table has **no join key** here and cost estimation silently omits a
+figure it could otherwise produce.
+
+| This project | cost-estimation binding table | Family stem |
+| --- | --- | --- |
+| Flagship | `Most capable` | `claude-opus-4`, `claude-opus-5` |
+| Balanced | `Standard` | `claude-sonnet-4`, `claude-sonnet-5` |
+| Efficient | *(no equivalent)* | — |
+
+Two limits, stated rather than papered over:
+
+- **`Efficient` has no counterpart.** The binding table admits no cheap tier, so
+  a stage routed `Efficient` (currently `integration-agent` and
+  `harness-discoverer`) cannot be priced from it. Price those at the `Standard`
+  rate and disclose the substitution, or omit them — do not invent a rate.
+- **The canonical family stems are generation-4.** This project runs Opus 5, so
+  a snapshot keyed `claude-opus-5` resolves only once that stem is added
+  upstream. Until then a snapshot may exist and still yield no usable rate — a
+  *signalled* miss, not a silent wrong number.
+
+There is no `implementer` row in the table above, though the orchestrator's
+step 3 dispatches implementers. Estimates record that stage as `unrouted`
+rather than assigning it a tier it does not have.
+
 <!-- CUSTOMISE: Replace the tier names with the actual model identifiers
      your team uses. Examples:
      Flagship  → claude-opus-4-5, gpt-4o, gemini-ultra

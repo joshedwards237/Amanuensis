@@ -1,0 +1,7 @@
+- **Date**: 2026-07-31
+- **Agent**: main session (disposition pass)
+- **Task**: Disposed 12 spec-mode objections as accepted over one working day, amending the PRD after each batch, then re-ran the choice-cartographer against the result.
+- **Surprise**: Resolving objections *generates* silent decisions at roughly the rate it resolves them. The cartographer's second pass retired two of its ten original stories and returned thirteen — seven of them mapping choices the amendments themselves had just made. Concretely: fixing G1's measurability (O1) turned it into a hardware-tier property, which is a user-base segmentation nobody decided; fixing the LLM budget conflict (O11) produced a Phase 5 budget that is G1 plus the ceiling, so its gate cannot fail by construction; and adding `docs/gates/` (O9) created a fifth decision-record surface while choice-story #10 was pointing out there were already four with no routing rule between them. The adjudication pass is not a net reduction in unmapped decisions unless something re-reads the result.
+- **Proposal**: Add to ARCH_DECISIONS or GOTCHAS — after a batch of accepted objections materially amends a spec, re-run the cartographer before treating the spec as settled. A single pass maps the document as written; it cannot map what the fixes introduce.
+- **Improvement**: Run the cartographer *after* diaboli dispositions, as the pipeline intends. Running them concurrently cost a full second pass, and the first-pass record could cite no objection IDs at all. The sequencing is not ceremony.
+- **Constraint**: none

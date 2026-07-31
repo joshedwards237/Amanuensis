@@ -29,11 +29,35 @@
      accumulate as the pipeline discovers them.
      Each entry: what the trap is, and how to avoid it. -->
 
-<!-- Example:
-- Do not call `db.Close()` in request handlers — the connection pool is
-  shared across the process lifetime. Closing it in a handler shuts down
-  all subsequent requests. This caused a production incident in March 2026.
--->
+- **Sentinel agents cannot find their own charter.** Every file in
+  `.claude/agents/` declares its skill as `ai-literacy-superpowers/skills/<name>/SKILL.md`
+  — a repo-relative path that resolves to nothing in an installed project. Pass the
+  absolute path (`~/.claude/plugins/cache/ai-literacy-habitat/ai-literacy-habitat/<version>/skills/<name>/SKILL.md`)
+  in the dispatch prompt. Without it the agent silently improvises a charter and
+  returns output that looks conformant. Found 2026-07-31 dispatching all four sentinels.
+
+- **`sentinel-integrity-check.sh` passes by checking nothing.** It globs
+  `*.agent.md`; installed agents are `*.md`. It exits 0 with
+  `sentinel integrity: OK (0 role-tagged agent(s) checked)`. Read the count, not the
+  word OK — `0` means the gate did not run. Upstream bug, present in all three copies
+  on this machine. Verify by hand until fixed.
+
+- **Sentinels have no write tools, and some go idle without delivering.** They return
+  record content as message text only. Two of four went quiet on first ask. The dispatch
+  prompt must say explicitly: paste the complete record as your message, do not
+  summarise it, do not reference a file path.
+
+- **Adjudicating objections creates new unmapped decisions.** Twelve accepted objections
+  amended the PRD heavily in one day; the cartographer's second pass returned 13 stories,
+  7 of them mapping choices the amendments had just introduced. Re-run the cartographer
+  after a batch of accepted objections — a single pass maps the document as written, not
+  what the fixes bring in.
+
+- **Check the command doc for output paths, not the agent's suggestion.** The
+  cost-estimator recommended `observability/costs/`; the canonical path in
+  `commands/cost-estimate.md` is `cost-estimates/<YYYY-MM-DD>-<slug>-estimate.md`.
+  Writing to the former would have let a prospective estimate be read back later as a
+  retrospective cost snapshot.
 
 ## ARCH_DECISIONS
 
