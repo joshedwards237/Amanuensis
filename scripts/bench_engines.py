@@ -15,13 +15,21 @@ This script produces that figure, and the latency figures beside it, so that
 
 What this is NOT
 ----------------
-This is **Phase 1 tooling, not product code**. Phase 0 has not started: there is
-no `src/` tree, no `pyproject.toml`, no ABCs. Nothing here is an implementation
-of `TranscriptionEngine` and nothing here should be imported by one. It is a
-standalone script in the same spirit as the probe — it exists to produce a
-number for a decision, and it does not pretend to be architecture. When Phase 1
-implements `FasterWhisperEngine` for real, this file does not become its
-ancestor; the ADR it produced does.
+This is **Phase 1 tooling, not product code**. Nothing here is an
+implementation of `TranscriptionEngine` and nothing under `src/` imports it. It
+exists to produce a number for a decision and does not pretend to be
+architecture; `FasterWhisperEngine` is not descended from this file, the ADR it
+produced is.
+
+Written before Phase 0 existed, and the preamble said so — "there is no `src/`
+tree, no `pyproject.toml`, no ABCs". All three now exist, and this script
+constructs `WhisperModel` directly anyway. That is deliberate and is the
+distinction from `scripts/measure_g1.py`: **this script compares engines and
+therefore sets its own parameters; that one measures the product and therefore
+sets none.** A benchmark that went through `FasterWhisperEngine` could only
+ever measure models `FasterWhisperEngine` already supports, which is the
+opposite of what an engine-selection ADR needs. The single exception is
+trimming — see `--trim` below.
 
 It also does not measure G1. G1 is `LatencyBreakdown.g1_ms` = transcribe +
 postprocess + inject (PRD §2, §6.3). This measures **transcription only**, which
@@ -67,12 +75,23 @@ Key decisions, and why
   cannot tell apart. The markdown block is caveat-fenced so it cannot be pasted
   into the ADR without the caveat coming with it.
 
+* **Moonshine is benchmarked here** (added 2026-07-31, Phase 1). PRD §7.2
+  requires it and §9 makes the comparison a gate deliverable. It arrives as the
+  `bench` optional dependency (`useful-moonshine-onnx`), deliberately not as a
+  runtime one — it pulls librosa, numba, scipy and scikit-learn behind it, and
+  a contributor running the test suite should not pay for a second ASR runtime.
+  Model names are prefixed `moonshine/`; everything else in the report is
+  unchanged, which is the point of having a report shape.
+
+* **Trimming is applied outside the timed region, identically to every engine**
+  (`--trim`). This is the one place the script reaches into `src/`, and it is
+  load-bearing: faster-whisper has a `vad_filter` flag and Moonshine has
+  nothing like it, so a comparison run with each engine's own trimming would
+  measure the trimmers. `--vad-filter` survives only to reproduce older
+  faster-whisper-only numbers and must not be combined with `--trim`.
+
 What it deliberately does not do
 --------------------------------
-* No `moonshine` backend. PRD §7.2 requires Moonshine be benchmarked against
-  `base.en` in Phase 1, but it is not installed in the probe venv and adding it
-  is a dependency decision, not a harness decision. Add a branch in `run_model()`
-  when it is; the report shape does not change.
 * No `beam_size` sweep. The probe's "should sweep it" is a real gap, exposed
   here as `--beam-size` rather than automated, because sweeping it multiplies
   the run time of an already long benchmark and belongs in a second pass.
@@ -108,7 +127,7 @@ import unicodedata
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 # --------------------------------------------------------------------------
 # Constants — every one of these is a PRD citation, not a preference.
@@ -133,7 +152,17 @@ G1_UTTERANCE_TOLERANCE = 3.0
 # PRD §7.2 candidates plus the probe's measured set. `distil-large-v3` is here
 # because it was §7.2's original Apple Silicon selection and the ADR should show
 # the row it is rejecting, not just assert it.
-DEFAULT_MODELS = ["tiny.en", "base.en", "distil-small.en", "small.en", "distil-large-v3"]
+DEFAULT_MODELS = [
+    "tiny.en",
+    "base.en",
+    "distil-small.en",
+    "small.en",
+    "distil-large-v3",
+    # PRD §7.2: "Benchmark it in Phase 1 against `base.en` — not `small.en`,
+    # which the probe showed is 2.2x over budget."
+    "moonshine/tiny",
+    "moonshine/base",
+]
 
 # PRD §7.2's table specifies int8 for every CPU row.
 COMPUTE_TYPE = "int8"
@@ -187,10 +216,14 @@ def resolve_cpu_threads() -> tuple[int, str]:
     report can say which branch it took rather than leaving the reader to guess
     whether the number is meaningful.
     """
+    # `physicalcpu`, not `logicalcpu`. §7.2 was amended to the former on
+    # 2026-07-31 (objection A8) and `config.resolve_cpu_threads` queries it; on
+    # Apple Silicon both return the same number, but a benchmark that asks a
+    # different question from the product is a benchmark of something else.
     if sys.platform == "darwin":
         try:
             out = subprocess.run(
-                ["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                ["sysctl", "-n", "hw.perflevel0.physicalcpu"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -198,7 +231,7 @@ def resolve_cpu_threads() -> tuple[int, str]:
             )
             value = int(out.stdout.strip())
             if value > 0:
-                return value, "hw.perflevel0.logicalcpu (performance cores)"
+                return value, "hw.perflevel0.physicalcpu (performance cores)"
         except (subprocess.SubprocessError, ValueError, OSError):
             # Intel Macs have no perflevel keys. Fall through rather than fail —
             # a benchmark that refuses to run on an older Mac is worse than one
@@ -546,10 +579,44 @@ class ModelResult:
 
     @property
     def counts(self) -> EditCounts:
+        """Pooled edit counts. `counts.wer` is the **micro**-average.
+
+        Kept because the Wilson interval needs errors and trials, and a
+        binomial interval over a mean of per-sample rates is not a thing. It is
+        not the headline figure — see `macro_wer`.
+        """
         total = EditCounts()
         for s in self.samples:
             total = total + s.counts
         return total
+
+    @property
+    def macro_wer(self) -> float:
+        """The unweighted mean of per-sample WERs. **This is the PRD's figure.**
+
+        PRD §7.2, amended 2026-07-31 under objection A3: "WER in this document
+        is macro-average... The 14.8% figure is withdrawn." That 14.8% was the
+        micro-average, and this script computed and printed exactly it for
+        another two months, because the amendment landed in the PRD and not
+        here. The two differ by about a third relative, and the open question
+        of whether post-processing compensates for weaker ASR is answered
+        differently depending on which is used.
+
+        Macro, because each sample is one dictation event and the product's
+        user experiences them one at a time; a word-weighted mean lets one long
+        sample dominate six.
+        """
+        if not self.samples:
+            return 0.0
+        return statistics.fmean(s.counts.wer for s in self.samples)
+
+    @property
+    def wer_spread(self) -> tuple[float, float]:
+        """Best and worst per-sample WER. A macro mean hides which sample."""
+        if not self.samples:
+            return (0.0, 0.0)
+        rates = [s.counts.wer for s in self.samples]
+        return (min(rates), max(rates))
 
     @property
     def p50_ms(self) -> float:
@@ -593,6 +660,106 @@ def load_audio(samples: Iterable[Sample]) -> dict[str, object]:
     return decoded
 
 
+def _whisper_transcriber(
+    model_name: str, *, cpu_threads: int, beam_size: int, vad_filter: bool
+) -> Any:
+    """A timed faster-whisper call.
+
+    `transcribe()` returns a generator; the work happens on iteration. The join
+    is inside the timer because that is where the decoding actually occurs — a
+    timer stopped before the generator is drained measures almost nothing.
+    """
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(
+        model_name,
+        device="cpu",
+        compute_type=COMPUTE_TYPE,
+        cpu_threads=cpu_threads,
+    )
+
+    def transcribe(data: object) -> tuple[str, float]:
+        start = time.perf_counter()
+        segments, _info = model.transcribe(
+            data,
+            language=LANGUAGE,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+        )
+        text = "".join(segment.text for segment in segments)
+        return text, (time.perf_counter() - start) * 1000.0
+
+    return transcribe
+
+
+def _moonshine_transcriber(model_name: str) -> Any:
+    """A timed Moonshine call.
+
+    Moonshine has no beam size, no thread control and no VAD flag — it is an
+    ONNX encoder/decoder with one knob, which is part of what makes it a
+    genuine alternative rather than a variant. `cpu_threads` therefore does not
+    apply to these rows and the report says so instead of printing the
+    faster-whisper value beside a number it did not affect.
+
+    Tokenisation is inside the timer because it is inside the product's
+    equivalent too: what the caller needs is text, and a benchmark that stopped
+    at token IDs would flatter whichever engine had the slower tokeniser.
+    """
+    from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+
+    model = MoonshineOnnxModel(model_name=model_name)
+    tokenizer = load_tokenizer()
+
+    def transcribe(data: object) -> tuple[str, float]:
+        import numpy as np
+
+        batched = np.asarray(data, dtype=np.float32)[None, ...]
+        start = time.perf_counter()
+        tokens = model.generate(batched)
+        text = tokenizer.decode_batch(tokens)[0]
+        return text, (time.perf_counter() - start) * 1000.0
+
+    return transcribe
+
+
+MOONSHINE_PREFIX = "moonshine/"
+
+
+def is_moonshine(model_name: str) -> bool:
+    return model_name.startswith(MOONSHINE_PREFIX)
+
+
+def trim_corpus(
+    samples: Sequence[Sample], audio: dict[str, object]
+) -> tuple[dict[str, object], list[str]]:
+    """Trim every sample once, with the product's detector, before any timing.
+
+    Outside the timed region and applied identically to every engine — see the
+    preamble. Returns the trimmed audio and the names of any samples where the
+    detector found no speech and the buffer passed through whole (guard 1 in
+    `amanuensis.audio.vad`), because a fallback that went unreported would look
+    like an engine having got slower on that sample.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from amanuensis.audio.vad import VoiceActivityDetector
+    from amanuensis.config import VadConfig
+
+    detector = VoiceActivityDetector(VadConfig())
+    detector.load()
+
+    trimmed: dict[str, object] = {}
+    fell_back: list[str] = []
+    for sample in samples:
+        import numpy as np
+
+        data = np.asarray(audio[sample.name], dtype=np.float32)
+        result = detector.trim(data, EXPECTED_SAMPLE_RATE)
+        trimmed[sample.name] = result.audio
+        if result.fell_back:
+            fell_back.append(sample.name)
+    return trimmed, fell_back
+
+
 def run_model(
     model_name: str,
     samples: Sequence[Sample],
@@ -605,42 +772,27 @@ def run_model(
     verbose: bool,
 ) -> ModelResult:
     """Benchmark one model across the whole corpus."""
-    from faster_whisper import WhisperModel
-
     result = ModelResult(model=model_name, cpu_threads=cpu_threads)
 
     try:
         if verbose:
-            print(f"  loading {model_name} (int8, cpu, cpu_threads={cpu_threads})...", flush=True)
-        model = WhisperModel(
-            model_name,
-            device="cpu",
-            compute_type=COMPUTE_TYPE,
-            cpu_threads=cpu_threads,
+            print(f"  loading {model_name} (cpu, cpu_threads={cpu_threads})...", flush=True)
+        transcribe = (
+            _moonshine_transcriber(model_name)
+            if is_moonshine(model_name)
+            else _whisper_transcriber(
+                model_name,
+                cpu_threads=cpu_threads,
+                beam_size=beam_size,
+                vad_filter=vad_filter,
+            )
         )
-    except Exception as exc:  # noqa: BLE001 — download and load failures are varied
+    except Exception as exc:  # download and load failures are varied
         # One unavailable model must not cost the whole run. A missing
         # `distil-large-v3` download should still leave `base.en` measured.
         result.error = f"{type(exc).__name__}: {exc}"
         print(f"  !! {model_name} unavailable — {result.error}", file=sys.stderr, flush=True)
         return result
-
-    def transcribe(data: object) -> tuple[str, float]:
-        """One timed transcription. Returns the text and the elapsed ms.
-
-        `transcribe()` returns a generator; the work happens on iteration. The
-        join is inside the timer because that is where the decoding actually
-        occurs.
-        """
-        start = time.perf_counter()
-        segments, _info = model.transcribe(
-            data,
-            language=LANGUAGE,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-        )
-        text = "".join(segment.text for segment in segments)
-        return text, (time.perf_counter() - start) * 1000.0
 
     for sample in samples:
         data = audio[sample.name]
@@ -874,17 +1026,25 @@ def print_console_report(
 
     print("Accuracy (WER) — RELATIVE COMPARISON ONLY, NOT A G2 MEASUREMENT")
     print()
-    print(f"  {'model':<20} {'WER':>8} {'95% CI':>16} {'sub':>6} {'del':>6} {'ins':>6}")
-    print("  " + "-" * 66)
+    print("  MACRO is the PRD's figure (§7.2, objection A3). The micro column is")
+    print("  shown only because the Wilson interval is computed from it; a 2026-07-31")
+    print("  amendment withdrew a micro figure that had been in circulation.")
+    print()
+    print(f"  {'model':<20} {'macro':>8} {'range':>16} {'micro':>8} "
+          f"{'95% CI':>16} {'sub':>5} {'del':>5} {'ins':>5}")
+    print("  " + "-" * 90)
     for result in results:
         if result.error:
             continue
         counts = result.counts
         interval = wilson_interval(counts.errors, counts.reference_words)
         ci = f"{interval[0] * 100:.1f}–{interval[1] * 100:.1f}%" if interval else "n/a"
+        low, high = result.wer_spread
         print(
-            f"  {result.model:<20} {counts.wer * 100:7.2f}% {ci:>16} "
-            f"{counts.substitutions:6d} {counts.deletions:6d} {counts.insertions:6d}"
+            f"  {result.model:<20} {result.macro_wer * 100:7.2f}% "
+            f"{f'{low * 100:.1f}–{high * 100:.1f}%':>16} "
+            f"{counts.wer * 100:7.2f}% {ci:>16} "
+            f"{counts.substitutions:5d} {counts.deletions:5d} {counts.insertions:5d}"
         )
     print()
     for line in corpus_caveats(samples, results):
@@ -1023,17 +1183,26 @@ def build_markdown(
     add("")
     add("\n>\n".join(f"> {caveat}" for caveat in corpus_caveats(samples, results)))
     add("")
-    add("| Model | WER | 95% CI | Substitutions | Deletions | Insertions |")
-    add("|---|---|---|---|---|---|")
+    add("> **The macro column is the PRD's figure** (§7.2, amended 2026-07-31 under "
+        "objection A3: \"WER in this document is macro-average... The 14.8% figure is "
+        "withdrawn\"). Micro is reported beside it only because the Wilson interval is "
+        "a binomial over pooled errors and cannot be computed from a mean of rates. "
+        "The two differ by roughly a third relative; do not quote the micro column.")
+    add("")
+    add("| Model | WER (macro) | Per-sample range | WER (micro) | 95% CI (micro) | "
+        "Substitutions | Deletions | Insertions |")
+    add("|---|---|---|---|---|---|---|---|")
     for result in results:
         if result.error:
-            add(f"| `{result.model}` | — | — | — | — | — |")
+            add(f"| `{result.model}` | — | — | — | — | — | — | — |")
             continue
         counts = result.counts
         interval = wilson_interval(counts.errors, counts.reference_words)
         ci = f"{interval[0] * 100:.1f}–{interval[1] * 100:.1f}%" if interval else "n/a"
+        low, high = result.wer_spread
         add(
-            f"| `{result.model}` | {counts.wer * 100:.2f}% | {ci} | "
+            f"| `{result.model}` | **{result.macro_wer * 100:.2f}%** | "
+            f"{low * 100:.1f}–{high * 100:.1f}% | {counts.wer * 100:.2f}% | {ci} | "
             f"{counts.substitutions} | {counts.deletions} | {counts.insertions} |"
         )
     add("")
@@ -1168,6 +1337,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--trim",
+        action="store_true",
+        help=(
+            "trim silence with the product's VoiceActivityDetector before timing, "
+            "identically for every engine. This is what the product does (PRD §7.4) "
+            "and the only fair way to compare an engine that has a VAD flag against "
+            "one that does not. Mutually exclusive with --vad-filter."
+        ),
+    )
+    parser.add_argument(
         "--sweep-threads",
         nargs="?",
         const="auto",
@@ -1265,11 +1444,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    if args.trim and args.vad_filter:
+        print(
+            "error: --trim and --vad-filter both remove silence, and combining "
+            "them would trim twice and attribute the cost to the engine.",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
         audio = load_audio(samples)
     except CorpusError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.trim:
+        audio, fell_back = trim_corpus(samples, audio)
+        if verbose:
+            print("trimmed every sample once with the product's VAD, outside the "
+                  "timed region", flush=True)
+        if fell_back:
+            print(f"  ⚠️  no speech detected in {', '.join(fell_back)} — passed "
+                  f"through whole (guard 1)", flush=True)
 
     if verbose:
         print(f"benchmarking {len(models)} models over {len(samples)} samples, "
