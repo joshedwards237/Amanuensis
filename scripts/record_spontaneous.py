@@ -94,6 +94,28 @@ class Take:
     why: str
 
 
+#: Ten seconds of the room with nobody talking. Recorded first, because it is
+#: the only thing here that cannot be reconstructed later.
+#:
+#: It answers "clean or noisy?" properly rather than by choosing one. Every take
+#: is recorded clean, and noise is *mixed in afterwards* at known SNRs using
+#: this file — which is strictly better than recording noisy, and not close. A
+#: noisy recording gives one utterance at one uncontrolled SNR, whatever the
+#: room happened to be doing that afternoon. Mixing gives the same utterance at
+#: 20, 15, 10 and 5 dB, so SNR becomes a variable rather than a property. That
+#: is unrecoverable from a noisy take, and free from a clean one plus this.
+#:
+#: It also characterises the floor the trimming measurement rests on. Silero
+#: distinguishing speech from digital zeros is trivial and predicts nothing;
+#: distinguishing it from *this* is the actual task.
+ROOM_TONE = Take(
+    "00-room-tone",
+    10,
+    "Say nothing. Sit still. Let the room be however it normally is when you "
+    "dictate — do not turn anything off for this.",
+    "the noise floor, so noise can be added later at known SNRs",
+)
+
 #: The prompts are the whole design. A prompt you can prepare an answer to
 #: produces fluent speech, which is precisely the corpus that already exists and
 #: cannot answer the question. Every one of these requires thinking *during* the
@@ -217,7 +239,10 @@ class Verdict:
 
 
 def inspect_take(
-    audio: NDArray[np.float32], sample_rate: int, speak_seconds: float
+    audio: NDArray[np.float32],
+    sample_rate: int,
+    speak_seconds: float,
+    is_room_tone: bool = False,
 ) -> Verdict:
     """Check the take before it is written, against what the take is for.
 
@@ -237,6 +262,15 @@ def inspect_take(
     peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
 
     problems: list[str] = []
+    if is_room_tone:
+        # The one take where silence is the signal. Every check below asks
+        # "did you speak loudly enough", which is exactly backwards here.
+        if speech_rms > 0.05:
+            problems.append(
+                f"that is not room tone (RMS {speech_rms:.4f}) — something was "
+                f"making noise, or you spoke"
+            )
+        return Verdict(not problems, problems, speech_rms, silence_rms, peak)
     if speech_rms < 1e-4:
         problems.append("no speech detected at all — was the right mic selected?")
     elif silence_rms > 0 and speech_rms / silence_rms < MIN_SPEECH_TO_SILENCE_RATIO:
@@ -292,8 +326,11 @@ def record_take(take: Take, capture: object, sample_rate: int) -> NDArray[np.flo
     try:
         countdown("SILENCE — say nothing ", LEAD_SILENCE_S)
         print()
-        print("  >>> SPEAK NOW <<<")
-        countdown("speaking             ", take.speak_seconds)
+        if take.slug == ROOM_TONE.slug:
+            countdown("ROOM TONE — stay silent", take.speak_seconds)
+        else:
+            print("  >>> SPEAK NOW <<<")
+            countdown("speaking             ", take.speak_seconds)
         print()
         print("  >>> STOP — go quiet, do not move <<<")
         countdown("SILENCE — say nothing ", TAIL_SILENCE_S)
@@ -345,7 +382,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    selected = TAKES if not args.take else [TAKES[n - 1] for n in args.take]
+    selected = list(TAKES) if not args.take else [TAKES[n - 1] for n in args.take]
+    # Room tone first, always, unless a specific take is being redone. It is
+    # the reference every later noise experiment is built from.
+    if not args.take and not (args.out / f"{ROOM_TONE.slug}.wav").exists():
+        selected.insert(0, ROOM_TONE)
     speaking = sum(t.speak_seconds for t in selected)
     overhead = len(selected) * (LEAD_SILENCE_S + TAIL_SILENCE_S)
 
@@ -368,7 +409,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("-" * 70)
             print(f"TAKE {index}/{len(selected)} — {take.slug}")
             audio = record_take(take, capture, audio_config.sample_rate)
-            verdict = inspect_take(audio, audio_config.sample_rate, take.speak_seconds)
+            verdict = inspect_take(
+                audio,
+                audio_config.sample_rate,
+                take.speak_seconds,
+                is_room_tone=take.slug == ROOM_TONE.slug,
+            )
 
             print()
             print(f"  {len(audio) / audio_config.sample_rate:.1f}s   "
