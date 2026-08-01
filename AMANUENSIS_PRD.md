@@ -118,16 +118,39 @@ Two further scoping decisions, resolved the same day:
    be dropped in §3, and *unusable* was undefined in exactly the way objection
    O9 rejected for gates. So:
 
-   > **G1-CPU (provisional): p50 ≤ 2 000 ms**, same measurement basis as G1.
-   > A Tier B machine class that misses this is dropped in §3 rather than shipped.
+   > **G1-CPU (provisional): p50 ≤ 2 000 ms, p95 ≤ 4 000 ms**, same measurement
+   > basis as G1. A Tier B machine class that misses either is dropped in §3
+   > rather than shipped.
 
-   The derivation, since the number should not be a guess: §4's own bar is that
-   the tool must not be "slower than typing." A 10-second utterance is roughly
-   25 words; at 40 wpm that is ~37 seconds to type. Two seconds is comfortably
-   inside that while still reading as a tool rather than a batch job. Like G2's
-   5%, this is **provisional** — Phase 1 confirms or moves it with a stated
-   reason in `docs/gates/phase-1.md`. It is a floor for shipping the tier at
-   all, not a claim that 2 000 ms feels good.
+   **This is a judgement, not a derivation** (relabelled 2026-07-31, objection
+   A5). The paragraph here previously opened "the derivation, since the number
+   should not be a guess" and then reasoned: a 10-second utterance is roughly
+   25 words, at 40 wpm that is ~37 seconds to type, and two seconds is
+   comfortably inside that. The arithmetic is correct and it does not produce
+   2 000 ms. The user has already spent the ten seconds speaking, so a strict
+   throughput reading compares 10 s + latency against ~37 s and licenses
+   anything under about 27 seconds — which nobody would ship. The clause
+   actually carrying the decision was "while still reading as a tool rather than
+   a batch job," and that is a judgement about felt responsiveness.
+
+   So it is stated as one. The typing comparison establishes that two seconds is
+   **not slow**; it does not establish two seconds. Like G2's 5%, this is
+   **provisional** — Phase 1 confirms or moves it with a stated reason in
+   `docs/gates/phase-1.md`. It is a floor for shipping the tier at all, not a
+   claim that 2 000 ms feels good.
+
+   §2's own G2 note two paragraphs above says a number presented as derived when
+   it was inherited is worse than one labelled a guess. This was the newer of the
+   two and was making that exact mistake.
+
+   **The p95 is added because a p50-only bar cannot fail on this project's
+   documented failure mode.** Tier B runs a smaller model on slower hardware,
+   which is where a decoder repetition-looping excursion is most likely and most
+   costly — the same class of event that took a 541 ms case to 6,039 ms on
+   identical input. A threshold that decides whether a whole machine class ships,
+   stated only at the median, is the shape of the finding that a p50 from one
+   clean sample said GO while the p95 said the opposite. 4 000 ms is 2× the p50
+   bar, matching G1's own p50:p95 ratio; it is provisional on the same terms.
 
 5. **G1 assumes post-processing is off** (objection O11). The budgets above are
    measured with `chain = ["rules"]`, the default. The optional LLM pass adds
@@ -196,7 +219,8 @@ or offline-constrained, and are comfortable with a config file. They will not to
 tool that is slower than typing.
 
 **Hardware splits this group, and the split is a positioning fact rather than an
-implementation detail** (2026-07-31, choice-story #8). G1's budgets bind on accelerated
+implementation detail** (2026-07-31, choice-story #8; tier vocabulary corrected
+2026-07-31, objection A9). G1's budgets bind on Tier A
 machines (Tier A, §7.2) and Tier B ships against the separate, looser G1-CPU bar in §2. Note the tension that creates: privacy motivation and offline
 constraint correlate with older and cheaper machines, so the users the product exists
 *for* are disproportionately the ones who get the slower tier. The README states both
@@ -235,8 +259,10 @@ Config-selectable, one active at a time:
 
 ### 5.3 Configuration
 
-Single TOML file at the platform config directory (`platformdirs`; `~/.config/amanuensis/config.toml`
-on macOS — see §7.3's portability floor). Every behavioral decision in this PRD that could
+Single TOML file at the platform config directory, resolved through `platformdirs`
+(`~/Library/Application Support/amanuensis/config.toml` on macOS — see §7.3's
+portability floor). `$AMANUENSIS_CONFIG_DIR` overrides it; that is the one setting
+that cannot live in the config file, because it is what finds the config file. Every behavioral decision in this PRD that could
 reasonably go either way is a config key with a sane default. No behavior is hardcoded that
 a user might want to change.
 
@@ -315,7 +341,9 @@ is ambiguous about recording state is a privacy problem regardless of where the 
 
 ### 5.5 History
 
-Local SQLite at `~/.local/share/amanuensis/history.db`. Stores timestamp, transcript,
+Local SQLite at the platform data directory, resolved through `platformdirs`
+(`~/Library/Application Support/amanuensis/history.db` on macOS), overridable with
+`$AMANUENSIS_DATA_DIR`. Stores timestamp, transcript,
 duration, engine, and latency breakdown. Audio is **not** stored unless explicitly enabled.
 `manu history --purge` wipes it.
 
@@ -355,6 +383,41 @@ work — and easier to get subtly wrong — than not writing it to the shared fi
 first place. A component chosen silently for retention convenience should not become
 load-bearing for a privacy promise.
 
+**What this does and does not buy** (2026-07-31, objection A7). `unlink()` drops a
+directory entry and releases blocks for reuse. On a journalling copy-on-write
+filesystem that is the *same* property as `DELETE`, one layer down — so the honest
+statement is not "the bytes are gone":
+
+> **Amanuensis does not claim secure erasure of the pre-injection transcript.**
+> `retain = false` means no transcript is retained in any file Amanuensis keeps
+> open or reads back. It does not mean the bytes have been overwritten on disk.
+> Full-disk encryption is the mechanism that makes residue unreadable, and it is
+> the operating system's job, not this application's.
+
+What the temp file genuinely buys is narrower and still worth having: a long-lived
+shared database stops being load-bearing for a privacy promise. That was the
+correct half of the original change. Presenting it as though the erasure claim had
+been *repaired* — rather than moved down a layer and left standing — was not.
+
+Three gaps follow from the mechanism and are closed here:
+
+1. **The path is resolved through `platformdirs`**, in a dedicated
+   `pending/` directory under the data dir — not an unnamed system temp location.
+   §7.3's portability floor item 2 applies to every path this product writes, and
+   a file nothing can name is a file nothing can purge.
+2. **Orphans are swept at daemon start.** The file is unlinked once injection
+   *succeeds*; injection failing is the case the whole ordering exists for, and
+   §7.3 documents it failing in Electron and Java apps. Every failed injection and
+   every crash between write and unlink leaves a plaintext transcript behind, and
+   the user who set `retain = false` is the one accumulating them.
+3. **`manu history` surfaces pending transcripts and `--purge` covers them.**
+   §8 promises the user can recover their words when injection fails. With
+   `retain = true` that promise is discharged by `manu history`. Without this, the
+   `retain = false` artefact was a file the user was never told about and no
+   command surfaced — the guarantee mechanically preserved and practically
+   unreachable, landing hardest on §4's secondary user, for whom "a dropped
+   transcription is not a minor annoyance."
+
 **The write is scoped to sessions that reach injection** (choice-story #7). §8's
 guarantee protects words the user has committed to. A session aborted before injection
 — `abort_session()`, an empty transcript, a mic disconnect mid-capture — has no such
@@ -368,7 +431,8 @@ on.
 Users have proper nouns the model will never get right. Two mechanisms:
 
 1. `initial_prompt` passed to the ASR engine — cheap, works today, limited length.
-2. A post-processing replacement map (`~/.config/amanuensis/vocabulary.toml`) applying
+2. A post-processing replacement map (`vocabulary.toml`, beside `config.toml` in the
+   `platformdirs` config directory) applying
    case-insensitive whole-word substitutions.
 
 Both. They fail in different places.
@@ -429,9 +493,13 @@ class DictationSession:
     final_text: str | None = None
     timings: LatencyBreakdown = field(default_factory=LatencyBreakdown)
     error: str | None = None
+    #: Set by the worker, last, after every field above is written. See the
+    #: concurrency model below — this is the only synchronisation point.
+    completed: threading.Event = field(default_factory=threading.Event)
 
     def duration_seconds(self) -> float: ...
     def to_history_row(self) -> dict: ...
+    def wait(self, timeout: float | None = None) -> bool: ...
 ```
 
 ```python
@@ -589,13 +657,51 @@ synchronous service layer, an asynchronous I/O layer, and a queue between them. 
 | `AudioCapture` | PortAudio callback thread, writing the ring buffer |
 | Transcription, post-processing, injection | one worker thread, draining sessions |
 
+**Two queues, not one** (corrected 2026-07-31, objection A6). An earlier revision
+said "§6.2's `AudioCapture` ring buffer is already that queue." It is not the same
+queue. There are two, with different producers, different element types and
+different backpressure behaviour:
+
+| Queue | Producer | Consumer | Holds |
+|---|---|---|---|
+| Audio ring buffer | PortAudio callback thread | `AudioCapture` | float32 frames |
+| Session queue | event-tap thread, via `end_session()` | the worker | `DictationSession` |
+
 Consequences that follow, and are therefore requirements rather than choices:
 
 - `DictationController`'s methods are called from the event-tap thread and **must not
   block it**. `end_session()` hands the buffer to the worker and returns; it does not
   wait for transcription. The `-> DictationSession` return in the contract above is the
-  session object, populated asynchronously — callers observe completion through the
-  session, not by the call returning.
+  session object, populated asynchronously.
+
+- **Completion is signalled, not polled** (2026-07-31, objection A6). "Callers observe
+  completion through the session" previously described an interface that did not
+  exist: `DictationSession` had no flag, no event, and no lock, so the only available
+  reading was polling a mutable dataclass across a thread boundary — the thing
+  Half-Sync/Half-Async is chosen to avoid. The session carries a `threading.Event`:
+
+  ```python
+  session.completed: threading.Event   # set by the worker, last
+  session.wait(timeout: float | None = None) -> bool
+  ```
+
+  The worker populates every field *before* setting the event, so any thread that
+  observes it set sees a fully written session. That ordering is the synchronisation
+  rule; nothing else guards the fields, and nothing else needs to.
+
+- **Injection targets the focus at inject time, and that is a hazard the async
+  handoff creates** (2026-07-31, objection A6). Because `end_session()` no longer
+  blocks, sessions can overlap: a user who dictates twice quickly — or is in
+  `vad_auto`, which §5.2 calls the mode most likely to misfire — can have session N's
+  text land in whatever window has focus when the worker gets to it. §8's
+  persist-before-inject guarantee saves the words; it does not stop them landing in
+  the wrong application.
+
+  **v1 resolution: the worker is serial and a session whose focused application
+  changed between capture and injection is not injected.** It is written to history,
+  and the tray reports it. Re-targeting the original window is the alternative and is
+  rejected for v1 — it requires raising and focusing another app on the user's behalf,
+  which is a larger intrusion than declining to type.
 - `TranscriptionEngine.load()` is documented "Blocking" and runs on the worker at
   startup. `is_loaded` exists so the tray can show *transcribing* versus *not ready*.
 - Nothing touching the UI is called off the main thread.
@@ -690,6 +796,14 @@ sit awkwardly across both, and there is no rule for that yet.
 
 ### 7.0 Python, and what it costs
 
+**The floor is 3.12, raised from 3.11 at the Phase 0 gate (2026-07-31).** Not a
+preference: the installed numpy's type stubs use PEP 695 `type` statements, which mypy
+only parses under a 3.12+ target. Under `python_version = "3.11"` the Phase 0 gate
+condition `mypy --strict src/` fails on numpy's own stubs before reaching a line of this
+project's code — a *named gate condition* rendered unsatisfiable for reasons unrelated
+to the code being gated. 3.11 also buys nothing here: `tomllib` is 3.11+, and 3.12 is
+the oldest release still receiving security fixes for the lifetime of a v1.
+
 Recorded 2026-07-31 (choice-story #1). §8 states "Python 3.11+" as a table row between
 two performance targets, and until now it was the only technical decision in this
 document with no argument attached — while §7 recorded rejected alternatives for
@@ -772,17 +886,54 @@ rows described two real paths, one of which has **zero v1 users**.
 A tier is therefore defined by **what a machine measures**, not by what chip it
 contains:
 
-> **Tier A** — the selected model transcribes a 10-second utterance inside G1's
-> budget on this machine. **G1 binds and is gated.**
+> **Tier A** — the install check measures **p50 ≤ 350 ms and p95 ≤ 700 ms** for
+> transcription alone. **G1 binds and is published as a guarantee.**
 >
 > **Tier B** — it does not. **G1-CPU applies** (§2): the number is measured,
 > published, and told to the user at install; it does not halt the project.
 
-The tier is decided **once, at install**, by running the same measurement the
-pre-Phase-0 probe ran, and recorded. It is not re-derived per session — a machine
-that is momentarily busy must not flip tiers, and a machine near the boundary
-must not oscillate. `manu status` reports the recorded tier; re-running the
-install check is how it changes.
+**The thresholds are absolute, not a restatement of G1** (revised 2026-07-31,
+objection A1). The previous wording defined Tier A as "transcribes inside G1's
+budget on this machine", which made §9's Phase 1 gate — *rejects if G1 is missed
+on a Tier A machine* — unreachable: a machine cannot be both inside the budget by
+definition and miss it, and a Tier B miss explicitly does not reject. §10's top
+risk had a mitigation with no failing state, and the project's real go/no-go had
+silently migrated to Phase 2b, which measures the full path and therefore *can*
+fail.
+
+The 350/700 figures are the transcribe **share** of G1's 400/800, leaving ~50 ms
+p50 for post-processing and injection. That residual is thin and known to be
+thin — it is what the probe measured (`docs/gates/probe.md`) — and Phase 1
+confirms or moves it against real capture. A tier check compared against the full
+`g1_ms` budget would classify a machine measuring 380 ms as Tier A and then ship
+it a gated promise it misses in normal operation; the bias would run consistently
+toward the tier that carries the guarantee.
+
+**The install check is specified, not referred to** (2026-07-31, objection A4).
+It previously said only "the same measurement the pre-Phase-0 probe ran" — a
+deleted throwaway script, warmed, median of five, one clip, no VAD, transcription
+only. Six things were undetermined and each moved the tier boundary. It runs:
+
+| | |
+|---|---|
+| Audio | A bundled 10-second reference clip, shipped with the app. Not the user's voice — the check must be reproducible and must not require a microphone permission before first use. |
+| VAD | **On**, matching runtime. Without it no candidate model passes p95 at all (§7.4). A check run in a configuration the product does not use measures nothing. |
+| Warm-up | One throwaway inference first, discarded. The check measures steady state, not compile cost. |
+| Runs | **Nine**, reporting p50 and p95. A single warmed median cannot see a repetition-looping excursion, and that excursion — 541 ms → 6,039 ms on the same model and sample — is this product's documented failure mode. |
+| Model | The `model = "auto"` selection below, already resolved. |
+| Compared against | The transcribe-share thresholds above, **not** `g1_ms`. |
+
+Model download is **not** part of the timed check. It is a one-time install cost
+(185 s measured on this machine's connection) and timing it would measure the
+network.
+
+The tier is decided **once, at install**, and recorded. It is not re-derived per
+session — a machine that is momentarily busy must not flip tiers, and a machine
+near the boundary must not oscillate. `manu status` reports the recorded tier;
+re-running the install check is how it changes.
+
+The tier is a **recorded fact about a machine**, not a gate condition. Nothing in
+§9 rejects on it.
 
 This supersedes the accelerated-versus-CPU-only split from objection O1. **O1's
 reasoning survives unchanged** — a slow machine gets an honest published number
@@ -801,19 +952,42 @@ and are labelled so.
 |---|---|---|---|
 | CUDA, ≥8 GB VRAM | `large-v3-turbo`, float16 | — | estimate, **unmeasured** |
 | CUDA, <8 GB VRAM | `distil-large-v3`, int8_float16 | — | estimate, **unmeasured** |
-| Apple Silicon / CPU | `base.en`, int8 | **352 ms** | *measured*, M3 Max, n=1 |
-| Slower CPU | `tiny.en`, int8 | **190 ms** | *measured*, M3 Max, n=1 |
+| macOS (all Macs) | **`tiny.en`, int8, VAD on** | **328 ms p50 / 420 ms p95** | *measured*, M3 Max, 6-sample corpus |
 
-`distil-large-v3` — the previous Apple Silicon selection — measured **2,412 ms**,
-six times over budget on an M3 Max. That row was a model-card guess and it was
-wrong by roughly 7×.
+**`tiny.en` replaced `base.en` on 2026-07-31 (objection A3), and VAD is part of
+the selection, not a separate setting.** The `base.en` row carried a measured
+352 ms — but measured *without VAD*, on one clip. Re-measured over the six-sample
+corpus with VAD, `base.en` is 541 ms p50, and without VAD it reaches 6,039 ms.
+`tiny.en` + VAD is the only candidate meeting both halves of G1. The row was
+also self-contradictory with §8, whose cold-start figure already assumed
+`tiny.en`.
 
-**This table is provisional and selects on latency alone.** `base.en` was not
-detectably worse than `distil-large-v3` on the probe sample, but that is **one
-speaker, one room, one microphone, one paragraph**. Accuracy has no measurement
-yet (objection O7). **Do not finalise the model choice until the Phase 1 corpus
-exists** — doing so would repeat, on the accuracy axis, exactly the mistake this
-revision is correcting on the latency axis.
+The two macOS rows are collapsed into one. §7.2 established above that "Apple
+Silicon" and "CPU only" are the same execution path, which left "Apple Silicon /
+CPU" versus "Slower CPU" as an undefined boundary the install check would have
+had to resolve before it could pick a model to time. The install check decides
+the *tier*; the table decides the *model*, and on macOS there is one.
+
+`distil-large-v3` — the original Apple Silicon selection — measured **2,412 ms**,
+six times over budget. That row was a model-card guess and it was wrong by
+roughly 7×.
+
+**This table still selects on latency alone, and `tiny.en` has the worst accuracy
+of the candidates.** All five candidates are statistically indistinguishable on a
+six-sample corpus — every Wilson interval overlaps — so there is no evidence-based
+model selection yet, only an evidence-based *elimination* of everything that
+misses G1. **Do not finalise the model choice until the Phase 1 corpus exists**
+(objection O7). Doing so would repeat, on the accuracy axis, exactly the mistake
+this revision is correcting on the latency axis — twice over now.
+
+**WER in this document is macro-average** — the unweighted mean of per-sample
+rates (2026-07-31, objection A3). The frozen fixture's mean is **19.62%**. A
+micro-average figure of 14.8% was also in circulation; the two differ by a third
+relative, and the open question of whether cleanup compensates for weaker ASR is
+answered differently depending on which is used. **The 14.8% figure is
+withdrawn.** Macro is chosen because each sample is one dictation event and the
+product's user experiences them one at a time; a word-weighted mean lets one long
+sample dominate six.
 
 #### `cpu_threads` is load-bearing and was never specified
 
@@ -827,11 +1001,33 @@ project's top risk (§10) would have fired on a library default rather than on
 physics.
 
 `cpu_threads = "auto"` resolves to the **performance-core count**, not the total
-core count and not the library default. On macOS that is
-`sysctl -n hw.perflevel0.logicalcpu`; elsewhere, physical cores. Efficiency cores
-are deliberately excluded — scheduling inference across heterogeneous cores
-typically costs more than it returns. The value was not tuned beyond "match the
-performance cores" and is not claimed optimal; Phase 1 should sweep it.
+core count and emphatically not the library default. Efficiency cores are
+deliberately excluded — scheduling inference across heterogeneous cores typically
+costs more than it returns.
+
+**Resolution branches on whether the facility exists, not on which OS is running**
+(2026-07-31, objection A8):
+
+1. Query `hw.perflevel0.physicalcpu`. If it resolves, use it, clamped to the total
+   core count.
+2. If it does not — an Intel Mac has no `perflevel` keys, and a sandbox may refuse
+   the call — fall back to **the total core count**.
+
+The earlier wording branched on platform ("on macOS that is `sysctl ...`;
+elsewhere, physical cores"), and §3 makes macOS the only v1 platform, so
+"elsewhere" covered no shipping configuration. A homogeneous Mac has no
+`perflevel0` to query and therefore fell into the branch that did not apply — with
+the most likely implementation outcome being CTranslate2's default of **4**, the
+exact value whose first probe run returned NO-GO. A defaulting rule whose
+undefined case lands on the known-bad value is worth the sentence that closes it.
+
+**The exclusion rule is generalised from n=1 and is labelled so.** It was measured
+once, on a 10P/4E machine where discarding the efficiency cores costs 29% of the
+core count. On a 4P/4E machine it discards half, and per §4 that machine is
+disproportionately a Tier B user's. The value was not tuned beyond "match the
+performance cores" and is not claimed optimal; **Phase 1 sweeps it**, and the sweep
+covers at least one non-10P topology or the rule stays n=1 with a wider blast
+radius.
 
 Note `device = "mps"` was removed from §5.3's options. CTranslate2 has no Metal
 backend, so it was never a reachable value.
@@ -919,8 +1115,11 @@ each is cheap now and expensive after Phase 2b:
    A model that is never written down gets re-derived rather than ported, and it would
    be re-derived for the one class §6.3 says owns the loop. This is the item that would
    actually corner the project.
-2. **No hardcoded XDG paths.** §5.3 and §5.5 name `~/.config/amanuensis/` and
-   `~/.local/share/amanuensis/` as the macOS locations. Resolve them through
+2. **No hardcoded XDG paths.** §5.3 and §5.5 originally named `~/.config/amanuensis/`
+   and `~/.local/share/amanuensis/` as the *macOS* locations, which is where `platformdirs`
+   puts them on Unix and not on macOS — this section stated the rule and then wrote down
+   the paths the rule forbids. Corrected 2026-07-31 at the Phase 0 gate. Resolve them
+   through
    `platformdirs` from Phase 0. Changing this after users have config files on disk is
    a migration, not an edit.
 3. **The IPC transport is abstracted** (§6.1). `manu toggle` uses a unix socket on
@@ -974,7 +1173,7 @@ above is right; the numbers as originally written did not implement it.
   ceiling is ~700 ms. Pretending otherwise made G1 unsatisfiable exactly when the
   feature was on.
 - **Phase 5 carries its own budget:** **p50 ≤ 700 ms, p95 ≤ 1100 ms** with the pass
-  enabled, on the same accelerated-hardware and measurement basis as G1. The
+  enabled, on the same Tier A and measurement basis as G1. The
   README states both numbers; the user choosing to enable this is choosing the
   second one.
 - **`max_latency_ms` is a cancellation deadline, not a predictive check.** You
@@ -998,13 +1197,22 @@ Both statements are in this section and they contradict. The gate also cannot fa
 budget by construction: base-plus-ceiling *is* the worst case, so any run respecting the
 deadline is inside it.
 
-This is not resolved now because Phase 5 is deferred (§9) and nobody is building against
-it, and because the evidence to decide — a real Phase 3 edit rate showing what rules
-could not fix — does not exist yet. **Whoever revives Phase 5 sets the budget from
-tolerance first and derives `max_latency_ms` from it, not the reverse.** If §7.5's own
-900 ms line is taken as binding, the implied ceiling is nearer 100–200 ms, and the
-honest conclusion may be that the pass does not fit. That is worth knowing before
-building it rather than after.
+This is not resolved now because the evidence to decide — a real Phase 3 edit rate
+showing what rules could not fix — does not exist yet. **Whoever revives Phase 5 sets
+the budget from tolerance first and derives `max_latency_ms` from it, not the reverse.**
+If §7.5's own 900 ms line is taken as binding, the implied ceiling is nearer 100–200 ms,
+and the honest conclusion may be that the pass does not fit. That is worth knowing
+before building it rather than after.
+
+**Amended 2026-07-31 (objection A2).** This paragraph previously read "This is not
+resolved now because Phase 5 is deferred (§9) and nobody is building against it." Both
+clauses were false when written: §9 had un-deferred the phase the same day, and four
+experiments were being run against exactly this budget. Phase 5's real state is
+**unresolved and corpus-blocked** (§9), and the 700 ms figure the experiments measured
+against was already missed by 3× — which makes deriving it from tolerance urgent rather
+than deferrable. A section that justifies leaving a number unresolved on the grounds
+that nobody depends on it must be re-checked whenever the phase moves, or the
+justification outlives the fact.
 
 ### 7.6 Security posture
 
@@ -1064,7 +1272,7 @@ doctrine says to prefer it.
 | Cold daemon start to ready | < 15 s — **measured 3.43 s** with `tiny.en` + `Llama-3.2-3B-4bit` both loaded and warmed (2026-07-31, `docs/gates/phase5-feasibility.md`) |
 | Recovery from mic disconnect | Automatic, no restart |
 | Crash behavior | Never lose a transcript — write to history before injection. Unconditional; not affected by `[history] retain` (§5.5) |
-| Python | 3.11+ |
+| Python | **3.12+** (raised from 3.11 at the Phase 0 gate — see §7.0) |
 
 Note the crash-order requirement: persist first, inject second. If injection fails the user
 can still recover their words.
@@ -1093,6 +1301,15 @@ the PRD got wrong. Without it, Phase 1's measured latencies exist only in a
 conversation, and every later phase implicitly regresses against a baseline that
 was never written down.
 
+**And a closed gate is recorded here, in a blockquote under its phase** (convention
+established 2026-07-31 at the Phase 0 gate). The `docs/gates/` record stays
+authoritative and holds the full evidence; the blockquote carries the verdict, the
+date, and the answer to the standing question. The reason for duplicating that much
+and no more: §9 is the section a reader consults to know what is built, and a phase
+plan that reads identically before and after the phase ran makes them open four
+files to find out. Two gates had already closed before anyone noticed this document
+could not say so.
+
 ### Probe — Is G1 reachable at all? (before Phase 0)
 
 Added 2026-07-30 (objection O4). A throwaway script — no package, no ABCs, no
@@ -1103,10 +1320,17 @@ elapsed transcribe time. Delete it afterwards; it is not a deliverable.
 **Gate:** Does transcription complete in a few hundred milliseconds, or in several
 seconds? An order of magnitude is all this needs to answer.
 
-**Rejects if:** transcription of a 10-second utterance takes longer than the CPU-tier
-bar in §2 on *accelerated* hardware. That would mean the accelerated path is slower
-than the floor set for the unaccelerated one, which is not a slow result — it is a
+**Rejects if:** transcription of a 10-second utterance takes longer than the
+**G1-CPU p50 bar in §2** on the machine the probe runs on. A machine that cannot beat
+the floor set for the *slowest* tier this product ships is not a slow result — it is a
 broken setup, and no amount of Phase 0 scaffolding fixes it.
+
+Reworded 2026-07-31 (objection A9). It previously conditioned on "*accelerated*
+hardware", a category §7.2 retired the same day: CTranslate2 has no Metal backend and
+macOS has no CUDA, so on the only v1 platform the class had no members and the reject
+line was unevaluable. The probe had already run, so the cost here is retrospective —
+but a reject condition that silently stops being checkable when a definition moves is
+the failure worth naming, not the one instance of it.
 
 **Writes `docs/gates/probe.md` before the script is deleted** (choice-story #12): the
 date, the hardware, the model `auto` resolved to, the input file, the measured
@@ -1128,6 +1352,29 @@ construction — it skips real capture, model residency, post-processing and
 injection. It is a floor, and a floor is enough to kill the project early. If the
 probe is ambiguous, treat it as a pass and let Phase 1 decide.
 
+> **CLOSED 2026-07-31 — GO.** Record: `docs/gates/probe.md`. Script deleted, as
+> instructed.
+>
+> **The first run returned NO-GO at 4,413 ms, and it was wrong.** CTranslate2 was
+> defaulting to 4 threads on a 14-core machine; setting `cpu_threads` to the
+> performance-core count took the identical model to 2,412 ms. The project's top
+> risk would have fired on an unchecked library default rather than on physics.
+> Checking defaults before accepting a verdict is what saved it, and §7.2's
+> `cpu_threads` block exists because of this.
+>
+> It also found §7.2's model table wrong by roughly 7×: `distil-large-v3`, then the
+> Apple Silicon selection, measured 2,412 ms against a 400 ms budget, because
+> **CTranslate2 has no Metal backend** and "Apple Silicon" was a CPU tier named
+> after an accelerator. Both the table and the tier scheme were rebuilt from
+> measurement on the same day.
+>
+> The verdict recorded here is a **floor**, as this section says it must be — and
+> Phase 1's corpus later showed how much of one. A p50 of 352 ms from one clean
+> clip became a p95 of 5,810 ms over six real samples, 14× worse and the opposite
+> decision, because the decoder repetition-loops on silence. Enabling VAD took the
+> same model from 6,039 ms to 541 ms. Any latency figure entering this document
+> now carries p50 **and** p95, or is labelled a floor.
+
 ### Phase 0 — Scaffolding
 Repo structure per §6.4, `pyproject.toml`, ruff + black + mypy strict, `AppConfig` with TOML
 load and validation, CLI skeleton, all ABCs defined with no implementations.
@@ -1143,6 +1390,43 @@ malformed file with a useful error.
 **Rejects if:** any of the three fails, a config/history path is hardcoded rather
 than resolved through `platformdirs`, or `config.py` exposes a module-level instance or
 a `.get()` accessor (§6.3). All are mechanical; there is no judgment here.
+
+> **CLOSED 2026-07-31 — PASS.** Record: `docs/gates/phase-0.md`.
+>
+> All six conditions met: `manu --help` exits 0, `mypy --strict src/` is clean across
+> 18 files, config loads and rejects a malformed file by naming the key and its valid
+> alternatives, no path is hardcoded, and `config.py` exposes neither a module-level
+> instance nor a `.get()`. 57 tests; ruff and black clean.
+>
+> **What it revealed the PRD got wrong**, per this section's standing question:
+> §5.3, §5.5 and §5.6 named `~/.config/amanuensis/` and `~/.local/share/amanuensis/`
+> as the *macOS* locations while §7.3's floor instructed the implementation to use
+> `platformdirs`, which returns neither there — the floor stated the rule and three
+> sections wrote down the paths it forbids. And the Python floor is **3.12**, not
+> 3.11: numpy's stubs use PEP 695 `type` statements that mypy cannot parse under a
+> 3.11 target, which made the gate condition `mypy --strict src/` unsatisfiable for
+> reasons unrelated to the code being gated. Both applied; see the revision log.
+>
+> Four further findings are recorded but not amended, because each is a decision
+> rather than a defect: `[postprocess] chain` lists two processors in §5.3 and three
+> in §6.2; `chain` and `llm.enabled` are two switches for one thing, with the two
+> incoherent combinations now rejected at load time rather than silently resolved;
+> `$AMANUENSIS_CONFIG_DIR` and `$AMANUENSIS_DATA_DIR` are surface no section
+> authorises — a second case §5.3's key-per-decision rule structurally cannot reach,
+> after the bounded exception added the same day; and `cpu_threads = "auto"` is
+> resolved at *use*, not at load, so one config file cannot produce two different
+> `AppConfig` values on two machines.
+>
+> **Adversarial review ran against this phase and found a defect in it.** Objection
+> A6: `DictationSession` implemented §6.3's "callers observe completion through the
+> session" faithfully, and that contract described an interface that did not exist —
+> no flag, no event, no lock. Fixed here for one field, one method and four tests,
+> because nothing had been built on it yet. This is the argument for reviewing before
+> the scaffold hardens, made concrete: after Phase 2b it would have been a change to
+> the threading model of a running daemon.
+>
+> **Not built, deliberately:** `controllers/`, `audio/`, `storage/`, `ui/` and every
+> concrete implementation. §6.4 is the finished layout, not the Phase 0 deliverable.
 
 ### Phase 1 — Prove the ASR path
 `AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`, VAD silence trimming
@@ -1181,8 +1465,16 @@ here from Phase 3 — it changes what this gate measures), the **`cpu_threads` d
 (§7.2), and the **install-time tier check** that decides Tier A versus Tier B (§7.2).
 Report the tier this machine lands in.
 
-**Rejects if:** G1 is missed on a Tier A machine. A Tier B miss does not reject; it is
-recorded and published.
+**Rejects if:** G1 is missed **on the machine this phase is built on**, whatever tier
+that machine recorded at install.
+
+Revised 2026-07-31 (objection A1). The line previously read "G1 is missed on a Tier A
+machine", which could not fire: §7.2 defined Tier A by the same predicate this gate
+tests. It now gates unconditionally on a real machine and reports the tier separately —
+so a developer working on a Tier B machine still faces a stop, where before the build
+would have proceeded with **no gated tier at all**, which is verbatim the outcome the
+tier redefinition was made to prevent. Tier A/B is measured and published here; it is
+not a condition of this gate.
 
 **Also at this gate — first G3 verification** (added 2026-07-30, objection O5).
 Run the daemon under packet capture through a full transcribe cycle and report
@@ -1265,9 +1557,12 @@ not.
 `TrayApp`, `toggle` and `vad_auto` modes, error surfacing, README with the clipboard caveat
 documented, install path with checksummed model download.
 
-The README also carries the **per-tier latency table** — the accelerated G1 figures and
-the CPU-tier G1-CPU figure, each labelled with the hardware it applies to (§2, §4,
-choice-story #8) — and the privacy section from §9's Phase 4 G3 verification.
+The README also carries the **per-tier latency table** — the Tier A G1 figures and the
+Tier B G1-CPU figures, each labelled with **what the machine measured** rather than what
+silicon it has (§2, §4, §7.2; choice-story #8, objection A9) — and the privacy section
+from §9's Phase 4 G3 verification. "Accelerated" is not a user-facing distinction: this
+product has one execution path and tiers are measured, so a README that published an
+"accelerated" figure would be advertising a difference it does not make.
 
 **Gate:** A second person installs it from the README without your help.
 
@@ -1292,28 +1587,81 @@ the README that packet capture covers Amanuensis's own sockets only, and that
 transcripts transit the system clipboard by default where another process may capture
 them (§7.3). An unqualified "G3 verified" is the failure O12 described.
 
-### Phase 5 — LLM second pass — **UN-DEFERRED 2026-07-31**
+### Phase 5 — LLM second pass — **UNRESOLVED, corpus-blocked** (2026-07-31)
 
-Deferred earlier the same day (slicing record S7) on the reasoning that it blocks
-nothing and its budget cannot be failed by construction. **That disposition is
-reversed**, for a reason S7 did not weigh: the second pass is not polish, it is a
-**core feature of the product §1 measures against**. A verbatim transcriber and a tool
-that resolves your self-corrections are different products, and a user comparing them
+Deferred, then un-deferred, then measured and found not shippable — all on
+2026-07-31. This section records the state that survived the day, and it is
+neither "scheduled" nor "dead".
+
+**Why it is not dropped.** The second pass is not polish. It is a **core feature
+of the product §1 measures against**: a verbatim transcriber and a tool that
+resolves your self-corrections are different products, and a user comparing them
 will not grade on the distinction.
 
-Feasibility is measured, not assumed — `docs/gates/phase5-feasibility.md`. Summary: an
-MLX-backed `Llama-3.2-3B-Instruct-4bit` resolves self-corrections correctly at
-**278–390 ms** on Apple Silicon, because **MLX has a Metal backend and CTranslate2 does
-not** — the second pass runs on the GPU the transcription cannot use.
+**Why it is not scheduled.** The design that motivated un-deferring it was
+measured against real ASR output and failed — WER 19.6% → 110%, latency
+373–2,201 ms against a 700 ms budget (`docs/gates/phase5-feasibility.md`). Four
+alternatives were then tested against a frozen corpus
+(`docs/gates/phase5-experiments.md`):
 
-**The blocker is fidelity, not latency.** The measured failure mode is that the pass
-*rewrites* rather than merely cleaning: it dropped "on it" from one input and "let's
-meet" from another, silently. In a dictation tool that is strictly worse than leaving
-fillers in — a user can see and delete an "um", but cannot see a clause removed before
-the text reached the screen. Same hazard class as §7.3's clipboard exposure, and it
-falls under §7.6's surfacing-versus-preventing doctrine.
+| Approach | mean WER 19.33% → | p50 | Verdict |
+|---|---|---|---|
+| Rules-only (control) | **19.33%** — unchanged | 0.044 ms | no effect |
+| Token keep/delete classification | 20.35% | 13.6 ms | no improvement |
+| Fine-tuned seq2seq | 21.27% | 300 ms | no improvement |
+| Constrained decoding | 34.58% | 908 ms | worse, budget missed |
 
-Four constraints therefore ship *with* the feature, not after it:
+**Not one approach improved WER on a single sample**, and the control — which
+changes nothing and costs 44 microseconds — leads the table.
+
+**That result is inconclusive, not negative, and the distinction is the whole
+section.** The corpus contains no disfluencies: every sample was read from a
+prepared script, which `05-noisy`'s own reference states outright ("while I read
+this sentence"). Three of the four approaches are deletion mechanisms aimed at
+tokens that are not in the input. The corpus was built to measure ASR accuracy
+against a known reference, which requires a script — it is structurally
+incapable of testing a disfluency remover, and reusing it here was the error.
+
+**The blocking unknown, stated as a question nobody has answered: do
+disfluencies survive the decoder?** It is untested. The claim that they do not
+appears in one experiment record and is an assertion, not a measurement.
+
+**Unblocked by:** 6–10 samples of genuinely spontaneous speech — thinking aloud,
+no script — transcribed with the selected model and VAD. No reference
+transcripts needed; this measures *presence of disfluency*, not WER. Roughly a
+20-minute recording session.
+
+- If disfluencies survive, re-run all four approaches against that corpus before
+  choosing. Token classification is the standing candidate on latency and safety.
+- If they do not, Phase 5 has no subject matter. Move it to §3, and say plainly
+  in the README that Amanuensis transcribes what you said rather than rewriting
+  it.
+
+**No gate until there is something to gate.** The previous A/B gate measured
+against a p50 ≤ 700 ms budget already missed by 3× on the fastest hardware this
+product will run on, which made it pre-failed rather than undecided.
+
+**What was learned and holds regardless**, because none of it is a WER claim:
+
+- **Deletion-only is a checkable property**, and that is what made the original
+  failure catchable at all. The four constraints below were written *before* the
+  test and caught 100% of the catastrophic failures.
+- **Both safety checks are individually insufficient, in opposite directions.**
+  `INVENT` is blind to function-word substitution — one checkpoint rewrote
+  "faster whisper" → "the whisper" and it did not fire. The 25% `SHRINK` floor
+  would discard the best output any experiment produced: the one genuine
+  self-correction resolution shrinks content words by 44.4%. For a
+  deletion-only mechanism, large shrink is the feature.
+- **A fifth constraint is missing: measure the firing rate.** All four existing
+  checks are *shape* checks. Nothing asks whether the pass had a job to do. A
+  pass that correctly no-ops on every input satisfies all four perfectly and
+  delivers nothing.
+- **MPS is slower than CPU at this model size** — 804 ms versus 300 ms on the
+  same checkpoint. Second accelerator assumption this project has found
+  backwards.
+
+If and when the feature revives, these four constraints ship *with* it, not
+after it:
 
 1. **The pre-injection write stores the RAW transcript** (§8), never the cleaned one.
 2. **No-invent check**: if cleaned output contains content words absent from the raw
@@ -1324,18 +1672,16 @@ Four constraints therefore ship *with* the feature, not after it:
 4. **One-keystroke undo to the raw text**, because the user cannot know what was removed.
 
 Constraints 2 and 3 are cheap deterministic checks wrapped around a probabilistic step.
-They convert the failure mode from silent corruption into a visible no-op. The `[postprocess.llm]` config block stays reserved.
+They convert the failure mode from silent corruption into a visible no-op — measured, not
+argued. Constraint 3's threshold is **provisional and probably wrong**: see the SHRINK
+finding above. The `[postprocess.llm]` config block stays reserved.
 
-`LocalLLMPostProcessor` with the latency ceiling from §7.5.
-
-**Gate:** A/B against Phase 3 output on the same audio. If quality gain does not justify
-measured latency cost, ship it disabled and say so in the README.
-
-Measure against **Phase 5's own budget** — p50 ≤ 700 ms, p95 ≤ 1100 ms with the pass
-enabled (§7.5, objection O11) — not against G1, which is defined with the pass off.
-Report how often the cancellation deadline fires and the pass is discarded, since a
-cancelled pass costs the full ceiling and returns nothing; a high cancellation rate is
-the signal to ship disabled.
+**Rejects if** (should the phase revive): the spontaneous-speech corpus shows no
+disfluencies surviving the decoder — in which case the phase does not start — or the
+selected approach fails to improve edit rate against the Phase 3 baseline on that
+corpus. The budget is re-derived from tolerance at that point, not inherited: §7.5's
+arithmetic-not-tolerance objection stands, and the old 700 ms figure was already missed
+by 3×.
 
 ---
 
@@ -1400,16 +1746,26 @@ Read these before writing code; several problems in §10 are already solved in p
 ## 14. Sentinel records for this document
 
 Four read-only sentinel agents were run against this PRD on 2026-07-30, before
-Phase 0 started. Each produced a structured record. The sentinels cannot fill a
-disposition — resolving one is a human act, and their read-only tool boundary is
-what enforces that. Every amendment made in response appears in the revision log
-below; none was made silently.
+Phase 0 started, and `advocatus-diaboli` was run a **second time on 2026-07-31**,
+scoped to that day's amendments alone. Each produced a structured record. The
+sentinels cannot fill a disposition — resolving one is a human act, and their
+read-only tool boundary is what enforces that. Every amendment made in response
+appears in the revision log below; none was made silently.
+
+**Why the second pass happened.** The 2026-07-31 amendments were applied
+recommendation → approval → document, with no review step, on a day when
+measurement falsified four of five confident recommendations within hours. That
+is precisely the condition the sentinel exists for, and skipping it would have
+hardened Phase 0 against unreviewed decisions. It found nine objections, seven
+of them high or critical, including one — A6 — that landed on code committed the
+same day.
 
 <!-- BEGIN sentinel-index (generated) -->
 | Record | Path | State |
 |---|---|---|
 | Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
-| Objections | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
+| Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
+| Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
@@ -1423,8 +1779,11 @@ against the instrument built to measure it) and `O12` (the default clipboard
 strategy is a transcript-egress path G3's verification structurally cannot see)
 are accepted and applied — see the revision log.
 
-**All twelve objections are now disposed as accepted**, and every amendment is in
-the revision log. The through-line across them: this document was better at defining
+**All twelve of the 2026-07-30 objections are disposed as accepted**, and every
+amendment is in the revision log. The 2026-07-31 amendment round adds nine more
+(A1–A9), **all nine accepted** — see the table above for the generated count.
+Their IDs are lettered because O1–O12 are still referenced by name throughout
+this document. The through-line across them: this document was better at defining
 what to build than at defining what would count as having built it badly. G1 was not
 computable, G2 was stated in a unit nothing measured, G3 had a verification method no
 gate ran, and half the gates could not fail. Those are fixed.
@@ -1446,6 +1805,17 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-07-31 | **A1 + A4 accepted.** Tier A is now an absolute measured bar — p50 ≤ 350 ms, p95 ≤ 700 ms on the transcription share, VAD on — rather than a restatement of G1, and §9's Phase 1 gate rejects on G1 missed on the machine the phase is built on, whatever tier it recorded. The previous wording defined Tier A by the same predicate its own gate tested, so §10's top risk had a mitigation with no reachable failing state and the real go/no-go had silently moved to Phase 2b. §7.2 also specifies the install check itself — audio, VAD state, warm-up, nine runs with p95, and the comparison basis — where it previously pointed at a deleted throwaway script. |
+| 2026-07-31 | **A2 accepted.** §9's Phase 5 is recorded as **unresolved and corpus-blocked**, not scheduled and not dead. Four approaches were measured against the frozen corpus and none improved WER on any sample; that result is inconclusive rather than negative, because every sample was read from a script and contains no disfluencies. The blocking unknown is stated as a question — do disfluencies survive the decoder — and the pre-failed 700 ms A/B gate is removed until there is something to gate. §7.5's claim that Phase 5 was deferred and nobody was building against it is corrected in place; both clauses were false when written. |
+| 2026-07-31 | **A3 accepted.** `model = "auto"` selects **`tiny.en`, int8, VAD on** at 328 ms p50 / 420 ms p95, in one collapsed macOS row. The `base.en` row carried a no-VAD figure from a single clip and contradicted §8, which already assumed `tiny.en`. The undefined "Apple Silicon / CPU" versus "Slower CPU" boundary is gone. WER is declared **macro-average** throughout and the 14.8% micro-weighted figure is withdrawn — the two differ by a third relative and were being used interchangeably across model-selection records. |
+| 2026-07-31 | **A6 accepted.** §6.3 gains an explicit completion contract: `DictationSession` carries a `threading.Event`, the worker writes every field before setting it, and that ordering is the only synchronisation rule. The previous text said callers observe completion through the session while the session had no flag, event or lock. The two queues — audio frames and sessions — are now named separately rather than asserted to be one. The overlapping-session hazard the async handoff creates is resolved for v1: a session whose focused application changed between capture and injection is written to history and not injected. |
+| 2026-07-31 | **A5 accepted.** G1-CPU is relabelled a **judgement, not a derivation**, and gains a **p95 ≤ 4 000 ms**. The typing comparison establishes that two seconds is not slow; it does not produce two seconds — read strictly it licenses ~27 s, and the clause carrying the decision was "still reading as a tool rather than a batch job". §2's own G2 note two paragraphs above warns against exactly this. The p95 exists because a median-only bar cannot fail on the repetition-looping excursion that is this project's documented failure mode, and G1-CPU decides whether a whole machine class ships. |
+| 2026-07-31 | **A7 accepted with revision.** §5.5 now states plainly that **Amanuensis does not claim secure erasure** of the pre-injection transcript — `unlink()` releases blocks exactly as `DELETE` marks pages free, so the original change moved the claim down a layer rather than repairing it. What it genuinely bought (a shared database no longer load-bearing for a privacy promise) is kept. Three gaps closed: the path resolves through `platformdirs` into a named `pending/` directory, orphans from failed injections are swept at daemon start, and `manu history` surfaces them so §8's recovery promise is reachable. |
+| 2026-07-31 | **A8 accepted.** `cpu_threads = "auto"` branches on **whether `hw.perflevel0.physicalcpu` resolves**, not on which OS is running, falling back to the total core count. §3 makes macOS the only v1 platform, so the old "elsewhere" branch covered nothing and a homogeneous Mac fell through to CTranslate2's default of 4 — the value whose first probe run returned NO-GO. The efficiency-core exclusion is labelled as generalised from n=1 on a 10P/4E machine, and Phase 1's sweep must cover a second topology. |
+| 2026-07-31 | **A9 accepted.** The tier vocabulary is propagated to the four sites still keyed on "accelerated hardware": §4's positioning paragraph, §7.5's Phase 5 budget basis, §9's probe **Rejects if** line, and §9's Phase 4 README instruction. §7.2 retired that category the same day — CTranslate2 has no Metal backend and macOS has no CUDA — which had left the probe's reject condition conditioning on a hardware class with no members, and would have had Phase 4 publish a user-facing distinction the product does not make. |
+| 2026-07-31 | **Phase 0 gate findings applied.** §5.3, §5.5 and §5.6 named `~/.config/amanuensis/` and `~/.local/share/amanuensis/` as the *macOS* paths while instructing the implementation to use `platformdirs`, which returns neither on macOS — §7.3's portability floor stated the rule and the same sections wrote down the paths it forbids. All now resolve through `platformdirs`, with `$AMANUENSIS_CONFIG_DIR` / `$AMANUENSIS_DATA_DIR` overrides named, since the location of the config file cannot itself be a config key. |
+| 2026-07-31 | **Python floor raised to 3.12** (Phase 0 gate). numpy's type stubs use PEP 695 `type` statements that mypy cannot parse under a 3.11 target, which made the named gate condition `mypy --strict src/` fail on numpy's own stubs before reaching this project's code. §7.0 and §8 updated. |
+| 2026-07-31 | **Gate closures are recorded in §9.** Convention established at the Phase 0 gate: a closed gate gets a blockquote under its phase carrying the verdict, the date, and the answer to §9's standing question, while `docs/gates/` stays authoritative for the evidence. §9 is where a reader looks to know what is built, and a phase plan that reads identically before and after the phase ran forces them elsewhere to find out. Applied retroactively to the **probe (GO)** and **Phase 0 (PASS)**, both of which had already closed with no trace in this document. |
 | 2026-07-30 | Initial draft |
 | 2026-07-30 | Added §14 indexing the four sentinel records. Navigational only — no decision in §1–§13 was amended, and all 29 dispositions remain pending. |
 | 2026-07-30 | **O8 accepted.** G1 redefined as hotkey release to *text fully present*, measured by the new `LatencyBreakdown.g1_ms` (§6.3); `total_ms` is diagnostics only. Added the G1 measurement note to §2, including an explicit precedence statement that §2's 10 s budget and §7.1's 15–30 s revisit trigger are separate signals. HARNESS.md corrected to assert against `g1_ms`. |

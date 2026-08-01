@@ -35,11 +35,18 @@ PRD = ROOT / "AMANUENSIS_PRD.md"
 BEGIN = "<!-- BEGIN sentinel-index (generated) -->"
 END = "<!-- END sentinel-index (generated) -->"
 
-# label, path, the frontmatter key holding the list
-RECORDS = [
-    ("Slicing", "docs/superpowers/slices/amanuensis-prd.md", "slices"),
-    ("Objections", "docs/superpowers/objections/amanuensis-prd.md", "objections"),
-    ("Choice stories", "docs/superpowers/stories/amanuensis-prd.md", "stories"),
+# label, directory, the frontmatter key holding the list
+#
+# Directories, not filenames. The first version named three exact files, which
+# meant a *new* record was invisible to both the table and the --check
+# constraint: adding nine pending objections in a second file left the script
+# reporting "up to date". A staleness check that cannot see new records is the
+# same failure as `sentinel-integrity-check.sh` passing on zero agents — green
+# because it looked at nothing. Found 2026-07-31.
+RECORD_DIRS = [
+    ("Slicing", "docs/superpowers/slices", "slices"),
+    ("Objections", "docs/superpowers/objections", "objections"),
+    ("Choice stories", "docs/superpowers/stories", "stories"),
 ]
 
 ESTIMATE = ("Cost estimate", "cost-estimates/2026-07-30-amanuensis-prd-estimate.md")
@@ -88,15 +95,27 @@ def describe(entries: int, counts: dict[str, int], noun: str) -> str:
     return f"{entries} {noun} — {parts}"
 
 
+def records_in(directory: Path) -> list[Path]:
+    """Every record in a sentinel directory, sorted. `.gitkeep` is not a record."""
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob("*.md") if p.name != ".gitkeep")
+
+
 def build_table() -> str:
     rows = ["| Record | Path | State |", "|---|---|---|"]
-    for label, rel, key in RECORDS:
-        path = ROOT / rel
-        if not path.exists():
-            rows.append(f"| {label} | `{rel}` | *missing* |")
+    for label, reldir, key in RECORD_DIRS:
+        found = records_in(ROOT / reldir)
+        if not found:
+            rows.append(f"| {label} | `{reldir}/` | *missing* |")
             continue
-        entries, counts = tally(path)
-        rows.append(f"| {label} | `{rel}` | {describe(entries, counts, key)} |")
+        for path in found:
+            rel = path.relative_to(ROOT).as_posix()
+            # Disambiguate only when a directory holds more than one record, so
+            # the common single-record case reads exactly as it did before.
+            name = label if len(found) == 1 else f"{label} — `{path.stem}`"
+            entries, counts = tally(path)
+            rows.append(f"| {name} | `{rel}` | {describe(entries, counts, key)} |")
     label, rel = ESTIMATE
     state = "not adjudicable" if (ROOT / rel).exists() else "*missing*"
     rows.append(f"| {label} | `{rel}` | {state} |")

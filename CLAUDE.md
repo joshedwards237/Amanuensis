@@ -13,12 +13,18 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 0 has not started
+## Status: Phase 0 closed 2026-07-31. Phase 1 next.
 
-There is no `src/` tree, no `pyproject.toml`, and no tests yet. Everything
-under "Build and Test" below is a Phase 0 deliverable, not a command that
-currently runs. Do not infer conventions from an empty repo — build to the
-spec in PRD §6.4.
+`src/amanuensis/` exists and holds **contracts only** — ABCs, the frozen
+`AppConfig`, the CLI skeleton, both platform factories. No engine, no injection,
+no hotkey listening, no post-processing. Every `manu` verb refuses and names the
+phase that builds it, which is the intended behaviour and not a bug to fix.
+
+The commands under "Build and Test" below all run. `docs/gates/phase-0.md` is the
+gate record; read it before adding to `src/`, because it lists what was
+deliberately *not* built and why.
+
+**Stop at the Phase 1 gate.** Do not begin Phase 2a until Phase 1 is approved.
 
 ---
 

@@ -85,6 +85,35 @@
   the `tiny.en` transcripts once, so candidate post-processing approaches are compared on
   identical data rather than each re-running ASR and measuring its variance too.
 
+- **A generated index that names filenames is green on records it cannot see.**
+  `scripts/regenerate-sentinel-index.py` hardcoded three exact paths, so a *second*
+  objection record in the same directory was invisible: it reported
+  `sentinel index: up to date` with nine pending objections on disk, and `--check` is
+  a CI constraint. Same failure as `sentinel-integrity-check.sh` passing on zero
+  agents — green because it looked at nothing. Fixed 2026-07-31 to glob the record
+  directories. **When a checker reports clean, confirm what it enumerated.** Both
+  instances of this bug on this project were discovered by asking that question, not
+  by the checker.
+
+- **A corpus built to measure one thing cannot be reused to measure another.**
+  `tests/fixtures/asr/` was recorded by reading prepared scripts, because measuring
+  WER requires a known reference. Four Phase 5 experiments were then run against it
+  to test *disfluency removal* — and none improved WER, because reading a script
+  produces no disfluencies. `05-noisy`'s own reference says "while I read this
+  sentence". The result looked like four converging negatives and was actually one
+  confound. **Before reusing a fixture, state what its construction guarantees is
+  present, not just what it contains.** An experiment record then claimed the
+  disfluencies "do not survive Whisper's decoder" — an assertion nothing had tested,
+  stated with the confidence of a measurement.
+
+- **`advocatus-diaboli` delivered on the third ask, in a minimal format.** Two full
+  re-asks produced idle notifications and nothing else; the ask that worked was
+  *"reply with four lines, each naming a section and its strongest objection"* — and
+  it then resent the complete nine-objection record unprompted. Ask for the smallest
+  useful shape rather than the record, and the record often follows. Also: it opened
+  with "my earlier output went to plain text, which you cannot see", which means the
+  analysis had been completing all along and only the delivery channel was failing.
+
 - **Check the command doc for output paths, not the agent's suggestion.** The
   cost-estimator recommended `observability/costs/`; the canonical path in
   `commands/cost-estimate.md` is `cost-estimates/<YYYY-MM-DD>-<slug>-estimate.md`.

@@ -7,14 +7,16 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: pre-implementation
+## Status: Phase 0 complete, Phase 1 not started
 
-**There is no code in this repository yet.** Phase 0 has not started.
+**Phase 0 is scaffolding: contracts and toolchain, no implementations.** `manu`
+runs and refuses every verb, naming the phase that builds it. There is no working
+dictation yet.
 
-What exists is a specification that has been adversarially reviewed and, in the
-parts that matter, *measured* — the latency targets are not estimates any more.
-See [`docs/gates/probe.md`](docs/gates/probe.md) and
-[`HANDOFF.md`](HANDOFF.md).
+What exists is a specification that has been adversarially reviewed **twice** — 41
+dispositions across two rounds, all resolved — and, in the parts that matter,
+*measured*. The latency targets are not estimates any more. See
+[`docs/gates/`](docs/gates/) and [`HANDOFF.md`](HANDOFF.md).
 
 | | |
 |---|---|
