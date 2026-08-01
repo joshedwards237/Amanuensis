@@ -50,14 +50,32 @@ class LatencyBreakdown:
     #: the user talking. Retained because it is needed to relate a measured
     #: latency to the utterance length it came from.
     capture_ms: float = 0.0
+    #: Silence trimming (§7.4). Added in Phase 1, and *inside* G1: the clock
+    #: starts at release and trimming happens after it. Kept as its own field
+    #: rather than folded into `transcribe_ms` because §7.4 calls trimming the
+    #: dominant latency lever — burying the dominant lever inside the stage it
+    #: exists to shrink would make this breakdown useless for the one argument
+    #: it was built to support.
+    vad_ms: float = 0.0
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
     inject_ms: float = 0.0
 
     @property
+    def asr_ms(self) -> float:
+        """vad + transcribe. What §7.2's tier check compares against 350/700.
+
+        The tier thresholds are the transcribe *share* of G1 measured with VAD
+        on ("a check run in a configuration the product does not use measures
+        nothing"), so the quantity they bound is trimming plus decoding, not
+        decoding alone.
+        """
+        return self.vad_ms + self.transcribe_ms
+
+    @property
     def g1_ms(self) -> float:
-        """transcribe + postprocess + inject. The number G1 is gated on."""
-        return self.transcribe_ms + self.postprocess_ms + self.inject_ms
+        """vad + transcribe + postprocess + inject. The number G1 is gated on."""
+        return self.asr_ms + self.postprocess_ms + self.inject_ms
 
     @property
     def total_ms(self) -> float:

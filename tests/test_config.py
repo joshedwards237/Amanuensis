@@ -23,6 +23,7 @@ from amanuensis import config as config_module
 from amanuensis.config import (
     AppConfig,
     ConfigError,
+    VadConfig,
     default_config_path,
     default_history_path,
     load_config,
@@ -261,3 +262,82 @@ def test_resolve_auto_returns_a_positive_count_below_the_core_count() -> None:
 
     assert resolved >= 1
     assert resolved <= (os.cpu_count() or 1)
+
+
+# --------------------------------------------------------------------------
+# [vad] — added in Phase 1
+# --------------------------------------------------------------------------
+#
+# PRD §7.4 specifies Silero trimming and §5.3 has no table for it, which is the
+# gap Phase 1 closed. The interesting part is what is *not* a key.
+
+
+def test_vad_defaults_match_the_configuration_the_probe_measured(
+    tmp_path: Path,
+) -> None:
+    cfg = load_config(tmp_path / "nonexistent.toml")
+
+    assert cfg.vad.threshold == 0.5
+    assert cfg.vad.min_silence_duration_ms == 2000
+    assert cfg.vad.speech_pad_ms == 400
+
+
+def test_there_is_no_switch_for_turning_trimming_off() -> None:
+    """§5.3's bounded exception: behaviour a stated guarantee depends on is not
+    user-settable.
+
+    G1 is unreachable without trimming — every candidate model misses p95
+    outright (§7.2, §7.4). A `vad.enabled = false` key would therefore be a
+    supported way to break a published guarantee, which is precisely the shape
+    of key the exception exists to refuse. Persist-before-inject was the first
+    instance; this is the second.
+    """
+    assert not hasattr(VadConfig(), "enabled")
+
+
+def test_a_threshold_outside_the_probability_range_is_rejected(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[vad]\nthreshold = 1.5\n")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+
+    assert "vad.threshold" in str(exc.value)
+
+
+def test_an_unknown_vad_key_names_the_ones_that_exist(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[vad]\nenabled = false\n")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+
+    message = str(exc.value)
+    assert "vad.enabled" in message
+    assert "threshold" in message
+
+
+# --------------------------------------------------------------------------
+# [audio] sample_rate is not the free choice §5.3 presents it as
+# --------------------------------------------------------------------------
+
+
+def test_a_sample_rate_other_than_16k_is_rejected_with_both_reasons(
+    tmp_path: Path,
+) -> None:
+    """Phase 1 finding. Whisper consumes 16 kHz mono and Silero accepts 8 or
+    16 kHz; 16000 is the only value both allow. §5.3 offers the key as though
+    any positive integer worked, and a user who set 44100 would previously have
+    got a resampled, mistimed pipeline rather than an error.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text("[audio]\nsample_rate = 44100\n")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+
+    message = str(exc.value)
+    assert "audio.sample_rate" in message
+    assert "16000" in message
