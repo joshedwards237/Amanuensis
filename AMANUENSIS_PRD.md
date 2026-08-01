@@ -1301,6 +1301,15 @@ the PRD got wrong. Without it, Phase 1's measured latencies exist only in a
 conversation, and every later phase implicitly regresses against a baseline that
 was never written down.
 
+**And a closed gate is recorded here, in a blockquote under its phase** (convention
+established 2026-07-31 at the Phase 0 gate). The `docs/gates/` record stays
+authoritative and holds the full evidence; the blockquote carries the verdict, the
+date, and the answer to the standing question. The reason for duplicating that much
+and no more: §9 is the section a reader consults to know what is built, and a phase
+plan that reads identically before and after the phase ran makes them open four
+files to find out. Two gates had already closed before anyone noticed this document
+could not say so.
+
 ### Probe — Is G1 reachable at all? (before Phase 0)
 
 Added 2026-07-30 (objection O4). A throwaway script — no package, no ABCs, no
@@ -1343,6 +1352,29 @@ construction — it skips real capture, model residency, post-processing and
 injection. It is a floor, and a floor is enough to kill the project early. If the
 probe is ambiguous, treat it as a pass and let Phase 1 decide.
 
+> **CLOSED 2026-07-31 — GO.** Record: `docs/gates/probe.md`. Script deleted, as
+> instructed.
+>
+> **The first run returned NO-GO at 4,413 ms, and it was wrong.** CTranslate2 was
+> defaulting to 4 threads on a 14-core machine; setting `cpu_threads` to the
+> performance-core count took the identical model to 2,412 ms. The project's top
+> risk would have fired on an unchecked library default rather than on physics.
+> Checking defaults before accepting a verdict is what saved it, and §7.2's
+> `cpu_threads` block exists because of this.
+>
+> It also found §7.2's model table wrong by roughly 7×: `distil-large-v3`, then the
+> Apple Silicon selection, measured 2,412 ms against a 400 ms budget, because
+> **CTranslate2 has no Metal backend** and "Apple Silicon" was a CPU tier named
+> after an accelerator. Both the table and the tier scheme were rebuilt from
+> measurement on the same day.
+>
+> The verdict recorded here is a **floor**, as this section says it must be — and
+> Phase 1's corpus later showed how much of one. A p50 of 352 ms from one clean
+> clip became a p95 of 5,810 ms over six real samples, 14× worse and the opposite
+> decision, because the decoder repetition-loops on silence. Enabling VAD took the
+> same model from 6,039 ms to 541 ms. Any latency figure entering this document
+> now carries p50 **and** p95, or is labelled a floor.
+
 ### Phase 0 — Scaffolding
 Repo structure per §6.4, `pyproject.toml`, ruff + black + mypy strict, `AppConfig` with TOML
 load and validation, CLI skeleton, all ABCs defined with no implementations.
@@ -1358,6 +1390,43 @@ malformed file with a useful error.
 **Rejects if:** any of the three fails, a config/history path is hardcoded rather
 than resolved through `platformdirs`, or `config.py` exposes a module-level instance or
 a `.get()` accessor (§6.3). All are mechanical; there is no judgment here.
+
+> **CLOSED 2026-07-31 — PASS.** Record: `docs/gates/phase-0.md`.
+>
+> All six conditions met: `manu --help` exits 0, `mypy --strict src/` is clean across
+> 18 files, config loads and rejects a malformed file by naming the key and its valid
+> alternatives, no path is hardcoded, and `config.py` exposes neither a module-level
+> instance nor a `.get()`. 57 tests; ruff and black clean.
+>
+> **What it revealed the PRD got wrong**, per this section's standing question:
+> §5.3, §5.5 and §5.6 named `~/.config/amanuensis/` and `~/.local/share/amanuensis/`
+> as the *macOS* locations while §7.3's floor instructed the implementation to use
+> `platformdirs`, which returns neither there — the floor stated the rule and three
+> sections wrote down the paths it forbids. And the Python floor is **3.12**, not
+> 3.11: numpy's stubs use PEP 695 `type` statements that mypy cannot parse under a
+> 3.11 target, which made the gate condition `mypy --strict src/` unsatisfiable for
+> reasons unrelated to the code being gated. Both applied; see the revision log.
+>
+> Four further findings are recorded but not amended, because each is a decision
+> rather than a defect: `[postprocess] chain` lists two processors in §5.3 and three
+> in §6.2; `chain` and `llm.enabled` are two switches for one thing, with the two
+> incoherent combinations now rejected at load time rather than silently resolved;
+> `$AMANUENSIS_CONFIG_DIR` and `$AMANUENSIS_DATA_DIR` are surface no section
+> authorises — a second case §5.3's key-per-decision rule structurally cannot reach,
+> after the bounded exception added the same day; and `cpu_threads = "auto"` is
+> resolved at *use*, not at load, so one config file cannot produce two different
+> `AppConfig` values on two machines.
+>
+> **Adversarial review ran against this phase and found a defect in it.** Objection
+> A6: `DictationSession` implemented §6.3's "callers observe completion through the
+> session" faithfully, and that contract described an interface that did not exist —
+> no flag, no event, no lock. Fixed here for one field, one method and four tests,
+> because nothing had been built on it yet. This is the argument for reviewing before
+> the scaffold hardens, made concrete: after Phase 2b it would have been a change to
+> the threading model of a running daemon.
+>
+> **Not built, deliberately:** `controllers/`, `audio/`, `storage/`, `ui/` and every
+> concrete implementation. §6.4 is the finished layout, not the Phase 0 deliverable.
 
 ### Phase 1 — Prove the ASR path
 `AudioCapture`, `FasterWhisperEngine`, warm-up, `LatencyBreakdown`, VAD silence trimming
@@ -1746,6 +1815,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-07-31 | **A9 accepted.** The tier vocabulary is propagated to the four sites still keyed on "accelerated hardware": §4's positioning paragraph, §7.5's Phase 5 budget basis, §9's probe **Rejects if** line, and §9's Phase 4 README instruction. §7.2 retired that category the same day — CTranslate2 has no Metal backend and macOS has no CUDA — which had left the probe's reject condition conditioning on a hardware class with no members, and would have had Phase 4 publish a user-facing distinction the product does not make. |
 | 2026-07-31 | **Phase 0 gate findings applied.** §5.3, §5.5 and §5.6 named `~/.config/amanuensis/` and `~/.local/share/amanuensis/` as the *macOS* paths while instructing the implementation to use `platformdirs`, which returns neither on macOS — §7.3's portability floor stated the rule and the same sections wrote down the paths it forbids. All now resolve through `platformdirs`, with `$AMANUENSIS_CONFIG_DIR` / `$AMANUENSIS_DATA_DIR` overrides named, since the location of the config file cannot itself be a config key. |
 | 2026-07-31 | **Python floor raised to 3.12** (Phase 0 gate). numpy's type stubs use PEP 695 `type` statements that mypy cannot parse under a 3.11 target, which made the named gate condition `mypy --strict src/` fail on numpy's own stubs before reaching this project's code. §7.0 and §8 updated. |
+| 2026-07-31 | **Gate closures are recorded in §9.** Convention established at the Phase 0 gate: a closed gate gets a blockquote under its phase carrying the verdict, the date, and the answer to §9's standing question, while `docs/gates/` stays authoritative for the evidence. §9 is where a reader looks to know what is built, and a phase plan that reads identically before and after the phase ran forces them elsewhere to find out. Applied retroactively to the **probe (GO)** and **Phase 0 (PASS)**, both of which had already closed with no trace in this document. |
 | 2026-07-30 | Initial draft |
 | 2026-07-30 | Added §14 indexing the four sentinel records. Navigational only — no decision in §1–§13 was amended, and all 29 dispositions remain pending. |
 | 2026-07-30 | **O8 accepted.** G1 redefined as hotkey release to *text fully present*, measured by the new `LatencyBreakdown.g1_ms` (§6.3); `total_ms` is diagnostics only. Added the G1 measurement note to §2, including an explicit precedence statement that §2's 10 s budget and §7.1's 15–30 s revisit trigger are separate signals. HARNESS.md corrected to assert against `g1_ms`. |
