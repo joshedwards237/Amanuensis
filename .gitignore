@@ -30,6 +30,11 @@ observability/affordance-invocations.json
 # meaningless without them.
 tests/fixtures/asr/*.wav
 tests/fixtures/asr/*.m4a
+# Spontaneous-speech corpus (scripts/record_spontaneous.py). Same rule, and it
+# needs no reference transcripts at all — the questions it answers are
+# "do disfluencies survive the decoder" and "what does trimming actually
+# remove", neither of which is a WER question.
+tests/fixtures/spontaneous/
 tests/fixtures/asr/*.flac
 probe.wav
 
