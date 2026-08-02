@@ -82,7 +82,19 @@ TAIL_SILENCE_S = 3.0
 #: windows. Deterministic, and checked before the take is written rather than
 #: after the whole session — the invariant is "you spoke, and you were quiet at
 #: the ends", and both halves are checkable.
-MIN_SPEECH_TO_SILENCE_RATIO = 4.0
+#:
+#: **Lowered from 4.0 to 2.0 on 2026-08-02, because 4.0 was a guess and the
+#: first real session falsified it.** Two takes came in under it (2.57x and
+#: 3.58x) and both trimmed correctly — one speech segment, no fallback, and a
+#: retained fraction squarely inside the range of the takes that passed. The
+#: detector's working range extends well below where the guard was set, so the
+#: guard was rejecting usable audio and would have cost a re-record.
+#:
+#: 2.0 is now measured rather than picked: room tone alone sits at 0.98x and
+#: correctly falls back, so the floor is somewhere between there and 2.57x. It
+#: is set at the conservative end of that interval and should move again if a
+#: take between 2.0x and 2.57x ever fails to trim.
+MIN_SPEECH_TO_SILENCE_RATIO = 2.0
 CLIPPING_PEAK = 0.99
 
 
