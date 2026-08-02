@@ -28,10 +28,25 @@ classifiers = [
 # the Silero VAD ONNX asset inside its own wheel — see audio/vad.py, that is a
 # G3 requirement and not a convenience) and `sounddevice` for microphone
 # capture. The tray toolkit still waits for Phase 4.
+#
+# Phase 2a adds pyobjc for injection: NSPasteboard and NSWorkspace from Cocoa,
+# CGEventPost and AXIsProcessTrusted from Quartz. The alternative was shelling
+# out to `osascript` and `pbcopy`, which needs no dependency and was rejected
+# twice over — a process spawn costs 30-80 ms against roughly 100 ms of total
+# G1 headroom, and macOS attributes the Accessibility grant to the binary that
+# posts the event, so routing through osascript would ask the user to trust
+# osascript itself. That is both a wider grant than this app needs and one no
+# remediation message can describe honestly.
+#
+# The marker keeps a Linux checkout installable. v1 is macOS-only (§3), but the
+# test suite is not, and an unconditional pyobjc would make `pip install -e .`
+# fail on the platform where most CI runs.
 dependencies = [
     "faster-whisper>=1.1",
     "numpy>=1.24",
     "platformdirs>=4.0",
+    "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
     "sounddevice>=0.4.6",
 ]
 
@@ -107,8 +122,15 @@ files = ["src", "tests"]
 # the four modules that touch them, which would suppress real errors in the
 # same breath. Scoped to the named packages so that an untyped import
 # appearing anywhere else still fails the gate.
+#
+# The pyobjc bridges are here for a second reason as well: they do not exist at
+# all off macOS, so on a Linux checkout the import is missing rather than
+# untyped, and the gate would fail for a platform the product does not target.
 [[tool.mypy.overrides]]
 module = [
+    "AppKit.*",
+    "ApplicationServices.*",
+    "Quartz.*",
     "ctranslate2.*",
     "faster_whisper.*",
     "sounddevice.*",

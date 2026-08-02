@@ -15,38 +15,50 @@ useless.
 from __future__ import annotations
 
 import sys
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from amanuensis.injection.base import TextInjector
 
+if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
+    from amanuensis.config import InjectionConfig
+
 __all__ = ["UnsupportedPlatformError", "create_injector"]
+
+#: Platforms with an injector. A set rather than a phase table now that the
+#: one entry is built — a row here saying "Phase 2a" outlived its truth the
+#: moment Phase 2a shipped, which is how `engines/registry.py` came to
+#: promise a Moonshine engine that ADR 0001 had already declined.
+_SUPPORTED: Final[frozenset[str]] = frozenset({"darwin"})
 
 
 class UnsupportedPlatformError(Exception):
     """No injector exists for the platform this is running on."""
 
 
-#: `sys.platform` value -> the phase that builds its injector.
-_INJECTORS: Final[dict[str, str]] = {"darwin": "Phase 2a"}
-
-
-def create_injector(platform: str | None = None) -> TextInjector:
+def create_injector(
+    config: InjectionConfig, platform: str | None = None
+) -> TextInjector:
     """Return the injector for this platform.
 
     `platform` defaults to `sys.platform` so that no production caller has to
     pass one; it is a parameter at all so the dispatch can be tested from any
-    machine.
+    machine — including the check that a Linux user gets a sentence rather
+    than an ImportError from a pyobjc that was never installed there.
+
+    The import is inside the function for that reason: `injection.macos` pulls
+    in bridges that do not exist off macOS, and a module-level import would
+    make this file unloadable on the platform it exists to give a good error
+    on.
     """
     target = platform if platform is not None else sys.platform
 
-    if target not in _INJECTORS:
+    if target not in _SUPPORTED:
         raise UnsupportedPlatformError(
             f"no text injector for platform {target!r}. Amanuensis supports "
             "macOS only in v1; Windows is post-v1 intent and Linux is a "
             "non-goal (PRD §3, §7.3)."
         )
 
-    raise NotImplementedError(
-        f"the {target!r} text injector is not implemented yet — it is built "
-        f"in {_INJECTORS[target]}. Phase 0 defines the contract only."
-    )
+    from amanuensis.injection.macos import MacOSInjector
+
+    return MacOSInjector(config)
