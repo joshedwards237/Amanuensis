@@ -22,13 +22,17 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
-# Phase 0 is scaffolding: contracts and toolchain. The heavy runtime
-# dependencies (faster-whisper, sounddevice, onnxruntime, rumps) arrive with
-# the phase that first needs them, so that `pip install -e .` stays fast and a
-# broken ASR wheel cannot block work on the CLI.
+# Dependencies arrive with the phase that first needs them, so that a broken
+# wheel for a later phase cannot block work on an earlier one. Phase 1 adds the
+# ASR path: `faster-whisper` (which brings CTranslate2 and, importantly, ships
+# the Silero VAD ONNX asset inside its own wheel — see audio/vad.py, that is a
+# G3 requirement and not a convenience) and `sounddevice` for microphone
+# capture. The tray toolkit still waits for Phase 4.
 dependencies = [
+    "faster-whisper>=1.1",
     "numpy>=1.24",
     "platformdirs>=4.0",
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +41,13 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.0",
     "ruff>=0.6",
+]
+# Benchmark-only. `useful-moonshine-onnx` exists so PRD §9's required
+# faster-whisper vs. Moonshine comparison can run; nothing under `src/` imports
+# it, and ADR 0001 records what it measured. Kept out of `dev` because a
+# contributor running the test suite should not pay for a second ASR runtime.
+bench = [
+    "useful-moonshine-onnx>=20251120",
 ]
 
 [project.scripts]
@@ -89,6 +100,20 @@ strict = true
 warn_unreachable = true
 disallow_any_generics = true
 files = ["src", "tests"]
+
+# Phase 1's runtime dependencies ship no type information — none of
+# faster-whisper, CTranslate2 or sounddevice carries a py.typed marker. The
+# choice is between this and eight `# type: ignore` comments scattered across
+# the four modules that touch them, which would suppress real errors in the
+# same breath. Scoped to the named packages so that an untyped import
+# appearing anywhere else still fails the gate.
+[[tool.mypy.overrides]]
+module = [
+    "ctranslate2.*",
+    "faster_whisper.*",
+    "sounddevice.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

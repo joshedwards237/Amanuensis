@@ -81,6 +81,40 @@
   property; that is what made the failures catchable at all. They turned silent corruption
   into a visible no-op.
 
+- **A PRD amendment that withdraws a number must reach the tooling that can
+  regenerate it.** §7.2 declared WER macro-average and withdrew a 14.8%
+  micro-average on 2026-07-31. `scripts/bench_engines.py` kept computing the
+  micro figure and printed **14.77%** into the file destined to become ADR 0001
+  — the withdrawn number, regenerated on demand, two months after its
+  withdrawal. Macro was 19.33%. Nothing in this project's process checks
+  tooling against amendments. Found 2026-08-01.
+
+- **A null measurement proves nothing until a positive control proves the
+  instrument works — per instrument.** The G3 check watches sockets *and*
+  bytes. Its first control fetched a URL and exited: the byte meter saw 869
+  bytes, and the socket poller reported **zero sockets on a run that had
+  certainly opened one**, because `lsof` samples every 250 ms and an HTTP round
+  trip closes faster. A clean socket count from the subject would have been
+  unearned. The control now holds the connection open and each instrument is
+  validated separately. This is the second gate in this repo that could have
+  passed by measuring nothing.
+
+- **Check which model a performance rule was measured on before inheriting it.**
+  §7.2's 1.8x `cpu_threads` penalty was measured on `distil-large-v3` — the
+  model the same revision rejected by ~7x. On `tiny.en`, the model it selects,
+  4 threads is 1.02x of the performance-core count and the optimum is 6-8,
+  *below* it. The E-core half of the rule survived and is worth more than
+  claimed (14 threads costs 2.08x). A rule and its evidence can outlive the
+  thing the evidence was about. Found 2026-08-01.
+
+- **A corpus can be unable to answer the question it looks built for.** §7.4
+  calls silence trimming the dominant latency lever; over the Phase 1 corpus it
+  removed **9%** and cost 30 ms p50, close to net-negative. The corpus was
+  recorded with `ffmpeg -t`, tightly cropped, with no dead air in it. Real
+  dictation has dead air — `manu transcribe` trimmed one 9.9 s capture to 2.0 s.
+  Nothing about the corpus signals the limit; it just quietly measures a
+  different thing.
+
 - **Freeze the input before comparing approaches.** `experiments/asr-baseline.json` holds
   the `tiny.en` transcripts once, so candidate post-processing approaches are compared on
   identical data rather than each re-running ASR and measuring its variance too.

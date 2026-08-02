@@ -289,8 +289,15 @@ binding = "right_option"
 
 [audio]
 device = "default"          # or a substring match on device name
-sample_rate = 16000
+sample_rate = 16000         # 16000 ONLY — see the note below the block
 max_duration_seconds = 300
+
+[vad]                       # added 2026-08-01, Phase 1. §7.4 specified Silero
+                            # trimming and §5.3 had no table for it.
+threshold = 0.5             # speech probability above which a frame is speech
+min_silence_duration_ms = 2000
+speech_pad_ms = 400         # defaults are the ones §7.2's figures were
+                            # measured under; changing one invalidates them
 
 [engine]
 backend = "faster_whisper"  # faster_whisper | moonshine | parakeet
@@ -324,6 +331,29 @@ retain = true               # false: the transcript is still written before
 retain_days = 30
 store_audio = false         # off by default; audio is the sensitive artifact
 ```
+
+**Two keys above are not the free choices they look like** (added 2026-08-01,
+Phase 1 findings 2 and 3).
+
+`[audio] sample_rate` accepts **16000 and nothing else**. Whisper's feature
+extractor consumes 16 kHz mono, and faster-whisper's Silero wrapper hardcodes a
+512-sample window — the 16 kHz frame size. The intersection of the two
+constraints is one value. It is rejected at load with both reasons named,
+rather than resampled somewhere unspecified.
+
+`[vad]` has **no `enabled` key**, and that absence is deliberate. §7.2 records
+that without trimming no candidate model passes G1's p95 at all, so an off
+switch would be a supported way to break a published guarantee — which is
+exactly what the bounded exception above refuses.
+
+That makes three instances of the exception across two phases, on a rule
+described as "otherwise absolute": persist-before-inject, `[vad] enabled`, and
+`[audio] sample_rate`. Phase 0's finding 5 predicted the accumulation. The rule
+is therefore restated as a shape rather than a list: **a key exists for every
+decision that could reasonably go either way, and a decision that a stated
+guarantee or an external library has already removed is not one of those.**
+Enumerating a fourth exception would be the wrong response to the next
+collision.
 
 ### 5.4 Feedback
 
@@ -513,18 +543,35 @@ class LatencyBreakdown:
     and fail unconditionally.
     """
     capture_ms: float = 0.0        # excluded from G1 — G1's clock starts at release
+    vad_ms: float = 0.0            # inside G1 — trimming happens after release
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
     inject_ms: float = 0.0
 
     @property
+    def asr_ms(self) -> float:
+        """vad + transcribe. The quantity §7.2's tier check bounds at 350/700."""
+
+    @property
     def g1_ms(self) -> float:
-        """transcribe + postprocess + inject. The number G1 is gated on."""
+        """asr + postprocess + inject. The number G1 is gated on."""
 
     @property
     def total_ms(self) -> float:
         """Every stage including capture. Diagnostics only — never assert G1 on this."""
 ```
+
+**`vad_ms` and `asr_ms` added 2026-08-01** (Phase 1 finding 1). §7.4 calls
+trimming "the dominant latency lever, not a free bonus" and moves it into
+Phase 1 because it changes what that gate measures — and this breakdown had
+nowhere to record it. G1's clock starts at hotkey release and trimming happens
+after release, so the cost is inside the gated number either way; the only
+question was whether it got its own field.
+
+Folding it into `transcribe_ms` would have buried the dominant lever inside the
+stage it exists to shrink, in the very structure G1 is defended with. `asr_ms`
+exists because §7.2's tier check runs "VAD on, matching runtime" and therefore
+bounds trim-plus-decode, a quantity no property expressed.
 
 **Abstract bases** define the swap points. The original rule — "every one of these
 exists because there is a real chance we replace the implementation, not for symmetry" —
@@ -950,9 +997,18 @@ and are labelled so.
 
 | Hardware | Model | 10 s transcribe | Basis |
 |---|---|---|---|
-| CUDA, ≥8 GB VRAM | `large-v3-turbo`, float16 | — | estimate, **unmeasured** |
-| CUDA, <8 GB VRAM | `distil-large-v3`, int8_float16 | — | estimate, **unmeasured** |
+| CUDA, ≥8 GB VRAM | `large-v3-turbo`, float16 | — | estimate, **unmeasured**, and **unimplementable as written** — see below |
+| CUDA, <8 GB VRAM | `distil-large-v3`, int8_float16 | — | estimate, **unmeasured**, and **unimplementable as written** |
 | macOS (all Macs) | **`tiny.en`, int8, VAD on** | **328 ms p50 / 420 ms p95** | *measured*, M3 Max, 6-sample corpus |
+
+**The two CUDA rows split on a quantity nothing here can measure** (added
+2026-08-01, Phase 1 finding 7). They key on VRAM, and neither CTranslate2 nor
+faster-whisper exposes it; the PRD names no other source. Both rows are already
+labelled unmeasured estimates and §3 makes macOS the only v1 platform, so this
+is a specification for zero users — but it cannot be implemented as written,
+and `engines/faster_whisper.py` collapses it to a single CUDA entry rather than
+inventing a VRAM probe. Resolve the split, or delete one row, before any phase
+claims CUDA support.
 
 **`tiny.en` replaced `base.en` on 2026-07-31 (objection A3), and VAD is part of
 the selection, not a separate setting.** The `base.en` row carried a measured
@@ -1000,6 +1056,41 @@ The first run of the pre-Phase-0 probe returned **NO-GO on that default**. The
 project's top risk (§10) would have fired on a library default rather than on
 physics.
 
+**The 1.8× does not transfer to the model this table selects** (revised
+2026-08-01, Phase 1 finding 4). Those figures are `distil-large-v3` — the model
+this same revision *rejected*, by a factor of roughly 7×. Swept on `tiny.en`
+over the Phase 1 corpus, 54 observations per point:
+
+| `cpu_threads` | ASR p50 | vs `auto` (10) |
+|---|---|---|
+| 2 | 365.9 ms | 1.36× |
+| 4 | 273.4 ms | **1.02×** |
+| 6 | 261.1 ms | 0.97× |
+| 8 | **235.9 ms** | **0.88×** |
+| 10 (`auto`) | 289.1 ms | 1.00× |
+| 14 | 559.1 ms | 2.08× |
+
+Confirmed on an independent run at 15 runs per sample: 8 threads at 0.83× of 10.
+
+Two things follow, and they point opposite ways.
+
+**The efficiency-core exclusion is confirmed, and is worth more than was
+claimed for it.** Handing the decoder all 14 cores costs **2.08×** — a larger
+penalty than the library default ever was. That half of the rule is right.
+
+**The library-default penalty is not real for `tiny.en`.** At 4 threads the
+model is within noise of the performance-core count, and the measured optimum
+is around 6–8 — *below* it. A model this small does not parallelise across ten
+threads well enough to pay the coordination.
+
+`cpu_threads = "auto"` is **unchanged** and still resolves to the
+performance-core count. Tuning it to 8 would be tuning to n=1 hardware, which
+is exactly what the exclusion-rule caveat below warns against, and 10 clears
+Tier A with 100 ms of G1 headroom. What changes is the argument: the rule is
+retained for the E-core exclusion it encodes, **not** for the library-default
+penalty it was originally argued from. Anyone re-deriving it from the 4,413 ms
+figure is re-deriving it from a rejected model.
+
 `cpu_threads = "auto"` resolves to the **performance-core count**, not the total
 core count and emphatically not the library default. Efficiency cores are
 deliberately excluded — scheduling inference across heterogeneous cores typically
@@ -1036,6 +1127,18 @@ backend, so it was never a reachable value.
 `TranscriptionEngine` is an ABC rather than a module of functions. Benchmark it in
 Phase 1 against `base.en` — not `small.en`, which the probe showed is 2.2× over
 budget — and record the result in an ADR.
+
+**Benchmarked and declined, 2026-08-01** (`docs/adr/0001-engine-selection.md`).
+`moonshine/tiny` is the fastest candidate measured — 163 ms p50 against
+`tiny.en`'s 278 ms — and every WER pair involving `tiny.en` is statistically
+indistinguishable on the Phase 1 corpus, so the rate could not decide it. The
+**error breakdown** did: Moonshine deletes 12–14 words where the faster-whisper
+models delete 2–7. A substituted word is wrong on screen and gets corrected; a
+deleted word is silent data loss in text the user has not read yet, which is
+the failure §8 exists to refuse. That is a claim about failure mode rather than
+rate, so the interval overlap does not touch it. Reconsider if G1 headroom
+becomes binding once §7.5 and §7.3 land — it buys 115 ms p50, more than the
+~50 ms this section budgeted for both.
 
 ### 7.3 Injection: clipboard paste, with a keystroke fallback
 
@@ -1433,6 +1536,14 @@ a `.get()` accessor (§6.3). All are mechanical; there is no judgment here.
 (§7.4), the install-time tier check (§7.2). No hotkey, no injection.
 `manu transcribe --seconds 10` records from the mic and prints the transcript plus timings.
 
+`manu install` too (added 2026-08-01, Phase 1 finding 6). §7.2 specifies the
+install-time check in six-parameter detail and says "re-running the install check
+is how it changes" — presuming a command that appeared nowhere in this document.
+It downloads the weights once and runs the timed check. Both verbs break Phase 0's
+claim that §6.1 fixes the verb set at four, and that claim survives for the reason
+it was made: neither talks to a daemon. `transcribe` is a one-shot diagnostic;
+`install` runs before a daemon exists.
+
 **Gate:** Report measured latency on your actual hardware against G1. Benchmark
 faster-whisper vs. Moonshine and write `docs/adr/0001-engine-selection.md`. **If G1 is
 missed here, stop and renegotiate §7.1 before continuing** — no later phase makes this faster.
@@ -1482,6 +1593,35 @@ whether any network traffic occurred. This is the earliest point a model loads, 
 therefore the earliest point a Hugging Face cache-miss fetch would fire. G3 is the
 goal that carries the product premise (§1) and until now no gate verified it.
 Confirm the model resolves from a local path, not a repository ID.
+
+> **CLOSED 2026-08-01 — PASS.** Record: `docs/gates/phase-1.md`. Decision:
+> `docs/adr/0001-engine-selection.md`.
+>
+> G1 met on the machine this phase was built on, measured through the product's
+> own classes rather than a throwaway script: ASR **p50 299.7 ms / p95 373.3 ms**
+> over 54 observations, against a 400/800 ms budget — 100 ms of p50 headroom for
+> post-processing and injection, twice what §7.2 budgeted. The corpus averages
+> 18.6 s per sample against a goal defined at 10 s, which biases the figure
+> against the product.
+>
+> **Tier A**, recorded: p50 258.4 ms / p95 385.6 ms on the install check.
+> "Tier B's number" was not fabricated — this machine does not miss 350/700, so
+> what is reported instead is the same measurement under a pinned
+> `cpu_threads = 4` (277.8 / 344.6 ms), labelled a simulated constraint rather
+> than a measured machine. A real Tier B number needs a real Tier B machine.
+>
+> **G3 verified for the first time.** Zero sockets and zero bytes for a full
+> transcribe cycle, against a positive control that opened one socket and moved
+> 866 bytes — the control is what makes the null result mean anything. The model
+> resolves to a local absolute directory, and with a cold cache `manu transcribe`
+> refuses and names `manu install` rather than downloading.
+>
+> **ADR 0001**: faster-whisper `tiny.en`. Moonshine benchmarked as required and
+> declined on its error breakdown, not its rate.
+>
+> Ten findings; four amended this document (§5.3 twice, §6.3, §7.2 twice, §9).
+> The largest: §7.2's 1.8× `cpu_threads` penalty was measured on a model §7.2
+> rejected and does not hold for the model it selects.
 
 ### Phase 2a — Text at the cursor, no hotkey yet
 
@@ -1805,6 +1945,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-01 | **Phase 1 gate findings applied.** §6.3's `LatencyBreakdown` gains **`vad_ms`** (inside `g1_ms` — G1's clock starts at hotkey release and trimming happens after it) and **`asr_ms`** (the quantity §7.2's tier check actually bounds). §5.3 gains a **`[vad]` table** and states that `[audio] sample_rate` accepts 16000 alone; with `[vad] enabled` deliberately absent, the bounded exception now has three instances in two phases and is restated as a shape rather than a list. §9's Phase 1 gains **`manu install`** — §7.2 specified an install check in six-parameter detail and named no way to run it. §7.2 records that its two CUDA rows split on VRAM with no stated way to measure it, and that Moonshine was benchmarked and declined on its error breakdown (ADR 0001). |
+| 2026-08-01 | **§7.2's 1.8× `cpu_threads` penalty corrected.** The 4,413 ms → 2,412 ms figures were measured on `distil-large-v3`, the model the same revision rejected by ~7×. Swept on `tiny.en` over the Phase 1 corpus, 4 threads is **1.02×** of the performance-core count and the optimum is around 6–8 — *below* it. The E-core exclusion is confirmed and is worth more than was claimed: 14 threads costs **2.08×**. `auto` is unchanged, because tuning to 8 would be tuning to n=1 hardware; what changed is the argument the rule rests on. |
 | 2026-07-31 | **A1 + A4 accepted.** Tier A is now an absolute measured bar — p50 ≤ 350 ms, p95 ≤ 700 ms on the transcription share, VAD on — rather than a restatement of G1, and §9's Phase 1 gate rejects on G1 missed on the machine the phase is built on, whatever tier it recorded. The previous wording defined Tier A by the same predicate its own gate tested, so §10's top risk had a mitigation with no reachable failing state and the real go/no-go had silently moved to Phase 2b. §7.2 also specifies the install check itself — audio, VAD state, warm-up, nine runs with p95, and the comparison basis — where it previously pointed at a deleted throwaway script. |
 | 2026-07-31 | **A2 accepted.** §9's Phase 5 is recorded as **unresolved and corpus-blocked**, not scheduled and not dead. Four approaches were measured against the frozen corpus and none improved WER on any sample; that result is inconclusive rather than negative, because every sample was read from a script and contains no disfluencies. The blocking unknown is stated as a question — do disfluencies survive the decoder — and the pre-failed 700 ms A/B gate is removed until there is something to gate. §7.5's claim that Phase 5 was deferred and nobody was building against it is corrected in place; both clauses were false when written. |
 | 2026-07-31 | **A3 accepted.** `model = "auto"` selects **`tiny.en`, int8, VAD on** at 328 ms p50 / 420 ms p95, in one collapsed macOS row. The `base.en` row carried a no-VAD figure from a single clip and contradicted §8, which already assumed `tiny.en`. The undefined "Apple Silicon / CPU" versus "Slower CPU" boundary is gone. WER is declared **macro-average** throughout and the 14.8% micro-weighted figure is withdrawn — the two differ by a third relative and were being used interchangeably across model-selection records. |

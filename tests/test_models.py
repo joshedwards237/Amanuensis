@@ -151,3 +151,40 @@ def test_permission_status_is_not_granted_until_every_permission_is() -> None:
     assert granted.granted
     assert not partial.granted
     assert "Accessibility" in partial.missing
+
+
+# --------------------------------------------------------------------------
+# vad_ms — added in Phase 1
+# --------------------------------------------------------------------------
+
+
+def test_vad_trimming_is_inside_the_gated_number() -> None:
+    """G1's clock starts at hotkey release (§2), and trimming happens after
+    release and before transcription. Folding it into `transcribe_ms` would
+    have hidden the *dominant* latency lever (§7.4) inside the stage it exists
+    to shrink, in the very breakdown G1 is defended with.
+    """
+    timings = LatencyBreakdown(
+        capture_ms=10_000.0,
+        vad_ms=18.0,
+        transcribe_ms=328.0,
+        postprocess_ms=12.0,
+        inject_ms=40.0,
+    )
+
+    assert timings.g1_ms == 398.0
+    assert timings.total_ms == 10_398.0
+
+
+def test_the_asr_stage_is_what_the_tier_check_compares(tmp_path: object) -> None:
+    """§7.2's 350/700 thresholds cover the ASR stage with VAD on — "a check run
+    in a configuration the product does not use measures nothing"."""
+    timings = LatencyBreakdown(vad_ms=18.0, transcribe_ms=328.0, inject_ms=40.0)
+
+    assert timings.asr_ms == 346.0
+
+
+def test_history_row_carries_the_trim_cost() -> None:
+    session = _session(timings=LatencyBreakdown(vad_ms=18.0, transcribe_ms=300.0))
+
+    assert session.to_history_row()["vad_ms"] == 18.0

@@ -13,18 +13,26 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 0 closed 2026-07-31. Phase 1 next.
+## Status: Phase 1 closed 2026-08-01. Phase 2a next.
 
-`src/amanuensis/` exists and holds **contracts only** — ABCs, the frozen
-`AppConfig`, the CLI skeleton, both platform factories. No engine, no injection,
-no hotkey listening, no post-processing. Every `manu` verb refuses and names the
-phase that builds it, which is the intended behaviour and not a bug to fix.
+The ASR path works. `manu install` downloads the model once and records this
+machine's tier; `manu transcribe --seconds 10` records from the microphone and
+prints the transcript with per-stage timings. `AudioCapture`,
+`VoiceActivityDetector`, `FasterWhisperEngine` and `tier.py` are real
+implementations. Everything else is still contracts — no hotkey, no injection,
+no post-processing, no history, no tray. `daemon`, `toggle`, `status` and
+`history` still refuse and name the phase that builds them, which is intended.
 
-The commands under "Build and Test" below all run. `docs/gates/phase-0.md` is the
-gate record; read it before adding to `src/`, because it lists what was
-deliberately *not* built and why.
+G1 is met: ASR p50 299.7 ms / p95 373.3 ms through the product classes, against
+400/800 ms. Tier A. G3 verified — zero sockets, zero bytes, positive control.
+Engine chosen in `docs/adr/0001-engine-selection.md`: faster-whisper `tiny.en`.
 
-**Stop at the Phase 1 gate.** Do not begin Phase 2a until Phase 1 is approved.
+`docs/gates/phase-1.md` is the gate record and lists ten findings, four of which
+amended the PRD. Read it before adding to `src/`. One item there blocks Phase 4:
+the tier check's reference clip has unsettled provenance and is not committed,
+so `manu install` needs `scripts/make_tier_clip.sh` or `--clip PATH` first.
+
+**Stop at the Phase 2a gate.** Do not begin Phase 2b until Phase 2a is approved.
 
 ---
 
@@ -139,8 +147,6 @@ amend) and push. Repeat until green.
 
 ## Build and Test
 
-*Phase 0 deliverables (PRD §9) — none of these run yet.*
-
     # Install (editable, with dev extras)
     pip install -e ".[dev]"
 
@@ -156,8 +162,13 @@ amend) and push. Repeat until green.
     # Format
     black src/ tests/
 
-    # Smoke check — Phase 0 gate
+    # Smoke check
     manu --help
+
+    # Phase 1 measurement harnesses (need the desk-mic corpus; see .gitignore)
+    python scripts/measure_g1.py --runs 9          # G1 through the product classes
+    python scripts/verify_g3.py                    # no network at runtime
+    python scripts/bench_engines.py --runs 9 --trim # engine comparison, ADR 0001
 
 ---
 

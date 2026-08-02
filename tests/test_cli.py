@@ -43,7 +43,7 @@ def test_the_four_verbs_from_the_process_model_all_parse(verb: str) -> None:
 
 def test_an_invented_verb_is_rejected() -> None:
     with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["transcribe"])
+        build_parser().parse_args(["dictate"])
 
     assert exc.value.code != 0
 
@@ -81,3 +81,52 @@ def test_a_bad_config_is_reported_as_an_error_not_a_traceback(
 
     assert exit_code != 0
     assert "hotkey.mode" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Phase 1's two new verbs
+# --------------------------------------------------------------------------
+#
+# The module preamble above says §6.1 fixes the verb set at four, and Phase 1
+# proves that wrong twice over: PRD §9 names `manu transcribe --seconds 10` as
+# a Phase 1 deliverable, and §7.2 specifies an install-time tier check without
+# naming any way to invoke it. Both are recorded in docs/gates/phase-1.md. The
+# §6.1 claim was about the *daemon's* process model, and neither of these verbs
+# talks to a daemon — `transcribe` is a one-shot diagnostic and `install` is a
+# setup step that runs before a daemon exists.
+
+
+@pytest.mark.parametrize("verb", ["transcribe", "install"])
+def test_the_phase_1_verbs_parse(verb: str) -> None:
+    assert build_parser().parse_args([verb]).verb == verb
+
+
+def test_transcribe_defaults_to_the_utterance_length_g1_is_defined_against() -> None:
+    """PRD §2 binds G1 to a ten-second utterance, so that is the default and
+    `--seconds` is how you depart from it."""
+    assert build_parser().parse_args(["transcribe"]).seconds == 10.0
+
+
+def test_transcribe_rejects_a_non_positive_duration(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["transcribe", "--seconds", "0"]) != 0
+    assert "seconds" in capsys.readouterr().err
+
+
+def test_install_can_skip_the_download_it_already_did() -> None:
+    """§7.2: model download is not part of the timed check. Re-running the
+    check to re-measure a tier should not re-fetch 75 MB of weights."""
+    assert build_parser().parse_args(["install", "--skip-download"]).skip_download
+
+
+def test_transcribe_reports_a_bad_config_as_a_sentence(
+    tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "config.toml"  # type: ignore[operator]
+    path.write_text("[vad]\nthreshold = 2.0\n")
+
+    exit_code = main(["--config", str(path), "transcribe"])
+
+    assert exit_code != 0
+    assert "vad.threshold" in capsys.readouterr().err

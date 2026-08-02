@@ -57,7 +57,9 @@ __all__ = [
     "InjectionConfig",
     "LLMConfig",
     "PostprocessConfig",
+    "VadConfig",
     "default_config_path",
+    "default_data_dir",
     "default_history_path",
     "load_config",
     "resolve_cpu_threads",
@@ -88,8 +90,31 @@ class HotkeyConfig:
 @dataclass(frozen=True, slots=True)
 class AudioConfig:
     device: str = "default"
+    #: 16000 is the only accepted value, despite §5.3 presenting the key as
+    #: free. Whisper consumes 16 kHz mono and Silero accepts 8 or 16 kHz; the
+    #: intersection is one number. See `_sample_rate` for the rejection.
     sample_rate: int = 16000
     max_duration_seconds: int = 300
+
+
+@dataclass(frozen=True, slots=True)
+class VadConfig:
+    """Silence trimming (§7.4). Added in Phase 1; §5.3 had no table for it.
+
+    Note what is absent: there is no `enabled`. §5.3's bounded exception —
+    behaviour a stated guarantee depends on is not user-settable — applies,
+    because G1 is unreachable without trimming (§7.2: without it no candidate
+    model passes p95 at all). A switch for turning it off would be a supported
+    way to break a published guarantee.
+
+    The defaults are Silero's, unchanged, because they are the configuration
+    the 328/420 ms figures in §7.2 were measured under. Changing one here would
+    silently invalidate the number the tier check compares against.
+    """
+
+    threshold: float = 0.5
+    min_silence_duration_ms: int = 2000
+    speech_pad_ms: int = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +174,7 @@ class HistoryConfig:
 class AppConfig:
     hotkey: HotkeyConfig = HotkeyConfig()
     audio: AudioConfig = AudioConfig()
+    vad: VadConfig = VadConfig()
     engine: EngineConfig = EngineConfig()
     postprocess: PostprocessConfig = PostprocessConfig()
     injection: InjectionConfig = InjectionConfig()
@@ -195,6 +221,27 @@ def _cpu_threads(value: Any) -> str | None:
     return None if value >= 1 else 'must be "auto" or a positive integer'
 
 
+#: The one rate Whisper and Silero both accept. Not a preference — Whisper's
+#: feature extractor is built for 16 kHz mono, and Silero ships 8 kHz and
+#: 16 kHz heads only. Accepting 44100 would resample somewhere unspecified and
+#: quietly change every timing in §7.2.
+SUPPORTED_SAMPLE_RATE: Final = 16000
+
+
+def _sample_rate(value: Any) -> str | None:
+    if value == SUPPORTED_SAMPLE_RATE:
+        return None
+    return (
+        f"must be {SUPPORTED_SAMPLE_RATE} — Whisper consumes 16 kHz mono and "
+        "Silero VAD accepts 8 or 16 kHz, so this is the only value the pipeline "
+        "supports end to end (§7.2, §7.4)"
+    )
+
+
+def _probability(value: Any) -> str | None:
+    return None if 0.0 <= value <= 1.0 else "must be between 0.0 and 1.0"
+
+
 _PROCESSORS: Final = ("rules", "vocabulary", "llm")
 
 
@@ -214,8 +261,13 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     },
     "audio": {
         "device": _Rule((str,)),
-        "sample_rate": _Rule((int,), _positive),
+        "sample_rate": _Rule((int,), _sample_rate),
         "max_duration_seconds": _Rule((int,), _positive),
+    },
+    "vad": {
+        "threshold": _Rule((float,), _probability),
+        "min_silence_duration_ms": _Rule((int,), _non_negative),
+        "speech_pad_ms": _Rule((int,), _non_negative),
     },
     "engine": {
         "backend": _Rule((str,), _one_of("faster_whisper", "moonshine", "parakeet")),
@@ -250,6 +302,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
 _TOP_LEVEL_TABLES: Final = (
     "hotkey",
     "audio",
+    "vad",
     "engine",
     "postprocess",
     "injection",
@@ -273,11 +326,21 @@ def default_config_path() -> Path:
     return base / "config.toml"
 
 
+def default_data_dir() -> Path:
+    """Where per-machine state lives — `history.db`, the recorded tier.
+
+    Split out from `default_history_path` in Phase 1, when the tier check
+    became the second thing that needs this directory. Resolving it twice by
+    copy-paste is how a `$AMANUENSIS_DATA_DIR` override ends up honoured by one
+    caller and not the other.
+    """
+    override = os.environ.get("AMANUENSIS_DATA_DIR")
+    return Path(override) if override else Path(platformdirs.user_data_dir(_APP_NAME))
+
+
 def default_history_path() -> Path:
     """Where `history.db` lives on this platform. See `default_config_path`."""
-    override = os.environ.get("AMANUENSIS_DATA_DIR")
-    base = Path(override) if override else Path(platformdirs.user_data_dir(_APP_NAME))
-    return base / "history.db"
+    return default_data_dir() / "history.db"
 
 
 def resolve_cpu_threads(value: int | str) -> int:
@@ -435,6 +498,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     config = AppConfig(
         hotkey=HotkeyConfig(**_collect("hotkey", raw.get("hotkey", {}), HotkeyConfig)),
         audio=AudioConfig(**_collect("audio", raw.get("audio", {}), AudioConfig)),
+        vad=VadConfig(**_collect("vad", raw.get("vad", {}), VadConfig)),
         engine=EngineConfig(**_collect("engine", raw.get("engine", {}), EngineConfig)),
         postprocess=PostprocessConfig(
             **_collect("postprocess", postprocess_raw, PostprocessConfig),
