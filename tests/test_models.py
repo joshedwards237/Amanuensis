@@ -188,3 +188,49 @@ def test_history_row_carries_the_trim_cost() -> None:
     session = _session(timings=LatencyBreakdown(vad_ms=18.0, transcribe_ms=300.0))
 
     assert session.to_history_row()["vad_ms"] == 18.0
+
+
+# --------------------------------------------------------------------------
+# persist_ms and engine — added in Phase 2a
+# --------------------------------------------------------------------------
+
+
+def test_the_pre_injection_write_is_inside_the_gated_number() -> None:
+    """Same argument as `vad_ms`, one phase later. §8 puts the history write
+    between transcription and injection, and G1's clock is already running —
+    it starts at hotkey release (§2). A stage inside the gated number with no
+    field to record into is a stage that cannot be defended when G1 is missed.
+
+    It is its own field rather than folded into `inject_ms` because the two
+    have different remedies: a slow write is a storage problem, a slow inject
+    is a target-application problem.
+    """
+    timings = LatencyBreakdown(
+        capture_ms=10_000.0,
+        vad_ms=18.0,
+        transcribe_ms=328.0,
+        postprocess_ms=12.0,
+        persist_ms=2.0,
+        inject_ms=40.0,
+    )
+
+    assert timings.g1_ms == 400.0
+    assert timings.total_ms == 10_400.0
+
+
+def test_the_write_cost_is_not_counted_against_the_tier_thresholds() -> None:
+    """§7.2's 350/700 bound trimming plus decoding. Persisting is neither, and
+    folding it in would move a machine's recorded tier for a reason that has
+    nothing to do with its ASR speed."""
+    timings = LatencyBreakdown(vad_ms=18.0, transcribe_ms=328.0, persist_ms=2.0)
+
+    assert timings.asr_ms == 346.0
+
+
+def test_history_row_names_the_engine_that_produced_the_transcript() -> None:
+    """§5.5 lists engine among what history stores. Without it a transcript
+    cannot be re-judged when the engine changes, which is the whole reason
+    ADR 0001 is revisitable."""
+    session = _session(engine="faster_whisper:tiny.en")
+
+    assert session.to_history_row()["engine"] == "faster_whisper:tiny.en"
