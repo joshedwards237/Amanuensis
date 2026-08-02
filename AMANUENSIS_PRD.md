@@ -1260,6 +1260,20 @@ The genuine gap between raw Whisper output and a polished dictation product is
 post-processing: punctuation, capitalization, spoken commands ("new paragraph"), filler
 removal.
 
+**Filler removal is already done upstream, measured 2026-08-02**
+(`docs/gates/phase5-disfluency.md`). Whisper emits no filled pauses at all —
+zero in 403 words of spontaneous speech, across three model sizes, with three
+verified by ear in the audio of one take. One of this list's four items is
+therefore not a gap on this engine. `[postprocess] strip_fillers` is kept
+because a future engine may be verbatim, but on Whisper output it operates on
+nothing and its "off by default, it is lossy" comment describes a risk that does
+not arise.
+
+The other three survive, and two now have a frequency rather than an assumption:
+over the same ten takes, **7 of 10** transcripts ended with no sentence-final
+punctuation and roughly ten spurious mid-sentence capitals appeared. Both are
+rule-shaped — which is the argument the next paragraph was already making.
+
 Start with deterministic rules. They are debuggable, instant, and cover most of the value.
 
 A local LLM pass (Qwen3-0.6B or similar via llama.cpp) can do what rules cannot — reflowing
@@ -1727,7 +1741,7 @@ the README that packet capture covers Amanuensis's own sockets only, and that
 transcripts transit the system clipboard by default where another process may capture
 them (§7.3). An unqualified "G3 verified" is the failure O12 described.
 
-### Phase 5 — LLM second pass — **UNRESOLVED, corpus-blocked** (2026-07-31)
+### Phase 5 — LLM second pass — **UNRESOLVED, no longer corpus-blocked** (2026-08-02)
 
 Deferred, then un-deferred, then measured and found not shippable — all on
 2026-07-31. This section records the state that survived the day, and it is
@@ -1765,6 +1779,37 @@ incapable of testing a disfluency remover, and reusing it here was the error.
 **The blocking unknown, stated as a question nobody has answered: do
 disfluencies survive the decoder?** It is untested. The claim that they do not
 appears in one experiment record and is an assertion, not a measurement.
+
+**Measured 2026-08-02** (`docs/gates/phase5-disfluency.md`). The corpus exists —
+10 takes of genuinely spontaneous speech — and the answer splits in two.
+
+**Filled pauses do not survive. Answered.** Zero "um"/"uh"/"er" in 403 words,
+identically across `tiny.en`, `base.en` and `small.en`. Verified by ear rather
+than inferred: the speaker counted **three audible "um"s** in `06-undecided`,
+which transcribed 56 words with none. Three model sizes across a 4× parameter
+range deleting them identically points at Whisper's training data, not at any
+parameter this project sets.
+
+**Self-corrections are still untested, and they are the half this section rests
+on.** "Disfluency" covers filled pauses *and* repairs — "let's meet Tuesday, no,
+Wednesday" — and the paragraph above about resolving self-corrections is about
+the second. The prompts elicited thinking under load, which produces filled
+pauses reliably and repairs barely: one repair marker in 403 words is not a
+sample. Nothing here says what the decoder does with them.
+
+**So three of the four approaches below were aimed at tokens the decoder had
+already removed**, and would have found nothing to do on a spontaneous corpus
+either. The earlier verdict — inconclusive because the corpus was scripted — was
+half wrong: the corpus was not the only reason those deletion mechanisms had
+nothing to delete. They sat downstream of a stage that had already done their
+job.
+
+**Closing it costs one targeted take**, roughly two minutes: deliberately
+self-correct a counted number of times, then check how many survive. The count
+has to be known in advance, because a repair — unlike "um" — is grammatical
+English and cannot be found in a transcript by pattern. "Let's meet Tuesday, no,
+Wednesday" and "let's meet Wednesday" are both fluent sentences, and only the
+speaker knows which was said.
 
 **Unblocked by:** 6–10 samples of genuinely spontaneous speech — thinking aloud,
 no script — transcribed with the selected model and VAD. No reference
