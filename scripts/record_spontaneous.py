@@ -57,6 +57,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 import wave
@@ -104,6 +105,14 @@ class Take:
     speak_seconds: float
     prompt: str
     why: str
+    #: Number of self-corrections the take is built to elicit. When set, the
+    #: script asks for the count actually produced and writes it beside the
+    #: audio. That count is ground truth and there is no substitute for it: a
+    #: repair is grammatical English, so unlike "um" it cannot be found in a
+    #: transcript by pattern. "Let\'s meet Tuesday, no, Wednesday" and "let\'s
+    #: meet Wednesday" are both fluent sentences, and only the speaker knows
+    #: which one was said.
+    expected_corrections: int | None = None
 
 
 #: Ten seconds of the room with nobody talking. Recorded first, because it is
@@ -203,6 +212,44 @@ TAKES: tuple[Take, ...] = (
         "What is the hardest unsolved part of this project? Do not prepare "
         "the answer.",
         "open-ended and unanswerable in one clean sentence",
+    ),
+    # ---------------------------------------------------------------------
+    # 11 and 12 are a different experiment and break rules 1 and 2 on purpose.
+    #
+    # Takes 1-10 answered whether FILLED PAUSES survive the decoder: they do
+    # not, zero in 403 words across three model sizes. But PRD §1 rests the
+    # product argument on SELF-CORRECTIONS — "a verbatim transcriber and a tool
+    # that resolves your self-corrections are different products" — and those
+    # are a different phenomenon that thinking-under-load barely produces. One
+    # repair marker in 403 words is not a sample.
+    #
+    # They are split by whether the correction carries a lexical marker,
+    # because that is the difference between a rule being possible and not.
+    # "Tuesday, no, Wednesday" contains a word a `RuleBasedPostProcessor` can
+    # match on. "Tuesday Wednesday" contains nothing at all — it is only a
+    # correction in context, and if the decoder drops those there is no
+    # deterministic path to recovering them. Running one mixed take would
+    # answer neither: half surviving would not say which half.
+    # ---------------------------------------------------------------------
+    Take(
+        "11-repairs-marked",
+        30,
+        "Leave a voicemail rescheduling a meeting. Get every detail WRONG "
+        "first, then correct yourself out loud using a marker word — 'no', "
+        "'sorry', 'I mean', 'actually'. Cover four things: the day, the time, "
+        "the place, and one person's name. Four corrections.",
+        "marked repairs — a rule could match the marker, if it survives",
+        expected_corrections=4,
+    ),
+    Take(
+        "12-repairs-bare",
+        30,
+        "Same voicemail, different meeting. Four corrections again — but with "
+        "NO marker word. Say the wrong thing then immediately the right thing, "
+        "nothing in between: 'meet Tuesday Wednesday at four five o\'clock'. "
+        "It will feel unnatural. Bare repairs sound like that.",
+        "unmarked repairs — only recoverable from context, if at all",
+        expected_corrections=4,
     ),
 )
 
@@ -329,6 +376,16 @@ def countdown(label: str, seconds: float) -> None:
 def record_take(take: Take, capture: object, sample_rate: int) -> NDArray[np.float32]:
     """Record one take, narrating the silence-speak-silence structure live."""
     print()
+    if take.expected_corrections is not None:
+        # Rules 1 and 2 are suspended here, and saying so matters: a speaker
+        # who obeyed "do not prepare" on this take would produce an uncounted
+        # number of corrections, and the count is the entire measurement.
+        print("  *** THIS TAKE BREAKS RULES 1 AND 2. ***")
+        print("  Rule 1 (do not prepare) is OFF: you must know your four facts")
+        print("  before you start, or the count means nothing. Plan the FACTS,")
+        print("  never the wording.")
+        print("  Rule 2 (do not redo) is OFF: if you lose count, redo it.")
+        print()
     print(f"  PROMPT: {take.prompt}")
     print(f"  ({take.why})")
     print()
@@ -448,6 +505,32 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             path = args.out / f"{take.slug}.wav"
             write_wav(path, audio, audio_config.sample_rate)
+
+            if take.expected_corrections is not None:
+                # Asked immediately, while the take is still in memory. Asked
+                # at all because this is the one measurement in the corpus that
+                # cannot be recovered from the audio by any tool — it needs the
+                # speaker's own count, and it needs it now rather than later.
+                actual = input(
+                    f"  How many corrections did you actually make? "
+                    f"[{take.expected_corrections}] "
+                ).strip()
+                count = int(actual) if actual.isdigit() else take.expected_corrections
+                sidecar = path.with_suffix(".corrections.json")
+                sidecar.write_text(
+                    json.dumps(
+                        {
+                            "take": take.slug,
+                            "corrections": count,
+                            "marked": "marked" in take.slug,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                print(f"  ground truth: {count} corrections -> {sidecar.name}")
+
             kept.append(path.name)
             print(f"  wrote {path}")
             break
