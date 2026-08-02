@@ -1,8 +1,9 @@
 # Do disfluencies survive the decoder?
 
 **Measured 2026-08-02.** Apple M3 Max, macOS 27.0, faster-whisper 1.2.1.
-Corpus: `tests/fixtures/spontaneous/`, 10 takes, 403 transcribed words,
-recorded with `scripts/record_spontaneous.py`. One speaker.
+Corpus: `tests/fixtures/spontaneous/` — 10 spontaneous takes (403 transcribed
+words) plus 2 targeted repair takes carrying a speaker-declared ground-truth
+count. Recorded with `scripts/record_spontaneous.py`. One speaker.
 
 PRD §9's Phase 5 named this as the blocking unknown, in those words:
 
@@ -10,7 +11,11 @@ PRD §9's Phase 5 named this as the blocking unknown, in those words:
 > disfluencies survive the decoder?** It is untested. The claim that they do not
 > appears in one experiment record and is an assertion, not a measurement.
 
-It is now a measurement, and the answer splits in two.
+It is now a measurement, and the answer splits in two — **in opposite
+directions**. The decoder deletes filled pauses and preserves self-corrections
+verbatim. Reading one result as though it settled both was one sentence away
+from happening, and would have retired Phase 5 on evidence about the wrong
+phenomenon.
 
 ---
 
@@ -37,36 +42,104 @@ This is not a `tiny.en` artefact. Three model sizes, spanning a 4× parameter
 range, delete them identically — consistent with Whisper's training data being
 cleaned transcripts rather than with any decoding parameter this project sets.
 
-## Self-corrections: **not answered, and this is the half that matters**
+## Self-corrections: **yes, they survive — every one of them.** Answered 2026-08-02.
 
-The distinction was nearly lost, so it is stated plainly. "Disfluency" covers at
-least two things:
+Two targeted takes, four corrections each, count declared by the speaker before
+transcription and stored in `*.corrections.json`. **8 of 8 survive, in all three
+models.** The contrast with filled pauses could not be sharper: the decoder
+deletes "um" and preserves repairs verbatim.
 
-- **Filled pauses** — "um", "uh", "er". Measured above. Deleted.
-- **Self-corrections** — "let's meet Tuesday, no, Wednesday." **Untested.**
+### Marked repairs — survive with their markers intact
 
-PRD §1 and §9 rest the entire product argument on the *second* one:
+`11-repairs-marked`, `small.en`, corrections in **bold**:
+
+> Hey, it's Josh. I need to move our meeting. Can we do it on Tuesday?
+> **Actually no** Wednesday Wednesday at 3 o'clock **wait, no, no,** I'll make
+> that 4 o'clock and do it in the big conference room **Actually, no,** I want
+> the small conference room and make sure to bring in Sarah **Actually, no, no,**
+> we need Rachel Rachel's the one who needs to be there
+
+4 / 4, and the marker word reaches the text every time. That is the whole
+question for the deterministic path: a `RuleBasedPostProcessor` can match
+*actually no* / *wait no* / *I mean* and discard the candidate before it.
+
+### Bare repairs — survive too, as adjacent pairs with no cue at all
+
+`12-repairs-bare`, `small.en`:
+
+> Hey, it's Josh moving our meeting. Can we do **Tuesday Wednesday** Wednesday
+> at **four? Five** o'clock. Let's use the **small Big** conference room and
+> bring **Sarah Rachel** with you
+
+4 / 4 again. The decoder transcribes them faithfully and adds nothing — which
+is exactly the problem, because there is no lexical signal to key on.
+
+### This is where the work divides, and the division is now measured
+
+**Marked repairs are rule-tractable.** The marker is a token, tokens are
+matchable, and the fix is deterministic, instant and debuggable — PRD §7.5's
+"start with deterministic rules" applied to a case that has now been shown to
+reach the rules. Phase 3.
+
+**Bare repairs are not, and no rule can be written for them.** "the small big
+conference room" is a repair; "the big red ball" is two adjectives; "Sarah
+Rachel" is a repair, and someone's double-barrelled name. Nothing distinguishes
+them but meaning. A pattern that deleted the first of every adjacent pair would
+corrupt correct transcripts to fix incorrect ones.
+
+**That is the first measured justification for Phase 5 this project has.** The
+LLM pass was un-deferred on an argument about product parity (§1) and then
+failed its own latency and WER gates. It now has something a rule provably
+cannot do, on the axis §1 actually names. Whether it can do it inside 700 ms and
+without the catastrophic behaviour recorded in `phase5-feasibility.md` remains
+completely untested — this establishes the need, not the solution.
+
+## A risk this raises for ADR 0001
+
+`tiny.en` mangled one of the four markers: where `base.en` and `small.en` both
+render *"wait, no, no, I'll make that 4 o'clock"*, `tiny.en` produced *"wait in
+the middle I make that four o'clock"*. 1 of 4 against 0 of 4 and 0 of 4.
+
+That is n=4 and not a finding. But it lands in a bad place: the marker tokens
+are precisely what the deterministic path depends on matching, so `tiny.en`'s
+accuracy deficit is not evenly spread — it falls on the words the cheap fix
+needs. ADR 0001 selected `tiny.en` knowing it had the worst accuracy of the
+faster-whisper candidates and betting post-processing would close the gap. This
+is a mechanism by which that bet could fail specifically rather than generally.
+
+**Not enough to reopen the ADR.** Enough to measure deliberately in Phase 3:
+marker-token recall by model, over more than four instances. If `tiny.en` drops
+one marker in four, the rules processor inherits that miss rate directly.
+
+## Superseded: how this gap was stated before takes 11 and 12
+
+Kept because the framing was the useful part, and because it was nearly missed.
+
+"Disfluency" covers at least two phenomena, and this record originally treated
+the first as though it answered both:
+
+- **Filled pauses** — "um", "uh", "er". Deleted by the decoder.
+- **Self-corrections** — "let's meet Tuesday, no, Wednesday." Preserved verbatim.
+
+They behave in *opposite* directions, and PRD §1 rests the product argument on
+the second:
 
 > a verbatim transcriber and a tool that **resolves your self-corrections** are
 > different products, and a user comparing them will not grade on the
 > distinction.
 
-Nothing in this corpus establishes what happens to those. The prompts were
-built to elicit *thinking under load*, which reliably produces filled pauses,
-and they were not built to elicit corrections — the speaker had no reason to
-say a wrong thing and take it back. There is one repair marker in 403 words,
-which is not a sample.
+Takes 1–10 answered only the first, because prompts that elicit thinking under
+load produce filled pauses reliably and repairs barely — one repair marker in
+403 words. Reading "disfluencies do not survive" off that corpus and concluding
+Phase 5 had nothing to do would have been wrong, and it was one sentence away.
+Takes 11 and 12 exist because the two words were separated in time.
 
-Two suggestive artefacts, both from `06-undecided`, neither conclusive:
-mid-sentence capitals appear where a restart plausibly was (`...for both Like
-she's...`, `...character And I've...`), which is what a segment boundary looks
-like when the decoder split on a hesitation it then declined to transcribe.
-That is a hypothesis, not a result — nobody has the ground truth for those
-moments.
-
-**So Phase 5's status changes but does not resolve.** It was blocked on "do
-disfluencies survive". Half of that is now answered negatively, and the
-answered half is the half Phase 5 was *least* needed for.
+One hypothesis from that period is now resolved: mid-sentence capitals in
+`06-undecided` (`...for both Like she's...`) were guessed to be segment
+boundaries where the decoder split on a hesitation it declined to transcribe.
+Takes 11 and 12 show the same capitalisation appearing around *preserved*
+repairs (`the small Big conference room`), so the capital marks a boundary the
+decoder found — not evidence of something it removed.
 
 ## What this does to the earlier Phase 5 result
 
@@ -115,19 +188,21 @@ model. That is Phase 3's `RuleBasedPostProcessor`, not Phase 5.
   not tested for this), but its default of `false` is currently a no-op either
   way, and the comment "off by default, it is lossy" describes a risk that does
   not arise.
-- **§9's Phase 5 is no longer corpus-blocked.** The corpus exists and answered
-  what it could. What remains is a narrower and much cheaper question.
+- **§9's Phase 5 is no longer corpus-blocked, and its justification is now
+  measured rather than argued.** Bare repairs reach the transcript and no rule
+  can resolve them. What remains open is whether anything can, inside 700 ms —
+  which is the question `phase5-feasibility.md` answered badly once already.
 
-## What would close it
+## What would close what remains
 
-One targeted take, roughly two minutes: the speaker deliberately self-corrects
-several times, counts them, and reports the count. Then check how many survive.
+The decoder question is answered in both directions and needs no more takes.
+Two things are open and neither is about the decoder:
 
-That is a different experiment from this one and it needs the count in advance,
-because self-corrections — unlike "um" — are grammatical English and cannot be
-found in a transcript by pattern. "Let's meet Tuesday, no, Wednesday" and "let's
-meet Wednesday" are both fluent sentences. Only the speaker knows which one they
-said.
+1. **Can anything resolve a bare repair inside 700 ms?** That is Phase 5's real
+   question and it is untouched. This record establishes that a rule cannot,
+   which is the part that was previously assumed.
+2. **Marker-token recall by model**, over more than four instances — see the
+   ADR 0001 risk above.
 
 ## Limits
 
