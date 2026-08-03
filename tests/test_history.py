@@ -33,6 +33,7 @@ before the user has seen it — retained for thirty days by default.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sqlite3
@@ -397,3 +398,70 @@ def test_the_sweep_ignores_files_it_did_not_write(tmp_path: Path) -> None:
 
     assert stranger.exists()
     assert result.removed == 1
+
+
+def test_every_latency_field_has_a_column(tmp_path: Path) -> None:
+    """§5.5 says history stores the latency breakdown. All of it.
+
+    Found by reading a real row at the Phase 2b gate: `restore_ms` was added to
+    `LatencyBreakdown` in Phase 2a — as that phase's headline finding — and the
+    schema never grew a column for it, so `to_history_row()` emitted it and
+    `_insert` silently dropped it. Asserted structurally rather than by naming
+    the field, because the failure was a list that stopped being checked
+    against the dataclass, and naming one more field would not fix that.
+
+    This is the second instance of AGENTS.md's "an amendment must reach the
+    tooling that can regenerate it".
+    """
+    store = _store(tmp_path)
+    store.write_pending(_session())
+
+    columns = set(_rows(store.db_path)[0].keys())
+    for field in dataclasses.fields(LatencyBreakdown):
+        assert field.name in columns, f"LatencyBreakdown.{field.name} has no column"
+
+
+def test_the_restore_is_persisted_so_the_exposure_window_can_be_read(
+    tmp_path: Path,
+) -> None:
+    """`restore_ms` is outside G1 and still worth storing: it is how long the
+    transcript sat on the system clipboard, which §7.3 argues about at length
+    and Phase 2a measured against a real clipboard manager."""
+    store = _store(tmp_path)
+    session = _session(timings=LatencyBreakdown(restore_ms=155.1))
+
+    store.write_pending(session)
+
+    assert _rows(store.db_path)[0]["restore_ms"] == pytest.approx(155.1)
+
+
+def test_an_older_database_gains_the_missing_column(tmp_path: Path) -> None:
+    """A schema that only ever runs `CREATE TABLE IF NOT EXISTS` cannot add a
+    column to a database that already exists — which is every database
+    belonging to anyone who used the previous version."""
+    store = _store(tmp_path)
+    store.write_pending(_session())
+    connection = sqlite3.connect(store.db_path)
+    connection.execute("ALTER TABLE transcripts DROP COLUMN restore_ms")
+    connection.commit()
+    connection.close()
+
+    store.write_pending(_session(id="second"))
+
+    assert "restore_ms" in _rows(store.db_path)[0].keys()
+
+
+def test_marking_injected_records_the_restore_as_well(tmp_path: Path) -> None:
+    """`restore_ms` is zero at write time for the same structural reason
+    `inject_ms` is — the restore has not happened yet. Completing the row
+    without it would store a permanent zero and make the clipboard-exposure
+    window unreadable from history, which is the one thing it is stored for."""
+    store = _store(tmp_path)
+    session = _session()
+
+    store.write_pending(session)
+    session.timings.inject_ms = 22.0
+    session.timings.restore_ms = 155.1
+    store.mark_injected(session)
+
+    assert _rows(store.db_path)[0]["restore_ms"] == pytest.approx(155.1)

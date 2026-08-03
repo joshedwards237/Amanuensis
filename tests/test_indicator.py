@@ -83,6 +83,18 @@ class _FakeAppKit:
 
         self.NSApplication = NSApplication
         self.NSApplicationActivationPolicyAccessory = 1
+        self.NSEventTypeApplicationDefined = 15
+        self.posted: list[dict[str, Any]] = []
+
+        class NSEvent:
+            @staticmethod
+            def otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(  # noqa: E501
+                event_type: int, *_rest: Any
+            ) -> str:
+                return f"event-{event_type}"
+
+        self.NSEvent = NSEvent
+        self.NSMakePoint = staticmethod(lambda x, y: (x, y))
 
     # -- the shared application ------------------------------------------
 
@@ -94,6 +106,34 @@ class _FakeAppKit:
 
     def stop_(self, _sender: Any) -> None:
         self.stops += 1
+
+    def postEvent_atStart_(self, event: Any, at_start: bool) -> None:
+        self.posted.append({"event": event, "at_start": at_start})
+
+
+class _FakeFoundation:
+    def __init__(self, queue: Any) -> None:
+        self._queue = queue
+        self.timers: list[dict[str, Any]] = []
+        outer = self
+
+        class NSTimer:
+            @staticmethod
+            def scheduledTimerWithTimeInterval_repeats_block_(
+                interval: float, repeats: bool, block: Any
+            ) -> str:
+                outer.timers.append(
+                    {"interval": interval, "repeats": repeats, "block": block}
+                )
+                return "timer"
+
+        class NSOperationQueue:
+            @staticmethod
+            def mainQueue() -> Any:
+                return queue
+
+        self.NSTimer = NSTimer
+        self.NSOperationQueue = NSOperationQueue
 
 
 class _FakeMainQueue:
@@ -116,9 +156,11 @@ class _FakeMainQueue:
 def appkit(monkeypatch: pytest.MonkeyPatch) -> _FakeAppKit:
     fake = _FakeAppKit()
     queue = _FakeMainQueue()
+    foundation = _FakeFoundation(queue)
     monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
-    monkeypatch.setattr(indicator_module, "_main_queue", lambda: queue)
+    monkeypatch.setattr(indicator_module, "_foundation", lambda: foundation)
     fake.queue = queue  # type: ignore[attr-defined]
+    fake.timers = foundation.timers  # type: ignore[attr-defined]
     return fake
 
 
@@ -234,3 +276,48 @@ def test_stop_ends_the_run_loop(appkit: _FakeAppKit) -> None:
     made.stop()
 
     assert appkit.stops == 1
+
+
+def test_stop_wakes_a_loop_with_no_events_to_dequeue(appkit: _FakeAppKit) -> None:
+    """Found by running it, not by reading about it.
+
+    `NSApplication.stop_` does not end the loop; it sets a flag that is checked
+    the next time the loop *dequeues an event*. An idle dictation daemon has no
+    events — nothing is clicked, nothing is dragged — so Ctrl-C and SIGTERM
+    both did exactly nothing, and the only way to stop a process holding the
+    microphone was `kill -9`.
+
+    Posting a synthetic application-defined event is the documented idiom for
+    this, and `atStart=True` puts it at the head of the queue so the flag is
+    seen on the very next pass.
+    """
+    made = RecordingIndicator()
+    made.show()
+    made.stop()
+
+    assert appkit.stops == 1
+    assert appkit.posted, "stop() must post an event or the loop never notices"
+    assert appkit.posted[-1]["at_start"] is True
+
+
+def test_run_installs_a_timer_so_python_can_run(appkit: _FakeAppKit) -> None:
+    """Without this, Ctrl-C does not work. Found by running it.
+
+    CPython executes a signal handler between bytecodes on the main thread —
+    and the main thread is blocked inside `NSApplication.run()`, which is a C
+    call that does not return until the loop ends. So SIGINT and SIGTERM are
+    recorded and never delivered: the handler that would stop the daemon
+    cannot run until the daemon has already stopped.
+
+    A repeating timer with a Python callback breaks the deadlock by returning
+    to the interpreter on every tick, which is where the pending handler
+    finally runs. The interval is a latency/wakeup trade and is deliberately
+    short — this is the only way to stop a process that holds the microphone.
+    """
+    made = RecordingIndicator()
+    made.show()
+    made.run()
+
+    assert appkit.timers, "run() must yield to the interpreter or Ctrl-C is dead"
+    assert appkit.timers[-1]["repeats"] is True
+    assert appkit.timers[-1]["interval"] <= 0.5

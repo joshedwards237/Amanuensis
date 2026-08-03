@@ -123,6 +123,7 @@ _COLUMNS: Final = (
     "postprocess_ms",
     "persist_ms",
     "inject_ms",
+    "restore_ms",
 )
 
 _SCHEMA: Final = """
@@ -139,9 +140,36 @@ CREATE TABLE IF NOT EXISTS transcripts (
     postprocess_ms   REAL    NOT NULL DEFAULT 0,
     persist_ms       REAL    NOT NULL DEFAULT 0,
     inject_ms        REAL    NOT NULL DEFAULT 0,
+    restore_ms       REAL    NOT NULL DEFAULT 0,
     injected         INTEGER NOT NULL DEFAULT 0
 )
 """
+
+
+#: Columns added after the first release of the schema, with the DDL that adds
+#: them. `CREATE TABLE IF NOT EXISTS` cannot widen a table that already exists,
+#: which is every table belonging to anyone who has already used the product —
+#: so a new field in `LatencyBreakdown` needs a row here as well as a line in
+#: `_SCHEMA`, or it lands only for users with no history.
+#:
+#: `restore_ms` is the first entry and is here because it was missed: Phase 2a
+#: added the field as that phase's headline finding and the schema never grew
+#: the column, so `to_history_row()` emitted the value and `_insert` dropped
+#: it. Found by reading a real row at the Phase 2b gate.
+_MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "restore_ms",
+        "ALTER TABLE transcripts ADD COLUMN restore_ms REAL NOT NULL DEFAULT 0",
+    ),
+)
+
+
+def _add_missing_columns(connection: sqlite3.Connection) -> None:
+    """Widen an existing table to the current schema. Idempotent."""
+    present = {row[1] for row in connection.execute("PRAGMA table_info(transcripts)")}
+    for column, statement in _MIGRATIONS:
+        if column not in present:
+            connection.execute(statement)
 
 
 class HistoryStore:
@@ -256,10 +284,16 @@ class HistoryStore:
         with self._transaction() as connection:
             connection.execute(
                 "UPDATE transcripts SET injected = 1, persist_ms = ?, "
-                "inject_ms = ?, postprocess_ms = ? WHERE id = ?",
+                "inject_ms = ?, restore_ms = ?, postprocess_ms = ? WHERE id = ?",
                 (
                     timings.persist_ms,
                     timings.inject_ms,
+                    # Zero at write time for the same structural reason
+                    # `inject_ms` is: the restore has not happened yet. It is
+                    # outside G1 and still stored, because it is how long the
+                    # transcript sat on the system clipboard — the exposure
+                    # §7.3 argues about and Phase 2a measured.
+                    timings.restore_ms,
                     timings.postprocess_ms,
                     session.id,
                 ),
@@ -300,6 +334,7 @@ class HistoryStore:
             self.db_path.touch(mode=_FILE_MODE)
         connection = sqlite3.connect(self.db_path)
         connection.execute(_SCHEMA)
+        _add_missing_columns(connection)
         return connection
 
     # -- retain = false ----------------------------------------------------

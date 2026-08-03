@@ -417,7 +417,8 @@ def _daemon(config: AppConfig) -> int:
     if swept.removed or swept.remaining:
         print(
             f"pending transcripts: {swept.removed} expired, "
-            f"{swept.remaining} still recoverable in {history.pending_dir}"
+            f"{swept.remaining} still recoverable in {history.pending_dir}",
+            flush=True,
         )
 
     if config.postprocess.chain:
@@ -472,7 +473,10 @@ def _daemon(config: AppConfig) -> int:
     signal.signal(signal.SIGINT, lambda *_: indicator.stop())
     signal.signal(signal.SIGTERM, lambda *_: indicator.stop())
 
-    print(f"listening — hold {config.hotkey.binding} to dictate. Ctrl-C to stop.")
+    print(
+        f"listening — hold {config.hotkey.binding} to dictate. Ctrl-C to stop.",
+        flush=True,
+    )
     indicator.show()
     try:
         indicator.run()

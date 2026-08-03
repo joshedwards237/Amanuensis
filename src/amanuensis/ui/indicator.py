@@ -39,6 +39,13 @@ from amanuensis.controllers.dictation_controller import DictationState
 
 __all__ = ["GLYPHS", "RecordingIndicator"]
 
+#: How often the run loop hands control back to Python. This is the *only*
+#: thing that lets a signal handler run while the daemon is idle, so it is a
+#: liveness knob rather than a performance one — see `run`. Four wakeups a
+#: second on an otherwise sleeping process is not a cost worth optimising
+#: against the ability to stop a process that holds the microphone.
+_WAKEUP_INTERVAL_S: Final = 0.25
+
 #: One per §5.4 state. Chosen to be distinguishable at a glance and in
 #: monochrome — the menu bar is rendered in the system's accent-free style and
 #: a colour-only distinction would be invisible to a substantial fraction of
@@ -72,11 +79,16 @@ def _appkit() -> Any:
     return AppKit
 
 
-def _main_queue() -> Any:
-    """The main thread's operation queue. The only safe route into AppKit."""
+def _foundation() -> Any:
+    """Import Foundation at the point of use. `NSTimer` and the main queue."""
     import Foundation
 
-    return Foundation.NSOperationQueue.mainQueue()
+    return Foundation
+
+
+def _main_queue() -> Any:
+    """The main thread's operation queue. The only safe route into AppKit."""
+    return _foundation().NSOperationQueue.mainQueue()
 
 
 class RecordingIndicator:
@@ -135,11 +147,47 @@ class RecordingIndicator:
         appkit = _appkit()
         app = appkit.NSApplication.sharedApplication()
         app.setActivationPolicy_(appkit.NSApplicationActivationPolicyAccessory)
+        # Without this timer, Ctrl-C does not work. CPython runs a signal
+        # handler between bytecodes on the main thread, and the main thread is
+        # about to block inside `run()` — a C call that does not return until
+        # the loop ends. SIGINT would be recorded and never delivered: the
+        # handler that stops the daemon cannot run until the daemon has
+        # stopped. Every tick returns to the interpreter, which is where the
+        # pending handler finally runs.
+        _foundation().NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+            _WAKEUP_INTERVAL_S, True, lambda _timer: None
+        )
         app.run()
 
     def stop(self) -> None:
-        """Ask the AppKit loop to end. Returns immediately."""
-        _appkit().NSApplication.sharedApplication().stop_(None)
+        """Ask the AppKit loop to end. Returns immediately.
+
+        **`stop_` alone does not end the loop.** It sets a flag that
+        `NSApplication` checks the next time it *dequeues an event* — and an
+        idle dictation daemon has no events, because nothing is being clicked
+        or dragged. Found by running it: Ctrl-C and SIGTERM both did exactly
+        nothing, and the only way to stop a process holding the microphone was
+        `kill -9`. That is §5.4's ambiguity with the escape hatch removed.
+
+        Posting a synthetic application-defined event is the documented fix.
+        `atStart=True` puts it at the head of the queue so the flag is seen on
+        the very next pass rather than behind whatever else is waiting.
+        """
+        appkit = _appkit()
+        app = appkit.NSApplication.sharedApplication()
+        app.stop_(None)
+        wake = appkit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(  # noqa: E501
+            appkit.NSEventTypeApplicationDefined,
+            appkit.NSMakePoint(0, 0),
+            0,
+            0.0,
+            0,
+            None,
+            0,
+            0,
+            0,
+        )
+        app.postEvent_atStart_(wake, True)
 
     def _draw(self, state: DictationState) -> None:
         """Touch the status item. Main thread only — see `set_state`."""
