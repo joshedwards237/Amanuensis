@@ -231,10 +231,17 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
             print(f"manu transcribe: {status.remediation}", file=sys.stderr)
             return _EXIT_ERROR
 
-        warning = _clipboard_warning(config.injection, detect_clipboard_manager())
-        if warning is not None:
-            print(warning, file=sys.stderr)
-            print(file=sys.stderr)
+        # Each strategy has a stated cost and each cost gets surfaced. The
+        # symmetry is the point: a user who switched to `keystroke` to escape
+        # the clipboard exposure should not discover the substitution problem
+        # from their own transcript.
+        for warning in (
+            _clipboard_warning(config.injection, detect_clipboard_manager()),
+            _keystroke_warning(config.injection),
+        ):
+            if warning is not None:
+                print(warning, file=sys.stderr)
+                print(file=sys.stderr)
 
         history = HistoryStore(config.history)
 
@@ -417,6 +424,48 @@ def _clipboard_warning(
         "  This is the manager working correctly, not a bug (§7.3). Use "
         '[injection] strategy =\n  "keystroke" to avoid it, or '
         "warn_on_clipboard_manager = false to silence this."
+    )
+
+
+def _keystroke_warning(config: InjectionConfig) -> str | None:
+    """What `strategy = "keystroke"` costs, measured rather than assumed.
+
+    §7.3 offers this strategy to users who cannot accept the clipboard
+    exposure, and states its cost as being slower and more failure-prone. The
+    Phase 2a gate measured a third cost that is larger than both: **synthetic
+    keystrokes are subject to the target application's text substitution.**
+    Into TextEdit,
+
+        don't use --dashes... "quoted" and i said so
+
+    arrives as
+
+        don't use —dashes… "quoted" and I said so
+
+    Five changes — smart quotes twice, an em dash, an ellipsis, and an
+    autocapitalised "i". Pasting the identical string is byte-identical.
+
+    Nothing in Amanuensis can reach into another application's substitution
+    settings, so this cannot be fixed here; it can only be said. It lands on
+    §4's privacy-motivated primary user, who is precisely the person this
+    strategy exists for, and it undercuts §1's claim to produce the text the
+    user meant — a tool that resolves your self-corrections and then rewrites
+    your punctuation has moved the problem rather than solved it.
+    """
+    if config.strategy != "keystroke":
+        return None
+
+    return (
+        "keystroke strategy: the target application may rewrite what is typed.\n"
+        "  macOS text substitution — smart quotes, em dashes, ellipses, "
+        "autocapitalisation —\n"
+        "  applies to synthetic keystrokes as it does to real ones, and "
+        "Amanuensis cannot\n"
+        "  turn it off in another application. Measured into TextEdit: five "
+        "substitutions\n"
+        "  in one sentence. Clipboard paste is byte-identical. Turn the "
+        "substitutions off in\n"
+        '  the target app, or use [injection] strategy = "clipboard".'
     )
 
 

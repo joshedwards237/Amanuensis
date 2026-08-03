@@ -16,7 +16,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from amanuensis.cli import _clipboard_warning, _deliver, build_parser, main
+from amanuensis.cli import (
+    _clipboard_warning,
+    _deliver,
+    _keystroke_warning,
+    build_parser,
+    main,
+)
 from amanuensis.config import InjectionConfig
 from amanuensis.models.results import (
     ClipboardExposure,
@@ -334,3 +340,34 @@ def test_the_keystroke_strategy_has_no_clipboard_exposure_to_warn_about() -> Non
     )
 
     assert warning is None
+
+
+def test_the_keystroke_strategy_warns_that_the_target_may_rewrite_the_text() -> None:
+    """Measured at the Phase 2a gate: synthetic keystrokes are subject to the
+    *target application's* text substitution. Into TextEdit,
+
+        don't use --dashes... "quoted" and i said so
+
+    arrives as
+
+        don't use —dashes… "quoted" and I said so
+
+    — smart quotes, em dash, ellipsis and autocapitalisation, five changes in
+    one sentence. Clipboard paste of the same string is byte-identical.
+
+    §7.3 offers `keystroke` to users who cannot accept the clipboard exposure,
+    and describes its cost as being slower and more failure-prone. Silent
+    rewriting is a different and larger cost, and it lands on the
+    privacy-motivated primary user of §4 — the one who chose this strategy.
+    Nothing in Amanuensis can suppress another application's substitution
+    settings, so the only honest response is to say so.
+    """
+    warning = _keystroke_warning(InjectionConfig(strategy="keystroke"))
+
+    assert warning is not None
+    assert "substitution" in warning.lower()
+
+
+def test_the_clipboard_strategy_has_nothing_to_warn_about_here() -> None:
+    """Paste is byte-identical — measured, not assumed."""
+    assert _keystroke_warning(InjectionConfig(strategy="clipboard")) is None
