@@ -13,26 +13,45 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 1 closed 2026-08-01. Phase 2a next.
+## Status: Phase 2a closed 2026-08-02. Phase 2b next.
+
+Text reaches the cursor. `manu transcribe --inject` records, transcribes,
+**persists, then injects** — in that order, which is §8 and is the one invariant
+that cannot be repaired later. `MacOSInjector` does clipboard paste with
+save/restore and a keystroke fallback; `HistoryStore` is the minimum §8 write.
+Injection passes in TextEdit, Terminal, VS Code and Chrome on both strategies,
+verified by Accessibility read-back, not by eye (`scripts/gate_2a_inject.py`).
+Phase 2a adds p50 3.32 ms to `g1_ms`; a real dictation measured 231.6 ms.
+
+Still contracts: hotkey, controller, post-processing, tray. `daemon`, `toggle`,
+`status` and `history` still refuse and name their phase.
+
+`docs/gates/phase-2a.md` is the gate record. Two findings changed the product:
+the clipboard restore was being charged to G1 and is not in it (§2 ends at
+"text fully present"), and `TextInjector` needed a `warm_up` — the first
+injection cost 165.8 ms, every later one under 2 ms. One finding is a standing
+hazard: **`strategy = "keystroke"` is silently rewritten by the target
+application's text substitution** — five changes in one sentence into TextEdit,
+where paste is byte-identical.
+
+**Stop at the Phase 2b gate.** Do not begin Phase 3 until Phase 2b is approved.
+
+---
+
+## Previously: Phase 1 closed 2026-08-01.
 
 The ASR path works. `manu install` downloads the model once and records this
 machine's tier; `manu transcribe --seconds 10` records from the microphone and
-prints the transcript with per-stage timings. `AudioCapture`,
-`VoiceActivityDetector`, `FasterWhisperEngine` and `tier.py` are real
-implementations. Everything else is still contracts — no hotkey, no injection,
-no post-processing, no history, no tray. `daemon`, `toggle`, `status` and
-`history` still refuse and name the phase that builds them, which is intended.
+prints the transcript with per-stage timings.
 
 G1 is met: ASR p50 299.7 ms / p95 373.3 ms through the product classes, against
 400/800 ms. Tier A. G3 verified — zero sockets, zero bytes, positive control.
 Engine chosen in `docs/adr/0001-engine-selection.md`: faster-whisper `tiny.en`.
 
-`docs/gates/phase-1.md` is the gate record and lists ten findings, four of which
-amended the PRD. Read it before adding to `src/`. One item there blocks Phase 4:
-the tier check's reference clip has unsettled provenance and is not committed,
-so `manu install` needs `scripts/make_tier_clip.sh` or `--clip PATH` first.
-
-**Stop at the Phase 2a gate.** Do not begin Phase 2b until Phase 2a is approved.
+`docs/gates/phase-1.md` lists ten findings, four of which amended the PRD. One
+item there still blocks Phase 4: the tier check's reference clip has unsettled
+provenance and is not committed, so `manu install` needs
+`scripts/make_tier_clip.sh` or `--clip PATH` first.
 
 ---
 

@@ -24,6 +24,7 @@ from abc import ABC
 
 import pytest
 
+from amanuensis.config import InjectionConfig
 from amanuensis.engines.base import TranscriptionEngine
 from amanuensis.engines.registry import UnknownBackendError, resolve_engine
 from amanuensis.hotkey.base import HotkeyListener
@@ -110,18 +111,32 @@ def test_a_known_but_unbuilt_backend_says_which_phase_builds_it() -> None:
 
 def test_injector_factory_rejects_an_unsupported_platform_actionably() -> None:
     with pytest.raises(UnsupportedPlatformError) as exc:
-        create_injector(platform="linux")
+        create_injector(InjectionConfig(), platform="linux")
 
     message = str(exc.value)
     assert "linux" in message
     assert "macOS" in message
 
 
-def test_injector_factory_on_macos_says_which_phase_builds_it() -> None:
-    with pytest.raises(NotImplementedError) as exc:
-        create_injector(platform="darwin")
+def test_injector_factory_builds_the_macos_injector() -> None:
+    """Phase 2a fills in the row this factory has been holding open since
+    Phase 0. The dispatch is unchanged — adding Windows is still a row and a
+    module, not a restructuring."""
+    from amanuensis.injection.macos import MacOSInjector
 
-    assert "Phase 2a" in str(exc.value)
+    injector = create_injector(InjectionConfig(), platform="darwin")
+
+    assert isinstance(injector, MacOSInjector)
+
+
+def test_the_injector_is_handed_only_its_own_config_slice() -> None:
+    """§6.3, choice-story #3: components receive the narrowest slice they
+    need, so a post-processor structurally cannot read `[injection]` and the
+    injector structurally cannot read `[history]` — which matters here, since
+    the two are adjacent in the one ordering §8 cares about."""
+    parameters = inspect.signature(create_injector).parameters
+
+    assert parameters["config"].annotation in ("InjectionConfig", InjectionConfig)
 
 
 def test_hotkey_factory_mirrors_the_injector_factory() -> None:

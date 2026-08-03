@@ -84,6 +84,14 @@ Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
    keystroke for being too slow to deliver. "Fully present" is what the §4 user
    experiences and is comparable across both strategies.
 
+   **"Fully present" also sets the *end* of the window, not only its unit**
+   (clarified 2026-08-02, Phase 2a finding 1). Work that happens after the text
+   is present is outside G1 even though the process is still busy. The clipboard
+   restore is the first instance: it costs ~155 ms, it runs while the user is
+   already reading their words, and counting it reported a 272 ms delivery as a
+   422 ms miss on the first real dictation. It is recorded as `restore_ms`,
+   inside `total_ms` and outside `g1_ms` (§6.3).
+
 Two further scoping decisions, resolved the same day:
 
 4. **G1 is tier-conditional, and tiers are measured** (objection O1, revised
@@ -546,7 +554,9 @@ class LatencyBreakdown:
     vad_ms: float = 0.0            # inside G1 — trimming happens after release
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
+    persist_ms: float = 0.0        # inside G1 — §8's write precedes injection
     inject_ms: float = 0.0
+    restore_ms: float = 0.0        # OUTSIDE G1 — runs after the text is present
 
     @property
     def asr_ms(self) -> float:
@@ -554,7 +564,7 @@ class LatencyBreakdown:
 
     @property
     def g1_ms(self) -> float:
-        """asr + postprocess + inject. The number G1 is gated on."""
+        """asr + postprocess + persist + inject. The number G1 is gated on."""
 
     @property
     def total_ms(self) -> float:
@@ -572,6 +582,37 @@ Folding it into `transcribe_ms` would have buried the dominant lever inside the
 stage it exists to shrink, in the very structure G1 is defended with. `asr_ms`
 exists because §7.2's tier check runs "VAD on, matching runtime" and therefore
 bounds trim-plus-decode, a quantity no property expressed.
+
+**`persist_ms` and `restore_ms` added 2026-08-02** (Phase 2a findings 1 and 5),
+and the rule they establish matters more than either field.
+
+`persist_ms` is §8's pre-injection write. G1's clock is already running when it
+happens, so it is inside the gated number, and it is separate from `inject_ms`
+because the two have different remedies — a slow write is a storage problem, a
+slow injection is a target-application problem, and one combined figure sends a
+reader to the wrong one.
+
+`restore_ms` is the clipboard restore, and it is **outside `g1_ms` and inside
+`total_ms`**. G1 ends when the text is *fully present in the focused
+application*; the restore runs strictly after that, while the user is already
+reading their words. This was not a theoretical distinction: the first real
+end-to-end dictation reported `g1_ms` **421.9 ms** against a 400 ms budget, of
+which **180.3 ms** was `inject_ms` and roughly 150 of those was
+`restore_delay_ms` sleeping. Split correctly the same path measures **231.6 ms**.
+`InjectionResult` carries `restore_ms` because only the injector can separate
+them — `inject()` returns once, after both.
+
+**The pattern, stated so a fourth phase does not rediscover it.** Three phases
+have now found a stage this structure could not express: `vad_ms` at Phase 1,
+`persist_ms` and `restore_ms` at Phase 2a. `LatencyBreakdown` was specified
+before anyone knew what the stages were. The standing rule for any stage added
+later:
+
+> A stage inside G1's window with no field is a stage that cannot be defended
+> when G1 is missed. A stage **outside** the window recorded inside it is a miss
+> that never happened. Decide which side of "text fully present in the focused
+> application" a new stage falls on, give it a field, and say which summary
+> property it belongs to.
 
 **Abstract bases** define the swap points. The original rule — "every one of these
 exists because there is a real chance we replace the implementation, not for symmetry" —
@@ -632,7 +673,26 @@ class TextInjector(ABC):
     @abstractmethod
     def check_permissions(self) -> PermissionStatus:
         """Non-destructive check. Called at startup, surfaced in the tray."""
+
+    def warm_up(self) -> None:
+        """Pay the one-time cost now. Idempotent, and invisible to the user."""
 ```
+
+**`warm_up` added 2026-08-02** (Phase 2a finding 2), from measurement rather
+than symmetry. The first `inject()` on macOS cost **165.8 ms** and every
+subsequent one under 2 ms, because the pyobjc bridges load on first use — 165 ms
+against a 400 ms budget, landing on the user's *first* dictation. That is the
+identical problem `TranscriptionEngine.warm_up` exists for ("first real call
+must not pay compile cost"), at a boundary that had no method for it. Phase 2a
+escaped it only by accident: the CLI checks permissions and detects clipboard
+managers, which happen to load both bridges before the microphone opens.
+
+Concrete with a default no-op rather than abstract — an injector with nothing to
+warm should not be made to write an empty method, and forgetting it is slow once
+rather than silently wrong. **One constraint is tighter than the engine's:** the
+engine can afford a throwaway inference because it has no effect outside the
+process; an injector must never type a throwaway character into whatever window
+happens to have focus.
 
 ```python
 class TextPostProcessor(ABC):
@@ -1153,6 +1213,35 @@ must be documented in the README rather than papered over.
 
 `strategy = "keystroke"` exists for users who cannot accept that.
 
+**`keystroke` has a third cost, and it is silent** (measured 2026-08-02, Phase
+2a finding 3). The two costs stated above are speed and fragility. The one that
+matters more is that **synthetic keystrokes are subject to the target
+application's text substitution**, exactly as real ones are. Injected into
+TextEdit:
+
+```
+sent    : don't use --dashes... "quoted" and i said so
+landed  : don’t use —dashes… “quoted” and I said so
+```
+
+Five substitutions in one sentence — smart quotes twice, an em dash, an
+ellipsis, and an autocapitalised "i". **The identical string pasted arrives
+byte-identical.**
+
+Two consequences. It lands on §4's privacy-motivated primary user, who is
+precisely the person this strategy is offered to. And it cuts against §1: a
+tool that resolves your self-corrections and then rewrites your punctuation has
+moved the problem rather than solved it.
+
+Nothing in Amanuensis can reach into another application's substitution
+settings, so this cannot be fixed here — only said. It is surfaced when
+`strategy = "keystroke"` is in use, symmetrically with the clipboard-manager
+warning below, and belongs in the README beside the clipboard cost.
+
+This also disqualifies `keystroke` as a silent *automatic* fallback when
+clipboard injection fails: falling back would trade a visible failure for an
+invisible corruption. Any per-app override (§10) must be a stated choice.
+
 **Transcript egress is a privacy surface, not a hygiene annoyance** (resolved
 2026-07-30, objection O12). The framing above — and §10's — describes the
 clipboard-manager capture as a *race*, which understates it in three ways:
@@ -1183,6 +1272,36 @@ visible rather than silent**:
 The detection list will be incomplete and must not be presented as
 comprehensive — absence of a warning means "no known manager detected", never
 "no manager present". Say that in the README.
+
+**Measured 2026-08-02, and the argument above is confirmed** (Phase 2a gate).
+Against Maccy 2.7.0, with a positive control proving the instrument could see an
+ordinary copy:
+
+| | captured by the manager |
+|---|---|
+| An ordinary copy (control) | yes |
+| **Transcript, default config — restore on, `restore_delay_ms = 150`** | **yes** |
+| Transcript, `restore_clipboard = false` | yes |
+
+A 150 ms window is not a mitigation. The transcript of every dictation is
+recorded by a clipboard manager running on default settings, which is what this
+section already said and now no longer has to assert.
+
+Worth recording how nearly this went the other way: the first run of that
+measurement reported *not captured*, because it read the manager's store before
+the manager had flushed. It was caught only because the positive control was
+added afterwards and came back captured too. Without the control, this gate
+would have published a false all-clear on the most-argued privacy surface in
+the document.
+
+**The tray indicator is Phase 4; the obligation is not** (Phase 2a finding 4).
+§9's Phase 2a gate asks that the indicator "fire correctly" while `TrayApp` is
+built two phases later. Phase 2b already carries the resolution — "a visible
+indicator, not the full `TrayApp`" — and Phase 2a takes the same shape: the
+exposure is surfaced before the microphone opens, so the user learns of it while
+they can still decline. Phase 4 renders the same state in the tray. Nothing is
+printed when no known manager is found, and **never an all-clear**, for the
+reason stated above.
 
 **This is also a G3 verification gap, not only a risk.** G3's method is packet
 capture on this app; the egress occurs in another process, so the headline
@@ -1668,6 +1787,36 @@ the target being hostile. A single Electron or Java failure is a known-hazard fi
 (§10) and does not reject — enumerate it and carry a per-app strategy override. Also
 rejects if a transcript is lost when injection fails.
 
+> **CLOSED 2026-08-02 — PASS.** Record: `docs/gates/phase-2a.md`.
+>
+> **Injection: zero failures.** TextEdit, Terminal, VS Code and Chrome, on
+> *both* strategies, verified by reading the text back through the
+> Accessibility API rather than by eye (`scripts/gate_2a_inject.py`). Neither
+> reject condition is approached.
+>
+> **§8 holds under fault injection.** With the Accessibility grant forced off,
+> the transcript survives on both retention paths — a row with `injected = 0`
+> under `retain = true`, a `0600` file under `pending/` when false.
+>
+> **The clipboard exposure is now measured, not argued.** A real manager
+> captured the transcript inside the default 150 ms restore window (§7.3). The
+> first attempt at that measurement said "not captured" and was wrong; only the
+> positive control caught it.
+>
+> **Latency:** Phase 2a adds p50 **3.32 ms** / p95 **6.89 ms** to `g1_ms`
+> (n=25). A real end-to-end dictation measured `g1_ms` **231.6 ms**. G3 re-run
+> with pyobjc in the tree: 0 sockets, 0 bytes, against a control that saw 865.
+>
+> Five findings; four amended this document (§2, §6.3 twice, §7.3 twice, §9).
+> The two that changed the product: the clipboard restore was being charged to
+> G1 and is not in it, and `TextInjector` needed the `warm_up` that §6.3's own
+> argument for `TranscriptionEngine` had always implied — the first injection
+> cost 165.8 ms and every later one under 2 ms.
+>
+> The tray-indicator wording in the gate above names a Phase 4 component;
+> resolved as §7.3 records, the same way Phase 2b resolves the recording
+> indicator.
+
 ### Phase 2b — Close the loop with the hotkey
 
 `HotkeyListener` (Input Monitoring), `push_to_talk` only, `DictationController` wiring
@@ -1990,6 +2139,10 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-02 | **Phase 2a gate findings applied** (`docs/gates/phase-2a.md`). §6.3's `LatencyBreakdown` gains **`persist_ms`** (inside `g1_ms` — §8's write precedes injection) and **`restore_ms`** (**outside** it — the clipboard restore runs after the text is present). §2's G1 note now says "fully present" fixes the *end* of the window and not only its unit. §6.3's `TextInjector` gains **`warm_up`**, concrete and defaulting to a no-op. §7.3 records that **synthetic keystrokes are rewritten by the target application's text substitution** and that clipboard-manager capture is now measured against a real manager. §9's Phase 2a tray-indicator wording resolved the way Phase 2b resolves the recording indicator. §5.5's engine field reaches `to_history_row`. |
+| 2026-08-02 | **The clipboard restore was being charged to G1, and is not in it.** The first real end-to-end dictation reported `g1_ms` **421.9 ms** against a 400 ms budget, with `inject_ms` **180.3 ms** — roughly 150 of which was `restore_delay_ms` sleeping, after the user already had their words. Split correctly, the same path measures **231.6 ms**. `InjectionResult` carries `restore_ms` because `inject()` returns after both and no caller can separate them from outside. Third phase running in which a stage had nowhere to be recorded, so §6.3 now states the rule rather than patching a fourth time. |
+| 2026-08-02 | **`TextInjector.warm_up` added, from measurement.** The first `inject()` cost **165.8 ms** and every later one under 2 ms — the pyobjc bridges load on first use, 165 ms against a 400 ms budget, on the user's first dictation. §6.3 gave `TranscriptionEngine` a `warm_up` on that exact argument and left this boundary without one; Phase 2a escaped the cost only because the permission check and the manager detection happen to load both bridges first. Tighter than the engine's contract in one respect: an injector must not type a throwaway character into whatever window has focus. |
+| 2026-08-02 | **`strategy = "keystroke"` silently rewrites the transcript** (§7.3). `don't use --dashes... "quoted" and i said so` arrives in TextEdit as `don’t use —dashes… “quoted” and I said so` — five substitutions, from macOS text substitution applying to synthetic keystrokes as it does to real ones. Pasting the same string is byte-identical. The cost lands on §4's privacy-motivated user, who is the person the strategy exists for, and it disqualifies `keystroke` as a *silent* automatic fallback: falling back would trade a visible failure for an invisible corruption. |
 | 2026-08-01 | **Phase 1 gate findings applied.** §6.3's `LatencyBreakdown` gains **`vad_ms`** (inside `g1_ms` — G1's clock starts at hotkey release and trimming happens after it) and **`asr_ms`** (the quantity §7.2's tier check actually bounds). §5.3 gains a **`[vad]` table** and states that `[audio] sample_rate` accepts 16000 alone; with `[vad] enabled` deliberately absent, the bounded exception now has three instances in two phases and is restated as a shape rather than a list. §9's Phase 1 gains **`manu install`** — §7.2 specified an install check in six-parameter detail and named no way to run it. §7.2 records that its two CUDA rows split on VRAM with no stated way to measure it, and that Moonshine was benchmarked and declined on its error breakdown (ADR 0001). |
 | 2026-08-01 | **§7.2's 1.8× `cpu_threads` penalty corrected.** The 4,413 ms → 2,412 ms figures were measured on `distil-large-v3`, the model the same revision rejected by ~7×. Swept on `tiny.en` over the Phase 1 corpus, 4 threads is **1.02×** of the performance-core count and the optimum is around 6–8 — *below* it. The E-core exclusion is confirmed and is worth more than was claimed: 14 threads costs **2.08×**. `auto` is unchanged, because tuning to 8 would be tuning to n=1 hardware; what changed is the argument the rule rests on. |
 | 2026-07-31 | **A1 + A4 accepted.** Tier A is now an absolute measured bar — p50 ≤ 350 ms, p95 ≤ 700 ms on the transcription share, VAD on — rather than a restatement of G1, and §9's Phase 1 gate rejects on G1 missed on the machine the phase is built on, whatever tier it recorded. The previous wording defined Tier A by the same predicate its own gate tested, so §10's top risk had a mitigation with no reachable failing state and the real go/no-go had silently moved to Phase 2b. §7.2 also specifies the install check itself — audio, VAD state, warm-up, nine runs with p95, and the comparison basis — where it previously pointed at a deleted throwaway script. |

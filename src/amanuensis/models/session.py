@@ -59,7 +59,22 @@ class LatencyBreakdown:
     vad_ms: float = 0.0
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
+    #: The §8 pre-injection write. Added in Phase 2a, and *inside* G1 for the
+    #: same reason `vad_ms` is: the clock starts at hotkey release and the
+    #: write happens after it. Kept separate from `inject_ms` because the two
+    #: have different remedies — a slow write is a storage problem, a slow
+    #: injection is a target-application problem, and a combined figure would
+    #: send a reader to the wrong one.
+    persist_ms: float = 0.0
     inject_ms: float = 0.0
+    #: Putting the user's clipboard back after a paste (§7.3). Recorded, and
+    #: deliberately **outside** `g1_ms`: §2 ends G1 when the text is *fully
+    #: present in the focused application*, and the restore runs strictly
+    #: after that, while the user is already reading their words. Phase 2a
+    #: measured a real dictation at 180.3 ms of `inject_ms`, roughly 150 of
+    #: which was `restore_delay_ms` sleeping — enough to report a 272 ms
+    #: delivery as a 422 ms G1 miss.
+    restore_ms: float = 0.0
 
     @property
     def asr_ms(self) -> float:
@@ -74,13 +89,26 @@ class LatencyBreakdown:
 
     @property
     def g1_ms(self) -> float:
-        """vad + transcribe + postprocess + inject. The number G1 is gated on."""
-        return self.asr_ms + self.postprocess_ms + self.inject_ms
+        """Every stage after hotkey release. The number G1 is gated on.
+
+        vad + transcribe + postprocess + persist + inject. `persist_ms` is in
+        here and deliberately *not* in `asr_ms`: §7.2's tier thresholds bound
+        trimming plus decoding, and letting a storage hiccup move a machine's
+        recorded tier would make the tier mean something other than what it
+        was measured to mean.
+        """
+        return self.asr_ms + self.postprocess_ms + self.persist_ms + self.inject_ms
 
     @property
     def total_ms(self) -> float:
-        """Every stage including capture. Diagnostics — never assert G1 here."""
-        return self.capture_ms + self.g1_ms
+        """Every stage including capture. Diagnostics — never assert G1 here.
+
+        `restore_ms` is in here and not in `g1_ms`. It is real time the
+        process spends and a restore that never completes is a clipboard the
+        user does not get back — but it is not time the user waits for their
+        text, which is the only thing G1 is about.
+        """
+        return self.capture_ms + self.g1_ms + self.restore_ms
 
 
 @dataclass(slots=True)
@@ -93,6 +121,11 @@ class DictationSession:
     sample_rate: int
     raw_transcript: str | None = None
     final_text: str | None = None
+    #: Which engine produced `raw_transcript`, as `backend:model` — §5.5 lists
+    #: it among what history stores. A transcript whose engine is unknown
+    #: cannot be re-judged when the engine changes, and ADR 0001 is explicitly
+    #: revisitable if G1 headroom becomes binding.
+    engine: str = ""
     timings: LatencyBreakdown = field(default_factory=LatencyBreakdown)
     error: str | None = None
     #: Set by the worker, *last*, after every field above is written. A thread
@@ -128,12 +161,18 @@ class DictationSession:
 
         Audio never rides along. It is the sensitive artefact and is stored
         only behind `[history] store_audio`, by a different path (§5.5).
+
+        Two of the timings are structurally zero here and that is not a bug:
+        the row is written *before* injection, so `inject_ms` has not happened
+        and `persist_ms` is the duration of the write producing this very row.
+        `HistoryStore.mark_injected` completes them afterwards.
         """
         return {
             "id": self.id,
             "started_at": self.started_at.isoformat(),
             "transcript": self.final_text or self.raw_transcript,
             "duration_seconds": self.duration_seconds(),
+            "engine": self.engine,
             "error": self.error,
             **asdict(self.timings),
         }
