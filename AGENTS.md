@@ -99,6 +99,26 @@
   validated separately. This is the second gate in this repo that could have
   passed by measuring nothing.
 
+  **Extended 2026-08-02: the same applies to negative and failing results, and
+  it bit twice in one day.** The clipboard-exposure check first reported "the
+  transcript was NOT captured by the manager" — a false all-clear on the
+  most-argued privacy surface in the PRD — because the read ran before the
+  manager flushed to disk. It was caught only because a control copy was added
+  afterwards and came back captured. Separately, `gate_2a_inject.py` reported a
+  **native-field FAIL**, the one verdict §9 rejects Phase 2a on, for a settle
+  window too short to see a 22-character keystroke marker land. Three of that
+  harness's first four verdicts about the product were the instrument.
+  **Before believing any gate verdict, ask what would have to be true for the
+  instrument to produce it by accident.**
+
+- **An instrument that verifies arrival does not verify fidelity.** The
+  Accessibility read-back in `gate_2a_inject.py` confirms injected text reached
+  the target, and it cannot see macOS text substitution, because it reads the
+  raw value before the substitution settles. A clean four-application PASS was
+  one step from being recorded while the keystroke strategy was silently
+  rewriting every transcript. When a check answers "did X arrive?", ask
+  separately whether it answers "did X arrive *unchanged*?"
+
 - **Check which model a performance rule was measured on before inheriting it.**
   §7.2's 1.8x `cpu_threads` penalty was measured on `distil-large-v3` — the
   model the same revision rejected by ~7x. On `tiny.en`, the model it selects,
