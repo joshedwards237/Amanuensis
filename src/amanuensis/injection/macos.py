@@ -219,6 +219,29 @@ class MacOSInjector(TextInjector):
             remediation=_REMEDIATION,
         )
 
+    def focus_identity(self) -> str | None:
+        """The frontmost application's bundle identifier, or None.
+
+        The controller compares this across the gap `end_session()` opens and
+        declines to type when it changed (§6.3, objection A6). A bundle
+        identifier rather than a PID or a name: a PID changes when the user
+        quits and reopens the application, and a localized name is not stable
+        across languages — both would report a change that did not happen.
+
+        Returns None when nothing is frontmost, or when the frontmost process
+        is not in a bundle. None means *cannot tell*, and the controller reads
+        it that way: declining to inject on an unknown would let a transient
+        AppKit answer look like the user switching applications.
+
+        This costs one AppKit call and no process spawn, which matters because
+        it runs on the event-tap thread, where nothing may block.
+        """
+        app = _appkit().NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return None
+        identity: str | None = app.bundleIdentifier()
+        return identity
+
     def warm_up(self) -> None:
         """Load both pyobjc bridges and build one throwaway event.
 

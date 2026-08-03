@@ -24,6 +24,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
+from amanuensis.models.results import PermissionStatus
+
 __all__ = ["HotkeyCallback", "HotkeyListener"]
 
 #: Invoked on the OS event-tap thread. Must return promptly and must not
@@ -46,6 +48,21 @@ class HotkeyListener(ABC):
     @abstractmethod
     def stop(self) -> None:
         """Stop listening and release the tap. Must be idempotent."""
+
+    @abstractmethod
+    def check_permissions(self) -> PermissionStatus:
+        """Non-destructive check. Called at startup, surfaced in the tray.
+
+        Added in Phase 2b, on `TextInjector`'s argument rather than for
+        symmetry: every plausible platform has some version of "this app may
+        not watch your keyboard", and the moment of the user's first dictation
+        is the worst time to discover it. `start` raising is not a substitute
+        — the daemon needs to report the state *before* it takes the microphone,
+        and it needs to report which of the two macOS grants is missing.
+
+        Must not prompt. A daemon that starts at login and raises a system
+        dialog every time teaches the user to dismiss whatever it shows them.
+        """
 
     @property
     @abstractmethod

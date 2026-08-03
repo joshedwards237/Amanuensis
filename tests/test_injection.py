@@ -454,3 +454,68 @@ def test_warm_up_is_idempotent(frameworks: Any) -> None:
 
     injector.warm_up()
     injector.warm_up()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b — who would receive the text right now
+# ---------------------------------------------------------------------------
+
+
+class _FocusWorkspace:
+    def __init__(self, app: _FakeApp | None) -> None:
+        self._app = app
+
+    def frontmostApplication(self) -> _FakeApp | None:
+        return self._app
+
+
+class _FocusAppKit:
+    def __init__(self, app: _FakeApp | None) -> None:
+        self.NSWorkspace = type(
+            "NSWorkspace",
+            (),
+            {"sharedWorkspace": staticmethod(lambda: _FocusWorkspace(app))},
+        )
+
+
+def test_focus_identity_reports_the_frontmost_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The value the controller compares across the async gap (§6.3, A6).
+
+    A bundle identifier rather than a name or a PID: a PID changes when the
+    user quits and reopens the application, and a localised name is not stable
+    across languages.
+    """
+    monkeypatch.setattr(
+        macos_injection,
+        "_appkit",
+        lambda: _FocusAppKit(_FakeApp("com.apple.TextEdit", "TextEdit")),
+    )
+    injector = MacOSInjector(InjectionConfig())
+
+    assert injector.focus_identity() == "com.apple.TextEdit"
+
+
+def test_focus_identity_is_none_when_nothing_is_frontmost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`None` means "cannot tell", and the controller treats that as *not a
+    change* — declining to inject on an unknown would make a transient AppKit
+    answer look like the user switching applications."""
+    monkeypatch.setattr(macos_injection, "_appkit", lambda: _FocusAppKit(None))
+    injector = MacOSInjector(InjectionConfig())
+
+    assert injector.focus_identity() is None
+
+
+def test_focus_identity_survives_an_app_with_no_bundle_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Some processes report None — helpers, and anything not in a bundle."""
+    monkeypatch.setattr(
+        macos_injection, "_appkit", lambda: _FocusAppKit(_FakeApp(None, "helper"))
+    )
+    injector = MacOSInjector(InjectionConfig())
+
+    assert injector.focus_identity() is None

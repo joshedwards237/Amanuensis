@@ -81,6 +81,35 @@
   property; that is what made the failures catchable at all. They turned silent corruption
   into a visible no-op.
 
+- **A macOS run loop is a trap for Python signal handlers, and `stop_` is a trap
+  on top of it.** `manu daemon` could not be stopped: Ctrl-C and SIGTERM both did
+  nothing and only `kill -9` worked. Two independent causes, and fixing either
+  alone leaves it broken. CPython runs a signal handler *between bytecodes on the
+  main thread*, and the main thread sits inside `NSApplication.run()` — a C call
+  that does not return until the loop ends, so the signal is recorded and never
+  delivered. And `NSApplication.stop_` does not end the loop; it sets a flag
+  checked the next time an event is **dequeued**, which an idle daemon never has.
+  Fix: a repeating `NSTimer` (250 ms) to yield to the interpreter, plus a posted
+  application-defined event with `atStart=True`. Found 2026-08-03. Applies to any
+  long-running pyobjc process, not only this one.
+
+- **`kCGEventFlagMaskAlternate` cannot tell you which option key is down.** The
+  generic modifier bits are set while *either* side is held, so releasing
+  right-option while left-option is down does not change the mask — a hotkey
+  listener reading it never sees the release and records forever. Use the
+  device-dependent per-side bits from IOKit's `IOLLEvent.h`
+  (`NX_DEVICERALTKEYMASK` = 0x40, `NX_DEVICELALTKEYMASK` = 0x20, and so on).
+  They are absent from the CoreGraphics headers and present in `CGEventFlags` on
+  every `flagsChanged` event. Found 2026-08-03.
+
+- **`print()` to a pipe is block-buffered, and a quiet log reads exactly like a
+  hang.** Three minutes went into a sampling profiler on a daemon that was
+  running perfectly — the "listening" line was sitting unflushed because stdout
+  was a pipe rather than a tty. Before diagnosing a process as stuck, ask whether
+  the thing reporting it stuck is an *observer* rather than the subject. Any
+  long-running command whose output a harness reads needs `flush=True`.
+  Found 2026-08-03.
+
 - **A PRD amendment that withdraws a number must reach the tooling that can
   regenerate it.** §7.2 declared WER macro-average and withdrew a 14.8%
   micro-average on 2026-07-31. `scripts/bench_engines.py` kept computing the
@@ -88,6 +117,17 @@
   — the withdrawn number, regenerated on demand, two months after its
   withdrawal. Macro was 19.33%. Nothing in this project's process checks
   tooling against amendments. Found 2026-08-01.
+
+  **Second instance, 2026-08-03.** Phase 2a added `restore_ms` to
+  `LatencyBreakdown` as its headline finding and argued it across two PRD
+  sections. The `history.db` schema never grew the column, so `to_history_row()`
+  emitted the value and `_insert` silently dropped it on every row written for
+  the whole of that phase — found only by reading a real row at the next gate.
+  The regression test now iterates `dataclasses.fields(LatencyBreakdown)` and
+  requires a column for each, rather than naming the field: the defect was a
+  hand-maintained list that had stopped being checked against the dataclass, and
+  adding one more name to that list would not have fixed it. **When an amendment
+  adds a field, grep for every hand-maintained list that has to grow with it.**
 
 - **A null measurement proves nothing until a positive control proves the
   instrument works — per instrument.** The G3 check watches sockets *and*
@@ -98,6 +138,26 @@
   unearned. The control now holds the connection open and each instrument is
   validated separately. This is the second gate in this repo that could have
   passed by measuring nothing.
+
+  **Extended 2026-08-02: the same applies to negative and failing results, and
+  it bit twice in one day.** The clipboard-exposure check first reported "the
+  transcript was NOT captured by the manager" — a false all-clear on the
+  most-argued privacy surface in the PRD — because the read ran before the
+  manager flushed to disk. It was caught only because a control copy was added
+  afterwards and came back captured. Separately, `gate_2a_inject.py` reported a
+  **native-field FAIL**, the one verdict §9 rejects Phase 2a on, for a settle
+  window too short to see a 22-character keystroke marker land. Three of that
+  harness's first four verdicts about the product were the instrument.
+  **Before believing any gate verdict, ask what would have to be true for the
+  instrument to produce it by accident.**
+
+- **An instrument that verifies arrival does not verify fidelity.** The
+  Accessibility read-back in `gate_2a_inject.py` confirms injected text reached
+  the target, and it cannot see macOS text substitution, because it reads the
+  raw value before the substitution settles. A clean four-application PASS was
+  one step from being recorded while the keystroke strategy was silently
+  rewriting every transcript. When a check answers "did X arrive?", ask
+  separately whether it answers "did X arrive *unchanged*?"
 
 - **Check which model a performance rule was measured on before inheriting it.**
   §7.2's 1.8x `cpu_threads` penalty was measured on `distil-large-v3` — the

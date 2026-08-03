@@ -1,5 +1,17 @@
 # Handoff — Sprint 1 close → Sprint 2 start
 
+> **SUPERSEDED 2026-08-02. Kept as history; do not act on it.** Everything below
+> was written before Phase 0 was built. Phases 0, 1 and 2a have since closed and
+> several of its assumptions are now wrong — including the engine choice, the
+> `cpu_threads` reasoning, and the claim that the Phase 5 experiments would be
+> decided against the existing corpus.
+>
+> **Current state lives in the gate records**, one per phase, in
+> [`docs/gates/`](docs/gates/) — read `phase-2a.md` first, then `CLAUDE.md` for
+> what is built and what is still a contract. That pairing replaced this file:
+> a single rolling handoff went stale between the writing and the reading, where
+> a per-gate record is dated, scoped, and never needs revising.
+
 **Written 2026-07-31.** Sprint 1 produced a specification, not a product. Sprint 2
 builds Phase 0 and resolves the Phase 5 approach.
 

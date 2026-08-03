@@ -13,30 +13,54 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 2a closed 2026-08-02. Phase 2b next.
+## Status: Phase 2b closed 2026-08-03. Phase 3 next.
 
-Text reaches the cursor. `manu transcribe --inject` records, transcribes,
-**persists, then injects** — in that order, which is §8 and is the one invariant
-that cannot be repaired later. `MacOSInjector` does clipboard paste with
-save/restore and a keystroke fallback; `HistoryStore` is the minimum §8 write.
-Injection passes in TextEdit, Terminal, VS Code and Chrome on both strategies,
-verified by Accessibility read-back, not by eye (`scripts/gate_2a_inject.py`).
-Phase 2a adds p50 3.32 ms to `g1_ms`; a real dictation measured 231.6 ms.
+The loop is closed. `manu daemon` holds the model and the microphone, a
+listen-only `CGEventTap` watches right-option, and `DictationController` runs
+press → capture → transcribe → **persist** → inject on one serial worker. A
+menu-bar glyph reports idle / recording / transcribing / error.
 
-Still contracts: hotkey, controller, post-processing, tray. `daemon`, `toggle`,
-`status` and `history` still refuse and name their phase.
+**G1 is met: p50 223.0 ms / p95 270.0 ms** against 400/800, over ten real
+dictations in the 7–16 s band, read from the daemon's own `history.db` rows —
+`LatencyBreakdown` already persists, so the daemon measures itself and there is
+no harness between a voice and the number. Still a floor: `postprocess_ms` is
+the one unfilled stage, and Phase 3 fills it.
 
-`docs/gates/phase-2a.md` is the gate record. Two findings changed the product:
-the clipboard restore was being charged to G1 and is not in it (§2 ends at
-"text fully present"), and `TextInjector` needed a `warm_up` — the first
-injection cost 165.8 ms, every later one under 2 ms. One finding is a standing
-hazard: **`strategy = "keystroke"` is silently rewritten by the target
-application's text substitution** — five changes in one sentence into TextEdit,
-where paste is byte-identical.
+`docs/gates/phase-2b.md` is the gate record. Six findings, four amended the PRD.
+Three are worth carrying:
 
-**Stop at the Phase 2b gate.** Do not begin Phase 3 until Phase 2b is approved.
+- **G1's number is the best case of a linear relationship.** `transcribe_ms ≈
+  48.8 + 13.69 × seconds_of_audio`. A 60-second dictation lands at ~909 ms —
+  over G1's p95. Not a violation (§2 binds G1 at 10 s) and **Phase 3's gate is
+  ten dictations of ≥ 60 s**, so it will run straight into this. It is the
+  utterance length, not post-processing.
+- **The daemon could not be stopped.** Ctrl-C and SIGTERM both did nothing; only
+  `kill -9` worked. A Python signal handler cannot run while the main thread is
+  inside `NSApplication.run()`, and `stop_` needs a dequeued event to be
+  noticed. Both halves are fixed in `ui/indicator.py`. The indicator was correct
+  the whole time — the failure was that knowing did not help.
+- **`restore_ms` had no column in `history.db`** for the whole of Phase 2a,
+  which added the field as its headline finding. Second instance of "an
+  amendment must reach the tooling".
+
+Still contracts: post-processing, the tray, `toggle`/`status` and their IPC
+transport. `history` refuses and names Phase 3; `toggle` and `status` refuse and
+now name Phase 4.
+
+**Stop at the Phase 3 gate.** Do not begin Phase 4 until Phase 3 is approved.
 
 ---
+
+## Previously: Phase 2a closed 2026-08-02.
+
+Text reaches the cursor. `MacOSInjector` does clipboard paste with save/restore
+and a keystroke fallback; `HistoryStore` is the minimum §8 write. Injection
+passes in TextEdit, Terminal, VS Code and Chrome on both strategies, verified by
+Accessibility read-back rather than by eye (`scripts/gate_2a_inject.py`).
+
+One finding there is a standing hazard: **`strategy = "keystroke"` is silently
+rewritten by the target application's text substitution** — five changes in one
+sentence into TextEdit, where paste is byte-identical.
 
 ## Previously: Phase 1 closed 2026-08-01.
 

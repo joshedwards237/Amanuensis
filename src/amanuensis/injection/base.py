@@ -40,6 +40,27 @@ class TextInjector(ABC):
     def check_permissions(self) -> PermissionStatus:
         """Non-destructive check. Called at startup, surfaced in the tray."""
 
+    def focus_identity(self) -> str | None:
+        """Who would receive text right now? `None` when it cannot be told.
+
+        Added in Phase 2b, for the hazard §6.3's async handoff creates rather
+        than for anything injection needs: `end_session()` does not block, so
+        session N's text can land in whatever window has focus when the worker
+        reaches it. The controller compares this value across the gap and
+        declines to type when it changed.
+
+        It lives on the injector because the injector is the component that
+        knows where text goes — the controller must not learn what a bundle
+        identifier is (§6.2). The value is opaque and comparable; nothing may
+        parse it.
+
+        Concrete and `None` by default, on `warm_up`'s argument. `None` means
+        **cannot tell**, which is deliberately not the same as *changed*: an
+        implementation with no way to answer must still inject, because the
+        check exists to catch a change and unknown is not one.
+        """
+        return None
+
     def warm_up(self) -> None:  # noqa: B027 — deliberately concrete, see below
         """Pay the one-time cost now, so the first dictation does not.
 

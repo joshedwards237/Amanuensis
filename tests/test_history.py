@@ -33,8 +33,11 @@ before the user has seen it — retained for thirty days by default.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
 import sqlite3
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -308,3 +311,157 @@ def test_the_store_resolves_its_own_directory_when_not_given_one(
     store = HistoryStore(HistoryConfig())
 
     assert store.db_path == tmp_path / "elsewhere" / "history.db"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b — the orphan sweep §5.5 gap 2 asks for at daemon start
+# ---------------------------------------------------------------------------
+
+
+def _orphan(store: HistoryStore, session_id: str, age_days: float) -> Path:
+    """A pending file left behind by a failed injection, aged by its mtime."""
+    store.pending_dir.mkdir(parents=True, exist_ok=True)
+    path = store.pending_dir / f"{session_id}.json"
+    path.write_text(f'{{"id": "{session_id}", "transcript": "words"}}')
+    stamp = time.time() - age_days * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_the_sweep_does_not_delete_a_recoverable_transcript(tmp_path: Path) -> None:
+    """The single most important property of this method.
+
+    §5.5 gap 2 asks for a sweep because failed injections accumulate plaintext.
+    §8 says the words must survive a failed injection. A sweep that deleted on
+    sight would resolve the first by breaking the second — and it would break
+    it precisely for the user who set `retain = false`, who has no `history.db`
+    row to fall back on.
+    """
+    store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    fresh = _orphan(store, "recent", age_days=1)
+
+    result = store.sweep_pending()
+
+    assert fresh.exists()
+    assert result.removed == 0
+    assert result.remaining == 1
+
+
+def test_the_sweep_applies_retain_days(tmp_path: Path) -> None:
+    """`retain_days` is the spec's existing expiry knob and there is no reason
+    for the pending path to invent a second one."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=30), data_dir=tmp_path)
+    stale = _orphan(store, "old", age_days=31)
+    fresh = _orphan(store, "new", age_days=29)
+
+    result = store.sweep_pending()
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert result.removed == 1
+    assert result.remaining == 1
+
+
+def test_retain_days_zero_sweeps_everything(tmp_path: Path) -> None:
+    """§5.3 admits 0, and the only coherent reading of "retain for zero days"
+    is that nothing is kept."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=0), data_dir=tmp_path)
+    _orphan(store, "old", age_days=31)
+    _orphan(store, "new", age_days=0)
+
+    result = store.sweep_pending()
+
+    assert result.removed == 2
+    assert result.remaining == 0
+
+
+def test_a_missing_pending_directory_is_not_an_error(tmp_path: Path) -> None:
+    """The overwhelmingly common case: `retain = true`, or a daemon that has
+    never had an injection fail. Daemon start must not care."""
+    store = HistoryStore(HistoryConfig(), data_dir=tmp_path)
+
+    result = store.sweep_pending()
+
+    assert result.removed == 0
+    assert result.remaining == 0
+
+
+def test_the_sweep_ignores_files_it_did_not_write(tmp_path: Path) -> None:
+    """A sweep that unlinked by directory rather than by pattern is a sweep
+    that deletes whatever a user or another tool put there."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=0), data_dir=tmp_path)
+    _orphan(store, "old", age_days=31)
+    stranger = store.pending_dir / "notes.txt"
+    stranger.write_text("not ours")
+
+    result = store.sweep_pending()
+
+    assert stranger.exists()
+    assert result.removed == 1
+
+
+def test_every_latency_field_has_a_column(tmp_path: Path) -> None:
+    """§5.5 says history stores the latency breakdown. All of it.
+
+    Found by reading a real row at the Phase 2b gate: `restore_ms` was added to
+    `LatencyBreakdown` in Phase 2a — as that phase's headline finding — and the
+    schema never grew a column for it, so `to_history_row()` emitted it and
+    `_insert` silently dropped it. Asserted structurally rather than by naming
+    the field, because the failure was a list that stopped being checked
+    against the dataclass, and naming one more field would not fix that.
+
+    This is the second instance of AGENTS.md's "an amendment must reach the
+    tooling that can regenerate it".
+    """
+    store = _store(tmp_path)
+    store.write_pending(_session())
+
+    columns = set(_rows(store.db_path)[0].keys())
+    for field in dataclasses.fields(LatencyBreakdown):
+        assert field.name in columns, f"LatencyBreakdown.{field.name} has no column"
+
+
+def test_the_restore_is_persisted_so_the_exposure_window_can_be_read(
+    tmp_path: Path,
+) -> None:
+    """`restore_ms` is outside G1 and still worth storing: it is how long the
+    transcript sat on the system clipboard, which §7.3 argues about at length
+    and Phase 2a measured against a real clipboard manager."""
+    store = _store(tmp_path)
+    session = _session(timings=LatencyBreakdown(restore_ms=155.1))
+
+    store.write_pending(session)
+
+    assert _rows(store.db_path)[0]["restore_ms"] == pytest.approx(155.1)
+
+
+def test_an_older_database_gains_the_missing_column(tmp_path: Path) -> None:
+    """A schema that only ever runs `CREATE TABLE IF NOT EXISTS` cannot add a
+    column to a database that already exists — which is every database
+    belonging to anyone who used the previous version."""
+    store = _store(tmp_path)
+    store.write_pending(_session())
+    connection = sqlite3.connect(store.db_path)
+    connection.execute("ALTER TABLE transcripts DROP COLUMN restore_ms")
+    connection.commit()
+    connection.close()
+
+    store.write_pending(_session(id="second"))
+
+    assert "restore_ms" in _rows(store.db_path)[0].keys()
+
+
+def test_marking_injected_records_the_restore_as_well(tmp_path: Path) -> None:
+    """`restore_ms` is zero at write time for the same structural reason
+    `inject_ms` is — the restore has not happened yet. Completing the row
+    without it would store a permanent zero and make the clipboard-exposure
+    window unreadable from history, which is the one thing it is stored for."""
+    store = _store(tmp_path)
+    session = _session()
+
+    store.write_pending(session)
+    session.timings.inject_ms = 22.0
+    session.timings.restore_ms = 155.1
+    store.mark_injected(session)
+
+    assert _rows(store.db_path)[0]["restore_ms"] == pytest.approx(155.1)

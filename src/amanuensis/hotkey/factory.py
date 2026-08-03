@@ -12,18 +12,24 @@ is the difference between a port and a rewrite.
 from __future__ import annotations
 
 import sys
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from amanuensis.hotkey.base import HotkeyListener
 from amanuensis.injection.factory import UnsupportedPlatformError
 
+if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
+    from amanuensis.config import HotkeyConfig
+
 __all__ = ["create_hotkey_listener"]
 
-#: `sys.platform` value -> the phase that builds its listener.
-_LISTENERS: Final[dict[str, str]] = {"darwin": "Phase 2b"}
+#: Platforms with a listener. A set rather than the phase table this used to
+#: be: the phase table answered "when will this exist", and now it does.
+_SUPPORTED: Final[frozenset[str]] = frozenset({"darwin"})
 
 
-def create_hotkey_listener(platform: str | None = None) -> HotkeyListener:
+def create_hotkey_listener(
+    config: HotkeyConfig, platform: str | None = None
+) -> HotkeyListener:
     """Return the hotkey listener for this platform.
 
     `platform` defaults to `sys.platform`; it is a parameter so the dispatch
@@ -31,14 +37,16 @@ def create_hotkey_listener(platform: str | None = None) -> HotkeyListener:
     """
     target = platform if platform is not None else sys.platform
 
-    if target not in _LISTENERS:
+    if target not in _SUPPORTED:
         raise UnsupportedPlatformError(
             f"no hotkey listener for platform {target!r}. Amanuensis supports "
             "macOS only in v1; Windows is post-v1 intent and Linux is a "
             "non-goal (PRD §3, §7.3)."
         )
 
-    raise NotImplementedError(
-        f"the {target!r} hotkey listener is not implemented yet — it is built "
-        f"in {_LISTENERS[target]}. Phase 0 defines the contract only."
-    )
+    # Imported here, not at module scope: `hotkey/macos.py` is importable off
+    # macOS but nothing in it is useful there, and this module has to load on
+    # any platform to raise the error above.
+    from amanuensis.hotkey.macos import MacOSHotkeyListener
+
+    return MacOSHotkeyListener(config)

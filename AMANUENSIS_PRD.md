@@ -92,6 +92,31 @@ Three points that were previously ambiguous, resolved 2026-07-30 (objection O8):
    422 ms miss on the first real dictation. It is recorded as `restore_ms`,
    inside `total_ms` and outside `g1_ms` (§6.3).
 
+   **The gated figure is the best case of a linear relationship** (added
+   2026-08-03, Phase 2b finding 3). Measured over fourteen real dictations
+   spanning 0.7 s to 43.4 s:
+
+   ```
+   transcribe_ms ~= 48.8 + 13.69 * seconds_of_audio
+     10 s  ->  186 ms  ->  g1 ~= 225 ms      <- what G1 gates
+     30 s  ->  460 ms  ->  g1 ~= 499 ms
+     60 s  ->  870 ms  ->  g1 ~= 909 ms      <- over G1's 800 ms p95
+   ```
+
+   Point 2 above already says G1 binds at 10 s and that longer utterances are a
+   §7.1 revisit trigger rather than a second budget. That stands. What has to be
+   said alongside it is the consequence: **a user dictating a paragraph is the
+   ordinary case, not an edge case, and G1 says nothing about what they wait.**
+   Publishing 225 ms while a 60-second dictation costs 909 ms is not false, but
+   a reader who has not read this paragraph will draw the wrong conclusion from
+   it, so the README carries the scaling alongside the figure.
+
+   This binds on **Phase 3 immediately**, and is recorded here rather than left
+   to be found there: that phase's gate is ten real dictations of >= 60 seconds,
+   which is exactly where the model predicts ~909 ms. Without this note the
+   result reads as a regression introduced by post-processing. It is the
+   utterance length, and it was already true at the Phase 2b gate.
+
 Two further scoping decisions, resolved the same day:
 
 4. **G1 is tier-conditional, and tiers are measured** (objection O1, revised
@@ -371,6 +396,28 @@ is ambiguous about recording state is a privacy problem regardless of where the 
 - Tray/menubar icon state: idle / recording / transcribing / error
 - Optional audio cue on start and stop (`[feedback] sounds = true`)
 - Recording state must be visible without the tray menu open
+- **A recording affordance with more presence than a menu-bar glyph** (added
+  2026-08-03, Phase 2b finding 4). The minimum indicator built in Phase 2b
+  satisfies the line above — the glyph fills on press and empties on release,
+  confirmed against a running daemon — and the operator's first reaction to
+  using it was that a glyph is not enough to be confident the microphone is
+  live. This is a Phase 4 deliverable, not a Phase 2b one: it means an
+  `NSPanel` overlay or a real `.app` bundle, both of which are work §9 already
+  puts there.
+
+  Recorded because of where it came from. Every other requirement in this
+  document was written before anything existed; this one came from someone
+  using the product and finding the specified behaviour insufficient. A
+  requirement met to the letter and reported as inadequate by its user is worth
+  more than one argued into the spec, and it should not be lost because the
+  gate it arrived at had already passed.
+
+  Note also what met the requirement *without* being built: macOS's own
+  microphone-in-use indicator, which the operator saw alongside the glyph. It
+  is the one recording signal this product cannot suppress and cannot get
+  wrong, and §5.4's purpose is served by it regardless of what Amanuensis
+  draws. That is a reason to build the richer affordance for *confidence*
+  rather than for *correctness*.
 - **Clipboard exposure state** — when `strategy = "clipboard"` and a known
   clipboard manager is detected, the tray carries a persistent indicator that
   transcripts transit the system clipboard (§7.3, objection O12). Same
@@ -676,7 +723,24 @@ class TextInjector(ABC):
 
     def warm_up(self) -> None:
         """Pay the one-time cost now. Idempotent, and invisible to the user."""
+
+    def focus_identity(self) -> str | None:
+        """Who would receive text right now? None when it cannot be told."""
 ```
+
+**`focus_identity` added 2026-08-03** (Phase 2b), for the hazard the concurrency
+model below creates rather than for anything injection needs. `end_session()`
+does not block, so session N's text can land in whatever window has focus when
+the worker reaches it; the controller compares this value across that gap and
+declines to type when it changed. It is on the injector because the injector is
+the component that knows where text goes — the controller must not learn what a
+bundle identifier is (§6.2). The value is opaque and comparable; nothing may
+parse it.
+
+Concrete and `None` by default, on `warm_up`'s argument. **`None` means *cannot
+tell*, which is deliberately not *changed*:** an implementation with no way to
+answer must still inject, because the check exists to catch a change and unknown
+is not one.
 
 **`warm_up` added 2026-08-02** (Phase 2a finding 2), from measurement rather
 than symmetry. The first `inject()` on macOS cost **165.8 ms** and every
@@ -693,6 +757,49 @@ rather than silently wrong. **One constraint is tighter than the engine's:** the
 engine can afford a throwaway inference because it has no effect outside the
 process; an injector must never type a throwaway character into whatever window
 happens to have focus.
+
+**`HotkeyListener` is contracted here from 2026-08-03** (Phase 2b). §6.4 declared
+`hotkey/base.py` from the start and §6.2 listed the component, but this section
+never wrote the contract down — which portability floor item 4 (§7.3) called out
+and Phase 0 closed by declaring the ABC without §6.3 ever catching up.
+
+```python
+class HotkeyListener(ABC):
+    @abstractmethod
+    def start(self, on_press: Callable[[], None],
+              on_release: Callable[[], None]) -> None: ...
+
+    @abstractmethod
+    def stop(self) -> None: ...
+
+    @property
+    @abstractmethod
+    def is_running(self) -> bool: ...
+
+    @abstractmethod
+    def check_permissions(self) -> PermissionStatus:
+        """Non-destructive check. Called at startup, surfaced in the tray."""
+```
+
+**`check_permissions` added on `TextInjector`'s argument, not for symmetry.**
+Every plausible platform has some version of "this app may not watch your
+keyboard", and the user's first dictation is the worst time to discover it. The
+ABC's own text already said `start` raises when the OS refuses the tap and that
+this "is a startup-time condition the tray must surface" — a condition the tray
+must surface needs a method that answers it without raising.
+
+On macOS the two grants are **separate and confusable**:
+`CGPreflightPostEventAccess` is Accessibility, for injection;
+`CGPreflightListenEventAccess` is Input Monitoring, for the hotkey. Different
+Settings panes, granted independently, and a user who granted one for Phase 2a
+will reasonably believe they granted both. Each remediation therefore names its
+own permission *and* says the other one is not it. Both are the non-prompting
+halves of documented pairs; the `CGRequest*` twins raise a system dialog, which
+a daemon that starts at login must never do at startup.
+
+The callbacks return nothing, and that is load-bearing rather than incidental:
+there is nothing useful a callback could hand back to a thread that must not
+wait for it.
 
 ```python
 class TextPostProcessor(ABC):
@@ -716,12 +823,31 @@ class DictationController:
         injector: TextInjector,
         processors: list[TextPostProcessor],
         history: HistoryStore,
+        capture: AudioCapture,                                   # 2026-08-03
+        detector: VoiceActivityDetector,                         # 2026-08-03
+        on_state_change: Callable[[DictationState], None] | None = None,
     ) -> None: ...
+
+    def start(self) -> None: ...          # load, warm, start the worker
+    def shutdown(self) -> None: ...       # release the mic, stop the worker
 
     def start_session(self) -> None: ...
     def end_session(self) -> DictationSession: ...
     def abort_session(self) -> None: ...
 ```
+
+**Four additions, made when the class was first built** (2026-08-03, Phase 2b).
+`capture` and `detector` were in §6.2's component tree and absent from this
+constructor, which would have meant the controller constructing them itself —
+the one component that must not know what a sample rate is reaching for
+PortAudio. `start`/`shutdown` exist because the worker thread and the resident
+model have a lifetime and the three session methods do not describe it.
+
+`on_state_change` is how §5.4's state leaves the controller without the
+controller knowing what draws it. It takes a `DictationState` — exactly §5.4's
+four values, no more — and a callback that raises must not stop dictation:
+§6.2 makes the tray a status surface with no business logic, and that has to
+hold in the failure direction too.
 
 **Configuration is loaded once and passed explicitly** (resolved 2026-07-31,
 choice-story #3). `load_config() -> AppConfig` returns a **frozen** dataclass at
@@ -849,11 +975,12 @@ amanuensis/
 │   ├── hotkey/
 │   │   ├── base.py
 │   │   ├── factory.py            # platform detection → listener (§7.3 floor)
-│   │   └── listener.py
+│   │   └── macos.py              # renamed from listener.py, 2026-08-03
 │   ├── storage/
 │   │   └── history.py            # HistoryStore
 │   └── ui/
-│       └── tray.py
+│       ├── indicator.py          # the minimum §5.4 surface (Phase 2b)
+│       └── tray.py               # TrayApp (Phase 4)
 ├── tests/
 │   └── fixtures/asr/             # desk-mic corpus + reference transcripts (§2, Phase 1)
 ├── docs/
@@ -864,6 +991,14 @@ amanuensis/
 ├── pyproject.toml
 └── README.md
 ```
+
+**`hotkey/listener.py` became `hotkey/macos.py`** (2026-08-03, Phase 2b), on
+this section's own precedent rather than by preference. `injection/` names its
+implementation after the platform because `factory.py` dispatches on platform,
+and `hotkey/factory.py` was specified to mirror it "down to the error wording".
+A Windows port adds `hotkey/windows.py` beside `hotkey/macos.py`; it cannot add
+a second `listener.py`. The name was written before the factory existed and was
+not revisited when it did.
 
 ---
 
@@ -1819,6 +1954,21 @@ rejects if a transcript is lost when injection fails.
 
 ### Phase 2b — Close the loop with the hotkey
 
+> **CLOSED 2026-08-03 — PASS.** `docs/gates/phase-2b.md`. First end-to-end G1
+> measurement as §2 defines it: **p50 223.0 ms / p95 270.0 ms** against 400 /
+> 800, over ten real dictations in the 7–16 s band, read from the daemon's own
+> `history.db` rows. Recording indicator confirmed visible by the operator
+> against a running daemon. Still a floor — `postprocess_ms` is the one stage
+> left, and Phase 3 fills it.
+>
+> Six findings, four amending this document. Two defects came from running the
+> daemon rather than reading it: **it could not be stopped** (Ctrl-C and SIGTERM
+> both did nothing — a Python signal handler cannot run while the main thread is
+> inside `NSApplication.run()`, and `stop_` needs an event to be noticed), and
+> **`restore_ms` had no column in `history.db`**, so Phase 2a's headline finding
+> was emitted and silently dropped on every row since. The p95 figures are the
+> maximum observation at n=14 and n=10 — extremes, not estimates.
+
 `HotkeyListener` (Input Monitoring), `push_to_talk` only, `DictationController` wiring
 press → capture → transcribe → inject.
 
@@ -1841,6 +1991,36 @@ the first full-path number. Decide *before* Phase 1 what happens if it passes at
 and Phase 2b lands at 520 ms — whether the go/no-go is re-run or was already spent —
 and record that decision in `docs/gates/phase-1.md`.
 
+> **Decided 2026-08-02: the go/no-go is re-armed, not spent.** A Phase 2b G1 miss on a
+> Tier A machine rejects the phase *and* re-triggers Phase 1's "stop and renegotiate
+> §7.1". A floor clearing a budget shows the budget is reachable; it does not measure
+> the thing the budget is about, and Phase 1's record labels every one of its numbers a
+> floor. Recorded in `docs/gates/phase-1.md` — **backfilled**, because Phase 1 closed
+> without making this decision at all. Deciding it after seeing Phase 2b's number would
+> have let the number choose the rule.
+
+**`chain = ["rules"]` in this gate names a Phase 3 component** (recorded 2026-08-02).
+`RuleBasedPostProcessor` is built in Phase 3; Phase 2b cannot run the condition as
+written. Same shape as Phase 2a's gate requiring a Phase 4 tray, and resolved the same
+way rather than by moving the clause: **Phase 2b measures end to end with an empty
+chain and labels `g1_ms` a floor once more**, naming `postprocess_ms` as the one stage
+still missing. The reject condition binds on what is measured. The real G1 number —
+every stage populated, nothing labelled — is taken at the **Phase 3** gate.
+
+This is the **second** gate whose conditions reference a component from a later phase,
+after Phase 2a's tray indicator. The remaining gates were checked rather than assumed:
+Phases 0, 1, 3 and 4 name nothing they do not build. So the pattern is confined to the
+two phases the 2026-07-31 split created, which is where it would be — the split moved
+work across a boundary and the gate text either side of it was not re-read.
+
+The same check found staleness pointing the other way, recorded here rather than left
+for whoever opens Phase 3: **that phase's deliverable list names two things already
+built.** `HistoryStore` landed in Phase 2a with the §8 write, and "silence trimming via
+VAD" landed in Phase 1 when §7.4 moved it. Phase 3's remaining scope is
+`RuleBasedPostProcessor`, `VocabularyPostProcessor`, and history's *retention* half —
+`retain_days`, purge, `manu history`, and surfacing the `pending/` orphans §5.5 gap 3
+describes.
+
 ### Phase 3 — Post-processing and history
 `RuleBasedPostProcessor`, `VocabularyPostProcessor`, `HistoryStore`, silence trimming via VAD.
 
@@ -1859,6 +2039,26 @@ not.
 ### Phase 4 — Tray, modes, polish
 `TrayApp`, `toggle` and `vad_auto` modes, error surfacing, README with the clipboard caveat
 documented, install path with checksummed model download.
+
+**Three additions from the Phase 2b gate** (2026-08-03):
+
+1. **`manu toggle` and `manu status`, and the IPC transport underneath them.**
+   Both were marked Phase 2b in `cli.py` and named nowhere in Phase 2b's own
+   text, which lists the listener, the controller and the indicator. They need
+   §7.3's portability floor item 3 — the platform-resolved transport — which no
+   phase had ever scheduled. A floor item with no phase is a floor item that
+   does not exist. They land here because this is the phase that owns `toggle`
+   mode and the tray.
+2. **A recording affordance with more presence than a menu-bar glyph** (§5.4,
+   Phase 2b finding 4). The minimum indicator meets §5.4's letter and its first
+   user said a glyph is not enough to be confident the microphone is live. This
+   means an `NSPanel` overlay or a real `.app` bundle, both already this phase's
+   territory.
+3. **Revisit the asynchronous clipboard restore.** 155 ms of worker thread
+   spent holding the transcript on the clipboard, outside G1 and real. Phase 2b
+   declined it because it races the next dictation, and the serial worker is
+   what makes §6.3's focus check meaningful. The tray is what a restore
+   outliving its session would need in order to report failure anywhere.
 
 The README also carries the **per-tier latency table** — the Tier A G1 figures and the
 Tier B G1-CPU figures, each labelled with **what the machine measured** rather than what
@@ -2139,6 +2339,15 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-03 | **Phase 2b closed — PASS. First end-to-end G1 measurement as §2 defines it: p50 223.0 ms / p95 270.0 ms** against 400 / 800 (`docs/gates/phase-2b.md`). Ten real dictations in the 7–16 s band, read from the daemon's own `history.db` rows rather than a harness, because `LatencyBreakdown` already persists. Passes on all fourteen too, at p50 215.3 / p95 795.0 — by 5 ms, and that margin is the utterance-length finding below. **The p95 at n=14 is the maximum observation, not an estimate of a 95th percentile.** Still a floor: `postprocess_ms` is the one unfilled stage. |
+| 2026-08-03 | **G1's gated figure is the best case of a linear relationship** (§2). Measured across 0.7–43.4 s of speech: `transcribe_ms ≈ 48.8 + 13.69 × seconds`. At 10 s that is `g1 ≈ 225 ms`; at 60 s it is **≈ 909 ms, over G1's 800 ms p95**. §2 already bound G1 at 10 s and that stands — what was missing is the consequence, which is that a user dictating a paragraph is the ordinary case and G1 says nothing about what they wait. **This lands on Phase 3 immediately:** its gate is ten dictations of ≥ 60 s, exactly where the model predicts 909 ms, and without this note the result reads as a regression caused by post-processing rather than by utterance length. |
+| 2026-08-03 | **§5.4 gains a recording affordance beyond the menu-bar glyph; Phase 4 builds it.** The minimum indicator meets §5.4's letter — confirmed against a running daemon, the glyph fills on press and empties on release — and its first user said a glyph is not enough to be confident the microphone is live. Recorded because of where it came from: every other requirement here was written before anything existed, and this one came from someone using the product and finding the specified behaviour insufficient. Also noted: macOS's own microphone indicator meets §5.4 independently and cannot be suppressed by this process, which makes the richer affordance a *confidence* requirement rather than a correctness one. |
+| 2026-08-03 | **The daemon could not be stopped, and that is §5.4's problem with the escape hatch removed.** Ctrl-C and SIGTERM both did nothing; only `kill -9` worked. Two independent causes: CPython cannot run a signal handler while the main thread is blocked inside `NSApplication.run()`, and `NSApplication.stop_` sets a flag checked only when an event is dequeued — which an idle dictation daemon never has. Fixed with a 250 ms `NSTimer` that yields to the interpreter and a posted application-defined event. The indicator was correct the entire time; the failure was that knowing did not help. |
+| 2026-08-03 | **`restore_ms` had no column in `history.db`.** Phase 2a added the field as its headline finding, argued it across §2 and §6.3, and never added the column — so `to_history_row()` emitted the value and `_insert` dropped it, silently, on every row since. Found by reading a real row at this gate. Second instance of AGENTS.md's *an amendment must reach the tooling that can regenerate it*. The regression test iterates `dataclasses.fields(LatencyBreakdown)` rather than naming the field, because the defect was a hand-maintained list that stopped being checked against the dataclass. |
+| 2026-08-03 | **§6.3 contracts `HotkeyListener` and adds `check_permissions`; `TextInjector` gains `focus_identity`; `DictationController`'s constructor gains `capture`, `detector`, `on_state_change`, and a `start`/`shutdown` lifetime.** The listener was declared in §6.4 and listed in §6.2 and never contracted here, which floor item 4 had already flagged. `focus_identity` exists for the hazard the async handoff creates, not for injection: `None` means *cannot tell*, deliberately not *changed*. `capture` and `detector` were in §6.2's tree and absent from the constructor, which would have had the controller reach for PortAudio itself. |
+| 2026-08-03 | **`manu toggle` and `manu status` move to Phase 4, with the IPC transport they need.** `cli.py` said Phase 2b; §9's Phase 2b text names the listener, the controller and the indicator and names neither. Both need §7.3's portability floor item 3, which **no phase had ever scheduled** — a floor item with no phase is a floor item that does not exist. Phase 4 also inherits the asynchronous-restore question Phase 2b declined, because the serial worker is what makes the focus check meaningful. |
+| 2026-08-03 | **`hotkey/listener.py` renamed to `hotkey/macos.py`** (§6.4), on this section's own precedent. `injection/` names its implementation after the platform because `factory.py` dispatches on platform, and `hotkey/factory.py` was specified to mirror it down to the error wording. A Windows port adds `hotkey/windows.py`; it cannot add a second `listener.py`. |
+| 2026-08-02 | **Two §9 gate conditions name components from later phases, and one Phase 1 decision was never made.** Phase 2b's gate asks for `chain = ["rules"]`, which Phase 3 builds — resolved the way Phase 2a's tray indicator was: Phase 2b measures end to end with an empty chain and labels `g1_ms` a floor, and the real G1 number is taken at the Phase 3 gate. Phases 0, 1, 3 and 4 were checked and name nothing they do not build, so the pattern is confined to the two phases the 2026-07-31 split created. Separately: §9 required Phase 1 to decide whether a Phase 2b G1 miss re-runs the project-level go/no-go, and Phase 1 closed without deciding. **Backfilled: re-armed.** A floor clearing a budget shows the budget is reachable and does not measure the thing the budget is about. Also recorded: Phase 3's deliverable list names `HistoryStore` (built in 2a) and VAD trimming (built in Phase 1). |
 | 2026-08-02 | **Phase 2a gate findings applied** (`docs/gates/phase-2a.md`). §6.3's `LatencyBreakdown` gains **`persist_ms`** (inside `g1_ms` — §8's write precedes injection) and **`restore_ms`** (**outside** it — the clipboard restore runs after the text is present). §2's G1 note now says "fully present" fixes the *end* of the window and not only its unit. §6.3's `TextInjector` gains **`warm_up`**, concrete and defaulting to a no-op. §7.3 records that **synthetic keystrokes are rewritten by the target application's text substitution** and that clipboard-manager capture is now measured against a real manager. §9's Phase 2a tray-indicator wording resolved the way Phase 2b resolves the recording indicator. §5.5's engine field reaches `to_history_row`. |
 | 2026-08-02 | **The clipboard restore was being charged to G1, and is not in it.** The first real end-to-end dictation reported `g1_ms` **421.9 ms** against a 400 ms budget, with `inject_ms` **180.3 ms** — roughly 150 of which was `restore_delay_ms` sleeping, after the user already had their words. Split correctly, the same path measures **231.6 ms**. `InjectionResult` carries `restore_ms` because `inject()` returns after both and no caller can separate them from outside. Third phase running in which a stage had nowhere to be recorded, so §6.3 now states the rule rather than patching a fourth time. |
 | 2026-08-02 | **`TextInjector.warm_up` added, from measurement.** The first `inject()` cost **165.8 ms** and every later one under 2 ms — the pyobjc bridges load on first use, 165 ms against a 400 ms budget, on the user's first dictation. §6.3 gave `TranscriptionEngine` a `warm_up` on that exact argument and left this boundary without one; Phase 2a escaped the cost only because the permission check and the manager detection happen to load both bridges first. Tighter than the engine's contract in one respect: an injector must not type a throwaway character into whatever window has focus. |

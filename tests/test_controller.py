@@ -1,0 +1,701 @@
+"""The orchestrator, and the three things it must not get wrong.
+
+`DictationController` is where §6.3's concurrency model stops being a table in
+a document. Everything asserted here is a property of that model rather than of
+dictation:
+
+**`end_session()` must not block.** It is called on the OS event-tap thread,
+and a blocked event tap on macOS is a system-wide input stall — not a slow
+application, a machine whose keyboard has stopped. So the test times it against
+a worker that is deliberately slow, rather than asserting on the shape of the
+code.
+
+**Every field is written before `completed` is set.** That ordering is the only
+synchronisation rule in the model (§6.3). A thread that observes the event set
+is guaranteed a fully written session, and nothing else guards the fields — so
+the test observes from another thread rather than from the one that did the
+writing.
+
+**Persist happens before inject, still.** §8's ordering moved house in this
+phase; it did not get rewritten. The same assertion that guarded it in
+`cli.py` guards it here, because a guarantee that is only tested where it used
+to live is a guarantee with a phase-shaped hole in it.
+
+The fourth property is new to this phase and is the one the async handoff
+creates: a session whose focused application changed between capture and
+injection is **written to history and not injected** (§6.3, objection A6).
+Re-targeting the original window would mean raising another application on the
+user's behalf, which is a larger intrusion than declining to type.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from datetime import UTC, datetime
+from typing import Any
+
+import numpy as np
+import pytest
+from numpy.typing import NDArray
+
+from amanuensis.config import AppConfig, HistoryConfig, InjectionConfig
+from amanuensis.controllers.dictation_controller import (
+    DictationController,
+    DictationState,
+    deliver,
+)
+from amanuensis.models.results import InjectionResult, PermissionStatus
+from amanuensis.models.session import DictationSession
+
+
+class _FakeCapture:
+    def __init__(self, audio: NDArray[np.float32] | None = None) -> None:
+        self._audio = np.ones(16000, dtype=np.float32) if audio is None else audio
+        self.is_recording = False
+        self.starts = 0
+        self.stops = 0
+
+    def start(self) -> None:
+        self.starts += 1
+        self.is_recording = True
+
+    def stop(self) -> NDArray[np.float32]:
+        self.stops += 1
+        self.is_recording = False
+        return self._audio
+
+
+class _FakeTrim:
+    def __init__(self, audio: NDArray[np.float32]) -> None:
+        self.audio = audio
+        self.original_seconds = 1.0
+        self.retained_seconds = 1.0
+        self.speech_segments = 1
+        self.fell_back = False
+
+
+class _FakeDetector:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load(self) -> None:
+        pass
+
+    def trim(self, audio: NDArray[np.float32], _rate: int) -> _FakeTrim:
+        self.calls += 1
+        return _FakeTrim(audio)
+
+
+class _FakeEngine:
+    model_name = "tiny.en"
+    cpu_threads = 4
+
+    def __init__(self, text: str = "hello there", delay_s: float = 0.0) -> None:
+        self.text = text
+        self.delay_s = delay_s
+        self.is_loaded = False
+        self.calls = 0
+
+    def load(self) -> None:
+        self.is_loaded = True
+
+    def warm_up(self) -> None:
+        pass
+
+    def transcribe(self, _audio: NDArray[np.float32], _rate: int) -> str:
+        self.calls += 1
+        if self.delay_s:
+            time.sleep(self.delay_s)
+        return self.text
+
+
+class _FakeInjector:
+    def __init__(
+        self,
+        succeeds: bool = True,
+        focus: str | None = "com.apple.dt",
+        then_focus: str | None = None,
+    ) -> None:
+        self.succeeds = succeeds
+        self.focus = focus
+        #: What the *second* and later reads report. The controller reads the
+        #: focus once on the event-tap thread and once on the worker's, so this
+        #: is how a test moves the user to another application in the gap
+        #: without racing the worker to do it.
+        self.then_focus = then_focus
+        self.focus_reads = 0
+        self.injected: list[str] = []
+        self.warmed = 0
+
+    def inject(self, text: str) -> InjectionResult:
+        self.injected.append(text)
+        return InjectionResult(
+            succeeded=self.succeeds,
+            strategy="clipboard",
+            error=None if self.succeeds else "no",
+            restore_ms=5.0,
+        )
+
+    def check_permissions(self) -> PermissionStatus:
+        return PermissionStatus(granted=True)
+
+    def warm_up(self) -> None:
+        self.warmed += 1
+
+    def focus_identity(self) -> str | None:
+        self.focus_reads += 1
+        if self.focus_reads > 1 and self.then_focus is not None:
+            return self.then_focus
+        return self.focus
+
+
+class _FakeHistory:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.written: list[DictationSession] = []
+
+    def write_pending(self, session: DictationSession) -> bool:
+        self.calls.append("write_pending")
+        self.written.append(session)
+        return bool((session.final_text or session.raw_transcript or "").strip())
+
+    def mark_injected(self, _session: DictationSession) -> None:
+        self.calls.append("mark_injected")
+
+
+class _Upper:
+    name = "upper"
+
+    def process(self, text: str, _session: DictationSession) -> str:
+        return text.upper()
+
+
+def _controller(**overrides: Any) -> DictationController:
+    parts: dict[str, Any] = {
+        "config": AppConfig(),
+        "engine": _FakeEngine(),
+        "injector": _FakeInjector(),
+        "processors": [],
+        "history": _FakeHistory(),
+        "capture": _FakeCapture(),
+        "detector": _FakeDetector(),
+    }
+    parts.update(overrides)
+    return DictationController(**parts)
+
+
+@pytest.fixture
+def controller() -> Any:
+    made = _controller()
+    made.start()
+    yield made
+    made.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The loop
+# ---------------------------------------------------------------------------
+
+
+def test_a_full_cycle_reaches_the_cursor(controller: DictationController) -> None:
+    controller.start_session()
+    session = controller.end_session()
+
+    assert session.wait(5.0), "the worker never completed the session"
+    assert session.raw_transcript == "hello there"
+    assert controller.injector.injected == ["hello there"]
+
+
+def test_persist_happens_before_inject(controller: DictationController) -> None:
+    """§8, unchanged by the move into the controller.
+
+    The ordering is asserted through the history's own call log rather than by
+    reading the source, because the guarantee is about what happens at runtime
+    when injection fails — which is the case it exists for.
+    """
+    controller.start_session()
+    session = controller.end_session()
+    session.wait(5.0)
+
+    assert controller.history.calls == ["write_pending", "mark_injected"]
+
+
+def test_a_failed_injection_leaves_the_transcript_written(controller: Any) -> None:
+    injector = _FakeInjector(succeeds=False)
+    made = _controller(injector=injector)
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.history.calls == ["write_pending"], "mark_injected must not run"
+    assert made.history.written[0].raw_transcript == "hello there"
+
+
+def test_the_processor_chain_runs_in_order(controller: Any) -> None:
+    made = _controller(processors=[_Upper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.final_text == "HELLO THERE"
+    assert made.injector.injected == ["HELLO THERE"]
+
+
+def test_an_empty_transcript_is_not_injected(controller: Any) -> None:
+    """choice-story #7: a session that never reaches injection leaves nothing
+    behind. Pasting an empty string still clobbers the clipboard."""
+    made = _controller(engine=_FakeEngine(text="   "))
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == []
+
+
+# ---------------------------------------------------------------------------
+# The concurrency model
+# ---------------------------------------------------------------------------
+
+
+def test_end_session_does_not_block_on_transcription() -> None:
+    """The event-tap thread calls this. Blocking it stalls input machine-wide.
+
+    Measured against a worker that takes half a second, so the assertion is
+    about the handoff rather than about the shape of the code.
+    """
+    made = _controller(engine=_FakeEngine(delay_s=0.5))
+    made.start()
+    try:
+        made.start_session()
+        started = time.perf_counter()
+        session = made.end_session()
+        elapsed = time.perf_counter() - started
+    finally:
+        session.wait(5.0)
+        made.shutdown()
+
+    assert elapsed < 0.1, f"end_session blocked for {elapsed * 1000:.0f} ms"
+
+
+def test_completed_is_set_last(controller: DictationController) -> None:
+    """The only synchronisation rule in the model (§6.3).
+
+    Observed from another thread, because the guarantee is precisely that a
+    thread which did not do the writing still sees a fully written session.
+    """
+    seen: dict[str, Any] = {}
+
+    controller.start_session()
+    session = controller.end_session()
+
+    def observe() -> None:
+        session.completed.wait(5.0)
+        seen["transcript"] = session.raw_transcript
+        seen["inject_ms"] = session.timings.inject_ms
+        seen["persist_ms"] = session.timings.persist_ms
+
+    watcher = threading.Thread(target=observe)
+    watcher.start()
+    watcher.join(5.0)
+
+    assert seen["transcript"] == "hello there"
+    assert seen["persist_ms"] > 0.0
+
+
+def test_sessions_are_processed_serially() -> None:
+    """§6.3: the worker is serial. Two overlapping dictations must not
+    interleave transcription with injection."""
+    order: list[str] = []
+    lock = threading.Lock()
+
+    class _Recording(_FakeInjector):
+        def inject(self, text: str) -> InjectionResult:
+            with lock:
+                order.append(f"inject:{text}")
+            return super().inject(text)
+
+    class _Counting(_FakeEngine):
+        def transcribe(self, audio: Any, rate: int) -> str:
+            with lock:
+                order.append(f"transcribe:{self.calls}")
+            return super().transcribe(audio, rate)
+
+    made = _controller(engine=_Counting(), injector=_Recording())
+    made.start()
+    try:
+        made.start_session()
+        first = made.end_session()
+        made.start_session()
+        second = made.end_session()
+        first.wait(5.0)
+        second.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert order == [
+        "transcribe:0",
+        "inject:hello there",
+        "transcribe:1",
+        "inject:hello there",
+    ]
+
+
+def test_a_start_while_recording_is_a_no_op(controller: DictationController) -> None:
+    controller.start_session()
+    controller.start_session()
+
+    assert controller.capture.starts == 1
+    controller.end_session().wait(5.0)
+
+
+def test_abort_discards_without_persisting(controller: DictationController) -> None:
+    """choice-story #7: an aborted session has no §8 claim and leaves nothing.
+
+    §5.5 is explicit — previously every misfired session was written to disk
+    before the user had seen it, and retained for thirty days by default.
+    """
+    controller.start_session()
+    controller.abort_session()
+
+    assert controller.capture.stops == 1
+    assert controller.history.calls == []
+    assert controller.state is DictationState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# The hazard the async handoff creates
+# ---------------------------------------------------------------------------
+
+
+def test_a_changed_focus_is_persisted_and_not_injected() -> None:
+    """§6.3's v1 resolution, objection A6.
+
+    §8's guarantee saves the words; it does not stop them landing in the wrong
+    application. The words go to history and nothing is typed.
+    """
+    # The user releases the hotkey in Terminal and switches to Mail before the
+    # worker reaches the session.
+    injector = _FakeInjector(focus="com.apple.Terminal", then_focus="com.apple.mail")
+    made = _controller(injector=injector)
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.history.calls == ["write_pending"]
+    assert injector.injected == []
+    assert session.error is not None
+    assert "focus" in session.error.lower()
+
+
+def test_an_unknown_focus_does_not_block_injection() -> None:
+    """`focus_identity` returning None means "cannot tell", not "changed".
+
+    An injector on a platform with no way to answer must still inject; the
+    check exists to catch a *change*, and unknown is not a change.
+    """
+    made = _controller(injector=_FakeInjector(focus=None))
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == ["hello there"]
+
+
+# ---------------------------------------------------------------------------
+# State, for §5.4
+# ---------------------------------------------------------------------------
+
+
+def test_state_transitions_are_reported(controller: Any) -> None:
+    """§5.4: the user must always know whether the mic is live. The controller
+    owns the state; something else renders it."""
+    seen: list[DictationState] = []
+    made = _controller(on_state_change=seen.append)
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+        # The worker sets IDLE after injection; give it a moment to land.
+        deadline = time.perf_counter() + 5.0
+        while made.state is not DictationState.IDLE and time.perf_counter() < deadline:
+            time.sleep(0.01)
+    finally:
+        made.shutdown()
+
+    # `start()` reports IDLE so the indicator has something to draw before the
+    # first dictation — a blank status item is exactly the ambiguity §5.4
+    # forbids.
+    assert seen == [
+        DictationState.IDLE,
+        DictationState.RECORDING,
+        DictationState.TRANSCRIBING,
+        DictationState.IDLE,
+    ]
+
+
+def test_the_mic_state_is_never_ambiguous_on_failure(controller: Any) -> None:
+    """A raising engine must not leave the indicator saying "recording".
+
+    §5.4 makes this a privacy requirement rather than a polish one: the state
+    the user reads has to match whether the microphone is live, including on
+    the paths nobody planned.
+    """
+
+    class _Exploding(_FakeEngine):
+        def transcribe(self, _audio: Any, _rate: int) -> str:
+            raise RuntimeError("ct2 fell over")
+
+    seen: list[DictationState] = []
+    made = _controller(engine=_Exploding(), on_state_change=seen.append)
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.error is not None
+    assert made.state is not DictationState.RECORDING
+    assert not made.capture.is_recording
+
+
+def test_a_raising_state_callback_does_not_break_the_loop(controller: Any) -> None:
+    """The callback belongs to the UI. A tray that throws must not stop
+    dictation — §6.2 makes the tray a status surface with no business logic,
+    and that has to hold in the failure direction too."""
+
+    def explode(_state: DictationState) -> None:
+        raise RuntimeError("the status item is having a day")
+
+    made = _controller(on_state_change=explode)
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == ["hello there"]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_start_warms_the_injector_and_loads_the_engine() -> None:
+    """Both costs land at daemon start or on the user's first dictation. The
+    first injection cost 165.8 ms before `warm_up` existed (Phase 2a)."""
+    made = _controller()
+    made.start()
+    try:
+        assert made.injector.warmed == 1
+        assert made.engine.is_loaded
+    finally:
+        made.shutdown()
+
+
+def test_shutdown_is_idempotent() -> None:
+    made = _controller()
+    made.start()
+    made.shutdown()
+    made.shutdown()
+
+    assert not made.is_running
+
+
+def test_shutdown_stops_a_live_microphone() -> None:
+    """A daemon that exits holding the microphone is §5.4's failure in its
+    purest form: the indicator is gone and the mic may not be."""
+    made = _controller()
+    made.start()
+    made.start_session()
+    made.shutdown()
+
+    assert not made.capture.is_recording
+
+
+def test_end_session_without_a_press_is_refused(
+    controller: DictationController,
+) -> None:
+    """Unreachable through the listener, which only emits transitions — and
+    asserted anyway, because "unreachable" is a claim about another module."""
+    with pytest.raises(RuntimeError, match="no session"):
+        controller.end_session()
+
+
+def test_config_slices_are_not_the_whole_config() -> None:
+    """§6.3, choice-story #3: components receive the narrowest slice they need.
+
+    The controller is the one component that legitimately holds the whole
+    `AppConfig` — it is the orchestrator — but it must not be the route by
+    which anything else reaches a table it was denied.
+    """
+    made = _controller(
+        config=AppConfig(
+            injection=InjectionConfig(strategy="keystroke"),
+            history=HistoryConfig(retain=False),
+        )
+    )
+    assert made.config.injection.strategy == "keystroke"
+
+
+# ---------------------------------------------------------------------------
+# `deliver` on its own — the §8 ordering, tested without a thread
+#
+# Moved here from `test_cli.py` in Phase 2b along with the function. These
+# exercise the ordering directly; the controller tests above exercise the fact
+# that the worker actually calls it. Both are worth having: the first is the
+# guarantee, the second is that the guarantee is on the path.
+# ---------------------------------------------------------------------------
+
+
+class _SpyHistory:
+    """Records the order in which the store was called, and by whom."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self.written: list[str] = []
+
+    def write_pending(self, session: object) -> bool:
+        transcript = getattr(session, "final_text", None) or getattr(
+            session, "raw_transcript", ""
+        )
+        if not transcript or not transcript.strip():
+            return False
+        self.calls.append("persist")
+        self.written.append(transcript)
+        return True
+
+    def mark_injected(self, session: object) -> None:
+        self.calls.append("mark")
+
+
+class _SpyInjector:
+    def __init__(
+        self,
+        calls: list[str],
+        *,
+        succeeded: bool = True,
+        raises: Exception | None = None,
+    ) -> None:
+        self.calls = calls
+        self._succeeded = succeeded
+        self._raises = raises
+        self.injected: list[str] = []
+
+    def inject(self, text: str) -> InjectionResult:
+        self.calls.append("inject")
+        if self._raises is not None:
+            raise self._raises
+        self.injected.append(text)
+        return InjectionResult(
+            succeeded=self._succeeded,
+            strategy="clipboard",
+            error=None if self._succeeded else "no permission",
+        )
+
+    def check_permissions(self) -> PermissionStatus:
+        return PermissionStatus(granted=True)
+
+
+def _session(text: str = "the small conference room") -> DictationSession:
+    return DictationSession(
+        id="01J0000000000000000000",
+        started_at=datetime(2026, 8, 2, 9, 0, tzinfo=UTC),
+        audio=None,
+        sample_rate=16000,
+        raw_transcript=text,
+    )
+
+
+def test_the_transcript_is_persisted_before_it_is_injected() -> None:
+    """§8, stated as an ordering: *write to history before injection*. This is
+    the one invariant in the product that cannot be repaired later — a crash
+    between the two costs the user their words, and no amount of correct
+    behaviour afterwards gets them back.
+    """
+    calls: list[str] = []
+
+    deliver(_session(), _SpyHistory(calls), _SpyInjector(calls))
+
+    assert calls == ["persist", "inject", "mark"]
+
+
+def test_a_failed_injection_leaves_the_transcript_persisted() -> None:
+    """The Phase 2a gate's third reject condition. `mark_injected` is not
+    called, so the `retain = false` file is not unlinked and the row is not
+    flagged — both paths keep the words."""
+    calls: list[str] = []
+    history = _SpyHistory(calls)
+
+    result = deliver(_session(), history, _SpyInjector(calls, succeeded=False))
+
+    assert result.succeeded is False
+    assert history.written == ["the small conference room"]
+    assert "mark" not in calls
+
+
+def test_an_injector_that_raises_does_not_cost_the_transcript() -> None:
+    """The ABC says `inject` reports rather than raises, and a pyobjc bridge
+    is exactly the kind of thing that violates a contract like that. The write
+    has already happened, so the words are safe; what this guarantees is that
+    the process reports it instead of dying with a traceback."""
+    calls: list[str] = []
+    history = _SpyHistory(calls)
+    injector = _SpyInjector(calls, raises=RuntimeError("NSInternalInconsistency"))
+
+    result = deliver(_session(), history, injector)
+
+    assert result.succeeded is False
+    assert result.error is not None
+    assert "NSInternalInconsistency" in result.error
+    assert history.written == ["the small conference room"]
+    assert "mark" not in calls
+
+
+def test_the_write_and_the_injection_are_both_timed() -> None:
+    """Both are inside G1's clock (§2) — it starts at hotkey release and these
+    happen after it. A stage that cannot be measured cannot be defended when
+    G1 is missed."""
+    session = _session()
+
+    deliver(session, _SpyHistory([]), _SpyInjector([]))
+
+    assert session.timings.persist_ms > 0.0
+    assert session.timings.inject_ms > 0.0
+
+
+def test_nothing_is_injected_when_there_was_nothing_to_persist() -> None:
+    """choice-story #7: a session that never reaches injection leaves nothing
+    behind. Pasting an empty string would still clobber the clipboard."""
+    calls: list[str] = []
+
+    result = deliver(_session(text="   "), _SpyHistory(calls), _SpyInjector(calls))
+
+    assert result.succeeded is False
+    assert calls == []
