@@ -190,11 +190,12 @@ class MacOSInjector(TextInjector):
                 error=f"missing macOS permission: {', '.join(status.missing)}",
             )
 
+        restore_ms = 0.0
         if strategy == "keystroke":
             self._type(text)
         else:
-            self._paste(text)
-        return InjectionResult(succeeded=True, strategy=strategy)
+            restore_ms = self._paste(text)
+        return InjectionResult(succeeded=True, strategy=strategy, restore_ms=restore_ms)
 
     def check_permissions(self) -> PermissionStatus:
         """Can this process post synthetic events? Asked without posting one.
@@ -218,9 +219,32 @@ class MacOSInjector(TextInjector):
             remediation=_REMEDIATION,
         )
 
+    def warm_up(self) -> None:
+        """Load both pyobjc bridges and build one throwaway event.
+
+        The permission check pulls in Quartz and the pasteboard handle pulls
+        in AppKit; creating and discarding a keyboard event covers the rest of
+        the first-call cost. Nothing is posted and nothing is written, so this
+        is invisible outside the process — see the ABC on why that constraint
+        is tighter here than for the engine.
+        """
+        self.check_permissions()
+        appkit = _appkit()
+        appkit.NSPasteboard.generalPasteboard()
+        quartz = _quartz()
+        quartz.CGEventCreateKeyboardEvent(None, _V_KEYCODE, True)
+
     # -- strategies --------------------------------------------------------
 
-    def _paste(self, text: str) -> None:
+    def _paste(self, text: str) -> float:
+        """Paste `text`, then put the clipboard back. Returns the restore cost.
+
+        The return value exists because of where §2 draws G1's boundary: the
+        goal ends when the text is *fully present in the focused application*,
+        and everything after `_post_command_v` is cleanup the user is not
+        waiting on. Only this method can tell the two apart — from outside,
+        `inject()` is one call that returns after both.
+        """
         appkit = _appkit()
         pasteboard = appkit.NSPasteboard.generalPasteboard()
 
@@ -234,10 +258,14 @@ class MacOSInjector(TextInjector):
         pasteboard.setString_forType_(text, appkit.NSPasteboardTypeString)
         self._post_command_v()
 
-        if self._config.restore_clipboard and previous is not None:
-            _sleep(self._config.restore_delay_ms / 1000.0)
-            pasteboard.clearContents()
-            pasteboard.setString_forType_(previous, appkit.NSPasteboardTypeString)
+        if not (self._config.restore_clipboard and previous is not None):
+            return 0.0
+
+        started = time.perf_counter()
+        _sleep(self._config.restore_delay_ms / 1000.0)
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(previous, appkit.NSPasteboardTypeString)
+        return (time.perf_counter() - started) * 1000.0
 
     def _post_command_v(self) -> None:
         quartz = _quartz()

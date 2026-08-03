@@ -39,3 +39,27 @@ class TextInjector(ABC):
     @abstractmethod
     def check_permissions(self) -> PermissionStatus:
         """Non-destructive check. Called at startup, surfaced in the tray."""
+
+    def warm_up(self) -> None:  # noqa: B027 — deliberately concrete, see below
+        """Pay the one-time cost now, so the first dictation does not.
+
+        Added in Phase 2a from measurement, not symmetry: the first
+        `inject()` on macOS cost **165.8 ms** and every subsequent one under
+        2 ms, because loading the pyobjc bridges happens on first use. That is
+        165 ms against a 400 ms budget, landing on the user's first dictation.
+
+        `TranscriptionEngine.warm_up` exists on the identical argument — "the
+        first real call must not pay compile cost" (§6.3) — and this boundary
+        had the same problem and no method for it. Phase 2a's CLI avoided it
+        only by accident, because checking permissions and detecting clipboard
+        managers happen to touch both bridges before the microphone opens.
+
+        Concrete rather than abstract, and a no-op by default: an injector
+        with nothing to warm should not be forced to write an empty method,
+        and this is not a boundary where forgetting to implement it is
+        silently wrong — it is slow once, which the timings show.
+
+        Must be idempotent, and must have no effect a user could observe. The
+        engine can afford a throwaway inference; an injector cannot type a
+        throwaway character into whatever window has focus.
+        """

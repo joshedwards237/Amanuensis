@@ -13,6 +13,7 @@ import threading
 from datetime import UTC, datetime
 
 import numpy as np
+import pytest
 
 from amanuensis.models.results import InjectionResult, PermissionStatus
 from amanuensis.models.session import DictationSession, LatencyBreakdown
@@ -234,3 +235,35 @@ def test_history_row_names_the_engine_that_produced_the_transcript() -> None:
     session = _session(engine="faster_whisper:tiny.en")
 
     assert session.to_history_row()["engine"] == "faster_whisper:tiny.en"
+
+
+def test_restoring_the_clipboard_is_outside_the_gated_number() -> None:
+    """§2 defines G1 as ending when the text is **fully present** in the
+    focused application. The clipboard restore happens strictly after that —
+    the user has their words and is reading them while it runs — so counting
+    it against G1 measures the product as slower than the experience it
+    delivers.
+
+    Measured at the Phase 2a gate: a real dictation reported `inject_ms` of
+    180.3 ms, of which roughly 150 ms was `restore_delay_ms` sleeping. That
+    pushed a 272 ms delivery over G1's 400 ms p50 on paper.
+
+    It is still recorded, and still in `total_ms`, because a restore that
+    never completes is a clipboard the user does not get back.
+    """
+    timings = LatencyBreakdown(
+        vad_ms=25.6,
+        transcribe_ms=213.2,
+        persist_ms=2.8,
+        inject_ms=30.3,
+        restore_ms=150.0,
+    )
+
+    assert timings.g1_ms == pytest.approx(271.9)
+    assert timings.total_ms == pytest.approx(421.9)
+
+
+def test_the_restore_is_not_charged_to_the_asr_stage_either() -> None:
+    timings = LatencyBreakdown(vad_ms=18.0, transcribe_ms=328.0, restore_ms=150.0)
+
+    assert timings.asr_ms == 346.0

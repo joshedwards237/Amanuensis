@@ -378,3 +378,79 @@ def test_an_application_with_no_bundle_identifier_is_skipped(
 
     assert exposure.detected is True
     assert exposure.manager == "Raycast"
+
+
+def test_the_injector_reports_what_the_restore_cost(frameworks: Any) -> None:
+    """The caller cannot measure this from outside — `inject()` returns once,
+    after both the paste and the restore. Without the split, §2's "fully
+    present" boundary is unmeasurable and G1 is reported as the sum of a
+    delivery the user waited for and a cleanup they did not."""
+    frameworks()
+
+    result = MacOSInjector(InjectionConfig(restore_delay_ms=150)).inject("words")
+
+    assert result.restore_ms > 0.0
+
+
+def test_nothing_is_charged_to_restore_when_there_is_nothing_to_restore(
+    frameworks: Any,
+) -> None:
+    frameworks(clipboard=None)
+
+    result = MacOSInjector(InjectionConfig()).inject("words")
+
+    assert result.restore_ms == 0.0
+
+
+def test_the_keystroke_strategy_has_no_restore_cost(frameworks: Any) -> None:
+    frameworks()
+
+    result = MacOSInjector(InjectionConfig(strategy="keystroke")).inject("hi")
+
+    assert result.restore_ms == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Warm-up — §6.3's `TranscriptionEngine` argument, applied to the injector
+# ---------------------------------------------------------------------------
+
+
+def test_warm_up_loads_both_bridges(frameworks: Any) -> None:
+    """Measured: the first `inject()` costs 165.8 ms and every later one under
+    2 ms, because `import AppKit` and `import Quartz` land inside it. §6.3
+    gives `TranscriptionEngine` a `warm_up()` on exactly this argument — "the
+    first real call must not pay compile cost" — and the injector has the same
+    problem with no such method.
+
+    165 ms against a 400 ms budget, on the user's *first* dictation, which is
+    the one that decides whether they keep the tool.
+    """
+    _, quartz, _ = frameworks()
+
+    MacOSInjector(InjectionConfig()).warm_up()
+
+    assert quartz.preflight_calls >= 1
+
+
+def test_warm_up_does_not_type_or_touch_the_clipboard(frameworks: Any) -> None:
+    """A warm-up that injected a throwaway string would put it in whatever
+    window has focus — and, under the clipboard strategy, in the user's
+    clipboard manager. The engine can afford a throwaway inference because it
+    has no side effects outside the process. This cannot."""
+    pasteboard, quartz, _ = frameworks()
+
+    MacOSInjector(InjectionConfig()).warm_up()
+
+    assert pasteboard.writes == []
+    assert quartz.posted == []
+
+
+def test_warm_up_is_idempotent(frameworks: Any) -> None:
+    """§6.3 requires it of `load`; the same reason applies here — a daemon
+    that restarts its injector should not have to track whether it already
+    warmed one."""
+    frameworks()
+    injector = MacOSInjector(InjectionConfig())
+
+    injector.warm_up()
+    injector.warm_up()

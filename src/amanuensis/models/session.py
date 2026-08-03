@@ -67,6 +67,14 @@ class LatencyBreakdown:
     #: send a reader to the wrong one.
     persist_ms: float = 0.0
     inject_ms: float = 0.0
+    #: Putting the user's clipboard back after a paste (§7.3). Recorded, and
+    #: deliberately **outside** `g1_ms`: §2 ends G1 when the text is *fully
+    #: present in the focused application*, and the restore runs strictly
+    #: after that, while the user is already reading their words. Phase 2a
+    #: measured a real dictation at 180.3 ms of `inject_ms`, roughly 150 of
+    #: which was `restore_delay_ms` sleeping — enough to report a 272 ms
+    #: delivery as a 422 ms G1 miss.
+    restore_ms: float = 0.0
 
     @property
     def asr_ms(self) -> float:
@@ -93,8 +101,14 @@ class LatencyBreakdown:
 
     @property
     def total_ms(self) -> float:
-        """Every stage including capture. Diagnostics — never assert G1 here."""
-        return self.capture_ms + self.g1_ms
+        """Every stage including capture. Diagnostics — never assert G1 here.
+
+        `restore_ms` is in here and not in `g1_ms`. It is real time the
+        process spends and a restore that never completes is a clipboard the
+        user does not get back — but it is not time the user waits for their
+        text, which is the only thing G1 is about.
+        """
+        return self.capture_ms + self.g1_ms + self.restore_ms
 
 
 @dataclass(slots=True)

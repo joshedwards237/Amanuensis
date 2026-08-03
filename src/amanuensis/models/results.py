@@ -37,6 +37,14 @@ class InjectionResult:
     #: always the configured one if a fallback fired.
     strategy: str
     error: str | None = None
+    #: How long the clipboard restore took, in milliseconds. Reported here
+    #: because a caller timing `inject()` from outside cannot separate it:
+    #: the call returns once, after both the paste and the cleanup that
+    #: follows it. §2 ends G1 when the text is fully present, so the two have
+    #: to be told apart or G1 is charged for work done after the user already
+    #: had their words. Zero for the keystroke strategy, which restores
+    #: nothing.
+    restore_ms: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

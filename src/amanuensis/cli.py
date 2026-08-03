@@ -226,6 +226,11 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
             print(f"manu transcribe: {exc}", file=sys.stderr)
             return _EXIT_ERROR
 
+        # Before the microphone opens, not after: the first injection costs
+        # ~165 ms of pyobjc import and it would otherwise land on the run the
+        # user is timing. Phase 2a used to get this by accident.
+        injector.warm_up()
+
         status = injector.check_permissions()
         if not status.granted:
             print(f"manu transcribe: {status.remediation}", file=sys.stderr)
@@ -383,7 +388,14 @@ def _deliver(
             strategy="unknown",
             error=f"the injector raised: {exc!r}",
         )
-    session.timings.inject_ms = (time.perf_counter() - started) * 1000.0
+    # The restore is subtracted rather than left in. `inject()` returns after
+    # both, and §2 ends G1 when the text is fully present — charging the
+    # clipboard cleanup to the number the user experiences would report a
+    # 272 ms delivery as a 422 ms miss, which is exactly what the first real
+    # dictation did before this split existed.
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    session.timings.restore_ms = result.restore_ms
+    session.timings.inject_ms = max(0.0, elapsed_ms - result.restore_ms)
 
     if result.succeeded:
         history.mark_injected(session)
@@ -494,6 +506,10 @@ def _print_timings(
     if injected:
         print(f"  {'persist_ms':<16} {timings.persist_ms:8.1f}")
         print(f"  {'inject_ms':<16} {timings.inject_ms:8.1f}")
+        print(
+            f"  {'restore_ms':<16} {timings.restore_ms:8.1f}   "
+            "(excluded from G1 — runs after the text is present, §2)"
+        )
     print(
         f"  {'g1_ms':<16} {timings.g1_ms:8.1f}   " "<- G1: 400 ms p50 / 800 ms p95 (§2)"
     )
