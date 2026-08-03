@@ -24,7 +24,7 @@ from abc import ABC
 
 import pytest
 
-from amanuensis.config import InjectionConfig
+from amanuensis.config import HotkeyConfig, InjectionConfig
 from amanuensis.engines.base import TranscriptionEngine
 from amanuensis.engines.registry import UnknownBackendError, resolve_engine
 from amanuensis.hotkey.base import HotkeyListener
@@ -52,7 +52,11 @@ def _abstract_methods(cls: type) -> set[str]:
         (TranscriptionEngine, {"load", "transcribe", "warm_up", "is_loaded"}),
         (TextInjector, {"inject", "check_permissions"}),
         (TextPostProcessor, {"process", "name"}),
-        (HotkeyListener, {"start", "stop", "is_running"}),
+        # `check_permissions` added in Phase 2b, on `TextInjector`'s argument:
+        # Input Monitoring is a startup-time condition the daemon must report
+        # before it takes the microphone, not one `start()` discovers by
+        # raising.
+        (HotkeyListener, {"start", "stop", "is_running", "check_permissions"}),
     ],
 )
 def test_abc_declares_exactly_its_contract(abc_cls: type, expected: set[str]) -> None:
@@ -143,12 +147,10 @@ def test_hotkey_factory_mirrors_the_injector_factory() -> None:
     """§7.3 floor item 4 — the ABC the 'real chance we replace it' test was
     never applied to. It gets a factory now, when that costs nothing."""
     with pytest.raises(UnsupportedPlatformError):
-        create_hotkey_listener(platform="linux")
+        create_hotkey_listener(HotkeyConfig(), platform="linux")
 
-    with pytest.raises(NotImplementedError) as exc:
-        create_hotkey_listener(platform="darwin")
-
-    assert "Phase 2b" in str(exc.value)
+    made = create_hotkey_listener(HotkeyConfig(), platform="darwin")
+    assert isinstance(made, HotkeyListener)
 
 
 def test_factories_default_to_detecting_the_running_platform() -> None:

@@ -51,13 +51,19 @@ words the user committed to; a misfire has no such claim, and writing one
 would mean every aborted session lands on disk before the user has seen it,
 retained for thirty days by default.
 
-Deferred with a name, because §5.5 asks for it and Phase 2a cannot supply it:
-**orphan sweeping**. Every failed injection under `retain = false` leaves a
-plaintext file behind, and §5.5 says they are swept at daemon start. Phase 2a
-has no daemon — `manu transcribe --inject` is a one-shot. The sweep belongs
-with the daemon in Phase 2b, and `manu history` surfaces the files in Phase 3.
-Until then the files accumulate, which is a real cost and is stated in the
-gate record rather than left for someone to find.
+**Orphans expire; they are not deleted on sight** (Phase 2b, §5.5 gap 2).
+Every failed injection under `retain = false` leaves a plaintext file behind,
+and §5.5 asks for a sweep at daemon start. What §5.5 does *not* say is what
+sweeping means, and the two readings point opposite ways: unlinking every
+pending file at start would close the accumulation gap by deleting the exact
+transcript §8 wrote to survive a failed injection — for the one user who has no
+`history.db` row to fall back on. So `sweep_pending` applies `retain_days`,
+which is §5.3's existing expiry knob and needs no second one invented beside
+it. `retain_days = 0` still means nothing is kept.
+
+`manu history` surfaces these files in Phase 3 (§5.5 gap 3). Until then a user
+whose injection failed is told the path on stderr and nothing enumerates them,
+which is stated in the gate record rather than left for someone to find.
 """
 
 from __future__ import annotations
@@ -65,15 +71,35 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
 from amanuensis.config import HistoryConfig, default_data_dir
 from amanuensis.models.session import DictationSession
 
-__all__ = ["HistoryStore"]
+__all__ = ["HistoryStore", "SweepResult"]
+
+_SECONDS_PER_DAY: Final = 86400.0
+
+
+@dataclass(frozen=True, slots=True)
+class SweepResult:
+    """What the daemon-start sweep did, so the daemon can say so.
+
+    `remaining` is the interesting number and the reason this is not a bare
+    count of deletions: it is how many transcripts the user still has waiting
+    from failed injections, and until `manu history` surfaces them (Phase 3)
+    the daemon's start-up line is the only thing that mentions they exist.
+    """
+
+    removed: int
+    remaining: int
+    failed: int = 0
+
 
 #: Owner-only. The database and the pending files both hold transcripts, which
 #: §7.6 treats as the sensitive artefact and the default umask does not.
@@ -173,6 +199,42 @@ class HistoryStore:
             self._complete(session)
         else:
             self._pending_path(session.id).unlink(missing_ok=True)
+
+    def sweep_pending(self) -> SweepResult:
+        """Expire orphaned pending files. Call at daemon start (§5.5 gap 2).
+
+        An orphan is a transcript that was written before injection and never
+        unlinked, because the injection failed or the process died between the
+        two. They are plaintext, they are `0600`, and under `retain = false`
+        they accumulate — which is the gap §5.5 asks to close.
+
+        **It closes by expiry, not by deletion.** Unlinking on sight would
+        delete the words §8 wrote precisely so a failed injection would not
+        cost them, and it would do it to the user who has no `history.db` row
+        to recover from. `retain_days` is what §5.3 already means by "how long
+        transcripts are kept", so it governs here too.
+
+        Errors are counted, not raised. This runs at daemon start, and a file
+        another process holds open must not stop the microphone coming up.
+        """
+        if not self.pending_dir.exists():
+            return SweepResult(removed=0, remaining=0, failed=0)
+
+        cutoff = time.time() - self._config.retain_days * _SECONDS_PER_DAY
+        removed = remaining = failed = 0
+        # Globbed by the pattern this module writes, never by directory. A
+        # sweep that unlinked everything under `pending/` would delete whatever
+        # a user or another tool had put there.
+        for path in self.pending_dir.glob("*.json"):
+            try:
+                if path.stat().st_mtime > cutoff:
+                    remaining += 1
+                    continue
+                path.unlink()
+                removed += 1
+            except OSError:
+                failed += 1
+        return SweepResult(removed=removed, remaining=remaining, failed=failed)
 
     # -- retain = true -----------------------------------------------------
 

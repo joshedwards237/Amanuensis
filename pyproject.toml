@@ -140,6 +140,7 @@ module = [
     "AppKit.*",
     "ApplicationServices.*",
     "Quartz.*",
+    "Foundation.*",
     "ctranslate2.*",
     "faster_whisper.*",
     "sounddevice.*",

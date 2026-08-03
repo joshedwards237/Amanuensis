@@ -12,24 +12,16 @@ decided by implementation order.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
 from amanuensis.cli import (
     _clipboard_warning,
-    _deliver,
     _keystroke_warning,
     build_parser,
     main,
 )
 from amanuensis.config import InjectionConfig
-from amanuensis.models.results import (
-    ClipboardExposure,
-    InjectionResult,
-    PermissionStatus,
-)
-from amanuensis.models.session import DictationSession
+from amanuensis.models.results import ClipboardExposure
 
 
 def test_help_exits_zero() -> None:
@@ -70,9 +62,12 @@ def test_no_subcommand_prints_usage_and_fails() -> None:
 @pytest.mark.parametrize(
     ("verb", "phase"),
     [
-        ("daemon", "Phase 2b"),
-        ("toggle", "Phase 2b"),
-        ("status", "Phase 2b"),
+        # `daemon` left this table in Phase 2b — it does something now, and
+        # calling `main(["daemon"])` from a test would take the microphone and
+        # block in an AppKit run loop. Its paths are tested below, all of them
+        # ones that return before anything is opened.
+        ("toggle", "Phase 4"),
+        ("status", "Phase 4"),
         ("history", "Phase 3"),
     ],
 )
@@ -83,6 +78,22 @@ def test_each_verb_names_the_phase_that_builds_it(
 
     assert exit_code != 0
     assert phase in capsys.readouterr().err
+
+
+def test_toggle_and_status_name_the_transport_they_are_waiting_on() -> None:
+    """Recorded at the Phase 2b gate: §9's Phase 2b names the listener, the
+    controller and the indicator, and does not name these two. Both need the
+    IPC transport §7.3 lists as portability floor item 3, which no phase ever
+    scheduled — so they move to Phase 4, which owns `toggle` mode and the tray.
+
+    Asserted here rather than left as prose, because the previous value said
+    Phase 2b and this phase is the one that would have shipped the lie.
+    """
+    from amanuensis.cli import _VERB_PHASES
+
+    assert _VERB_PHASES["toggle"] == "Phase 4"
+    assert _VERB_PHASES["status"] == "Phase 4"
+    assert "daemon" not in _VERB_PHASES
 
 
 def test_a_bad_config_is_reported_as_an_error_not_a_traceback(
@@ -148,139 +159,12 @@ def test_transcribe_reports_a_bad_config_as_a_sentence(
 
 
 # --------------------------------------------------------------------------
-# Phase 2a — `--inject`, and the §8 ordering it exists to honour
-# --------------------------------------------------------------------------
-
-
-class _SpyHistory:
-    """Records the order in which the store was called, and by whom."""
-
-    def __init__(self, calls: list[str]) -> None:
-        self.calls = calls
-        self.written: list[str] = []
-
-    def write_pending(self, session: object) -> bool:
-        transcript = getattr(session, "final_text", None) or getattr(
-            session, "raw_transcript", ""
-        )
-        if not transcript or not transcript.strip():
-            return False
-        self.calls.append("persist")
-        self.written.append(transcript)
-        return True
-
-    def mark_injected(self, session: object) -> None:
-        self.calls.append("mark")
-
-
-class _SpyInjector:
-    def __init__(
-        self,
-        calls: list[str],
-        *,
-        succeeded: bool = True,
-        raises: Exception | None = None,
-    ) -> None:
-        self.calls = calls
-        self._succeeded = succeeded
-        self._raises = raises
-        self.injected: list[str] = []
-
-    def inject(self, text: str) -> InjectionResult:
-        self.calls.append("inject")
-        if self._raises is not None:
-            raise self._raises
-        self.injected.append(text)
-        return InjectionResult(
-            succeeded=self._succeeded,
-            strategy="clipboard",
-            error=None if self._succeeded else "no permission",
-        )
-
-    def check_permissions(self) -> PermissionStatus:
-        return PermissionStatus(granted=True)
-
-
-def _session(text: str = "the small conference room") -> DictationSession:
-    return DictationSession(
-        id="01J0000000000000000000",
-        started_at=datetime(2026, 8, 2, 9, 0, tzinfo=UTC),
-        audio=None,
-        sample_rate=16000,
-        raw_transcript=text,
-    )
-
-
-def test_the_transcript_is_persisted_before_it_is_injected() -> None:
-    """§8, stated as an ordering: *write to history before injection*. This is
-    the one invariant in the product that cannot be repaired later — a crash
-    between the two costs the user their words, and no amount of correct
-    behaviour afterwards gets them back.
-    """
-    calls: list[str] = []
-
-    _deliver(_session(), _SpyHistory(calls), _SpyInjector(calls))
-
-    assert calls == ["persist", "inject", "mark"]
-
-
-def test_a_failed_injection_leaves_the_transcript_persisted() -> None:
-    """The Phase 2a gate's third reject condition. `mark_injected` is not
-    called, so the `retain = false` file is not unlinked and the row is not
-    flagged — both paths keep the words."""
-    calls: list[str] = []
-    history = _SpyHistory(calls)
-
-    result = _deliver(_session(), history, _SpyInjector(calls, succeeded=False))
-
-    assert result.succeeded is False
-    assert history.written == ["the small conference room"]
-    assert "mark" not in calls
-
-
-def test_an_injector_that_raises_does_not_cost_the_transcript() -> None:
-    """The ABC says `inject` reports rather than raises, and a pyobjc bridge
-    is exactly the kind of thing that violates a contract like that. The write
-    has already happened, so the words are safe; what this guarantees is that
-    the process reports it instead of dying with a traceback."""
-    calls: list[str] = []
-    history = _SpyHistory(calls)
-    injector = _SpyInjector(calls, raises=RuntimeError("NSInternalInconsistency"))
-
-    result = _deliver(_session(), history, injector)
-
-    assert result.succeeded is False
-    assert result.error is not None
-    assert "NSInternalInconsistency" in result.error
-    assert history.written == ["the small conference room"]
-    assert "mark" not in calls
-
-
-def test_the_write_and_the_injection_are_both_timed() -> None:
-    """Both are inside G1's clock (§2) — it starts at hotkey release and these
-    happen after it. A stage that cannot be measured cannot be defended when
-    G1 is missed."""
-    session = _session()
-
-    _deliver(session, _SpyHistory([]), _SpyInjector([]))
-
-    assert session.timings.persist_ms > 0.0
-    assert session.timings.inject_ms > 0.0
-
-
-def test_nothing_is_injected_when_there_was_nothing_to_persist() -> None:
-    """choice-story #7: a session that never reaches injection leaves nothing
-    behind. Pasting an empty string would still clobber the clipboard."""
-    calls: list[str] = []
-
-    result = _deliver(_session(text="   "), _SpyHistory(calls), _SpyInjector(calls))
-
-    assert result.succeeded is False
-    assert calls == []
-
-
-# --------------------------------------------------------------------------
-# The flag and the exposure warning
+# Phase 2a — `--inject`, and the flag and warnings around it
+#
+# The §8 ordering tests moved to `test_controller.py` in Phase 2b, with the
+# function. `deliver` was written here because `DictationController` did not
+# exist; it does now, and a guarantee tested only where it used to live is a
+# guarantee with a phase-shaped hole in it.
 # --------------------------------------------------------------------------
 
 
@@ -371,3 +255,76 @@ def test_the_keystroke_strategy_warns_that_the_target_may_rewrite_the_text() -> 
 def test_the_clipboard_strategy_has_nothing_to_warn_about_here() -> None:
     """Paste is byte-identical — measured, not assumed."""
     assert _keystroke_warning(InjectionConfig(strategy="clipboard")) is None
+
+
+# --------------------------------------------------------------------------
+# Phase 2b — `manu daemon`
+#
+# Only the paths that return *before* anything is opened are tested here. The
+# happy path takes the microphone, installs a machine-wide event tap and blocks
+# in an AppKit run loop; a test that exercised it would be a test that recorded
+# the developer. It is measured by dogfooding at the gate instead, which is
+# what §9 asks for anyway.
+# --------------------------------------------------------------------------
+
+
+def test_the_daemon_refuses_an_unsupported_binding(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Before the model loads, before the tap, before the microphone. §5.3
+    leaves `binding` a free string, so this is where a typo is caught."""
+    monkeypatch.setenv("AMANUENSIS_CONFIG_DIR", "/nonexistent")
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig, HotkeyConfig
+
+    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(binding="f13")))
+
+    assert exit_code != 0
+    assert "f13" in capsys.readouterr().err
+
+
+def test_the_daemon_refuses_a_mode_it_does_not_implement(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§9's Phase 2b is push-to-talk only. Accepting `vad_auto` and behaving as
+    push-to-talk would be a configured mode silently doing something else —
+    and §5.2 calls `vad_auto` the mode most likely to misfire."""
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig, HotkeyConfig
+
+    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(mode="toggle")))
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "toggle" in err
+    assert "Phase 4" in err
+
+
+def test_the_daemon_reports_both_missing_permissions_at_once(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Accessibility and Input Monitoring are separate grants in separate
+    panes. A user who fixes one, restarts, and is then told about the other has
+    been sent to System Settings twice for a condition fully known the first
+    time."""
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig
+    from amanuensis.hotkey import macos as macos_hotkey
+    from amanuensis.injection import macos as macos_injection
+
+    class _Denied:
+        def CGPreflightPostEventAccess(self) -> bool:
+            return False
+
+        def CGPreflightListenEventAccess(self) -> bool:
+            return False
+
+    monkeypatch.setattr(macos_injection, "_quartz", _Denied)
+    monkeypatch.setattr(macos_hotkey, "_quartz", _Denied)
+
+    exit_code = _daemon(AppConfig())
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "Accessibility" in err
+    assert "Input Monitoring" in err

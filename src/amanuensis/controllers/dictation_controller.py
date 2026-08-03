@@ -1,0 +1,426 @@
+"""The loop: press, capture, release, transcribe, persist, inject.
+
+This is where §6.3's concurrency model stops being a table. Three threads meet
+here and the rules between them are the whole design:
+
+| Concern | Thread |
+|---|---|
+| the status indicator's run loop | main |
+| `start_session` / `end_session` | the OS event tap |
+| transcribe, post-process, persist, inject | one worker, serial |
+
+**`end_session()` must not block.** It is called from the event tap, and a
+blocked event tap on macOS is not a slow application — it is a machine whose
+keyboard has stopped responding. So it stops the microphone, builds a session,
+puts it on a queue and returns. The `-> DictationSession` in §6.3's contract is
+the session object, populated asynchronously; the return tells the caller
+nothing about whether the work is done.
+
+**Completion is signalled, never polled.** The worker writes every field and
+sets `session.completed` *last*. Any thread that observes the event set is
+guaranteed a fully written session, and nothing else guards the fields. That
+one ordering is the entire synchronisation story — it is also the rule most
+likely to be broken by a well-meaning edit that moves a `set()` earlier "so
+the tray updates sooner".
+
+**The worker is serial, and the focus is checked at injection time.** Because
+`end_session()` does not block, sessions can overlap: dictate twice quickly and
+session N's text can land in whatever window has focus when the worker reaches
+it. §6.3's v1 resolution is not to re-target — raising another application on
+the user's behalf is a larger intrusion than declining to type — so a session
+whose focused application changed is **written to history and not injected**.
+The words survive; they just do not go somewhere the user did not ask for.
+
+What this class does *not* do, and the boundary is worth restating because it
+is the one that erodes first (§6.2): it does not know how injection works on
+macOS, does not know which model is loaded, does not format text, and does not
+draw anything. It holds the state §5.4 requires be visible and hands it to a
+callback; what renders it is not its business.
+
+§8's persist-before-inject ordering lives in `deliver` below. It was written in
+`cli.py` in Phase 2a and moved here unchanged — the guarantee changed address,
+not content, and `cli.py` now imports it so there is exactly one copy.
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+import time
+import uuid
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Protocol
+
+from amanuensis.models.results import InjectionResult
+from amanuensis.models.session import DictationSession
+
+if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
+    from collections.abc import Callable, Sequence
+
+    from amanuensis.config import AppConfig
+    from amanuensis.injection.base import TextInjector
+
+__all__ = [
+    "DictationController",
+    "DictationState",
+    "TranscriptStore",
+    "deliver",
+]
+
+#: How long `shutdown()` waits for the worker to finish the session it is on.
+#: Generous: the worst case is a transcription already in flight, and killing
+#: that would lose the injection §8 exists to protect.
+_SHUTDOWN_TIMEOUT_S = 30.0
+
+
+class DictationState(StrEnum):
+    """What the user must be able to see without opening a menu (§5.4).
+
+    Exactly §5.4's four values, and no more. A state the indicator cannot
+    render is a state the user cannot read, and §5.4 makes ambiguity about the
+    microphone a privacy problem rather than a polish one.
+
+    A `StrEnum` so it can be logged and compared against a literal without a
+    conversion that a future reader would have to check.
+    """
+
+    IDLE = "idle"
+    RECORDING = "recording"
+    TRANSCRIBING = "transcribing"
+    ERROR = "error"
+
+
+class TranscriptStore(Protocol):
+    """The two operations `deliver` needs from a history store.
+
+    Narrower than `HistoryStore` on purpose: the ordering below is the §8
+    guarantee, and a protocol that admitted `purge` would invite a future
+    version of this function to do something other than persist and mark.
+    """
+
+    def write_pending(self, session: DictationSession) -> bool: ...
+
+    def mark_injected(self, session: DictationSession) -> None: ...
+
+
+def deliver(
+    session: DictationSession,
+    history: TranscriptStore,
+    injector: TextInjector,
+    focus_at_capture: str | None = None,
+) -> InjectionResult:
+    """Persist, then inject, then mark. In that order, always.
+
+    PRD §8: *never lose a transcript — write to history before injection*.
+    Everything else in this function is subordinate to those three calls being
+    in that sequence, and the sequence is what the test asserts.
+
+    Four deliberate choices, three of them Phase 2a's and unchanged:
+
+    **`mark_injected` runs only on success.** Failure is the absence of a
+    call, not a branch — the case the guarantee protects needs no code, which
+    means it cannot be broken by editing the code that handles success.
+
+    **An injector that raises is caught.** The ABC says `inject` reports
+    rather than raises, and a pyobjc bridge is exactly the sort of thing that
+    violates a contract like that at the worst moment. The words are already
+    safe by then; catching is what turns a traceback into a sentence and stops
+    `mark_injected` running on a path that did not succeed.
+
+    **Both stages are timed into `LatencyBreakdown`.** G1's clock starts at
+    hotkey release and both of these happen after it (§2). A stage with no
+    field to record into is a stage that cannot be defended when G1 is missed.
+
+    **The focus check sits between the write and the injection** (new in Phase
+    2b). `focus_at_capture` is the identity of the frontmost application when
+    the user released the hotkey; when it is known and no longer current, the
+    words are kept and nothing is typed (§6.3, objection A6). `None` on either
+    side means *cannot tell*, which is not the same as *changed* — an injector
+    with no way to answer must still inject.
+    """
+    started = time.perf_counter()
+    persisted = history.write_pending(session)
+    session.timings.persist_ms = (time.perf_counter() - started) * 1000.0
+
+    if not persisted:
+        # choice-story #7: a session that never reaches injection leaves
+        # nothing behind. Pasting an empty string would still clobber the
+        # clipboard, which is a real cost for no benefit whatsoever.
+        return InjectionResult(
+            succeeded=False, strategy="none", error="nothing was transcribed"
+        )
+
+    # Only asked when there is something to compare against. A caller with no
+    # async gap — `manu transcribe --inject` is one — passes nothing, and the
+    # injector is not troubled for an answer that would be discarded.
+    if focus_at_capture is not None:
+        focus_now = injector.focus_identity()
+        if focus_now is not None and focus_now != focus_at_capture:
+            return InjectionResult(
+                succeeded=False,
+                strategy="none",
+                error=(
+                    "the focused application changed between capture and "
+                    f"injection ({focus_at_capture} -> {focus_now}); the "
+                    "transcript was kept and not typed"
+                ),
+            )
+
+    text = session.final_text or session.raw_transcript or ""
+
+    started = time.perf_counter()
+    try:
+        result = injector.inject(text)
+    except Exception as exc:  # the ABC forbids this; the bridge may not comply
+        result = InjectionResult(
+            succeeded=False,
+            strategy="unknown",
+            error=f"the injector raised: {exc!r}",
+        )
+    # The restore is subtracted rather than left in. `inject()` returns after
+    # both, and §2 ends G1 when the text is fully present — charging the
+    # clipboard cleanup to the number the user experiences would report a
+    # 272 ms delivery as a 422 ms miss, which is exactly what the first real
+    # dictation did before this split existed.
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    session.timings.restore_ms = result.restore_ms
+    session.timings.inject_ms = max(0.0, elapsed_ms - result.restore_ms)
+
+    if result.succeeded:
+        history.mark_injected(session)
+    return result
+
+
+class DictationController:
+    """Owns the loop. Knows nothing about macOS, models, or text formatting."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        engine: Any,
+        injector: TextInjector,
+        processors: Sequence[Any],
+        history: TranscriptStore,
+        capture: Any,
+        detector: Any,
+        on_state_change: Callable[[DictationState], None] | None = None,
+    ) -> None:
+        self.config = config
+        self.engine = engine
+        self.injector = injector
+        self.processors = list(processors)
+        self.history = history
+        self.capture = capture
+        self.detector = detector
+        self._on_state_change = on_state_change
+
+        self._queue: queue.Queue[DictationSession | None] = queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._state = DictationState.IDLE
+        #: The session currently being captured. Written on the event-tap
+        #: thread only, which is the one thread that starts and ends captures.
+        self._recording: dict[str, Any] | None = None
+        #: Focused-application identity per queued session. Written on the
+        #: event-tap thread and read on the worker's; the two touch different
+        #: keys, and a lock held for one assignment would buy nothing and read
+        #: as though something subtler were happening. Kept beside the queue
+        #: rather than on the session because it is a fact about the delivery,
+        #: not about the dictation — `to_history_row` should not grow a column
+        #: for it.
+        self._focus_by_session: dict[str, str | None] = {}
+
+    # -- state -------------------------------------------------------------
+
+    @property
+    def state(self) -> DictationState:
+        return self._state
+
+    @property
+    def is_running(self) -> bool:
+        return self._worker is not None and self._worker.is_alive()
+
+    def _set_state(self, state: DictationState) -> None:
+        """Record the state and tell whoever is drawing it.
+
+        The callback is the UI's, and a UI that raises must not stop dictation
+        — §6.2 makes the tray a status surface with no business logic, and that
+        has to hold in the failure direction too.
+        """
+        self._state = state
+        if self._on_state_change is None:
+            return
+        try:
+            self._on_state_change(state)
+        except Exception:
+            pass
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def start(self) -> None:
+        """Load the model, warm the injector, and start the worker.
+
+        Both costs are paid here rather than on the user's first dictation:
+        `TranscriptionEngine.load()` is documented blocking and takes seconds,
+        and the first `inject()` cost 165.8 ms before `warm_up` existed
+        (Phase 2a, finding 2).
+        """
+        if self.is_running:
+            return
+
+        self.detector.load()
+        self.engine.load()
+        self.engine.warm_up()
+        self.injector.warm_up()
+
+        worker = threading.Thread(
+            target=self._drain, name="amanuensis-worker", daemon=True
+        )
+        self._worker = worker
+        worker.start()
+        self._set_state(DictationState.IDLE)
+
+    def shutdown(self) -> None:
+        """Stop the worker and release the microphone. Idempotent.
+
+        The microphone is released first and unconditionally. A daemon that
+        exits still holding it is §5.4's failure in its purest form — the
+        indicator is gone and the microphone may not be.
+        """
+        if self._recording is not None:
+            self.abort_session()
+
+        worker = self._worker
+        if worker is None:
+            return
+
+        self._queue.put(None)
+        worker.join(_SHUTDOWN_TIMEOUT_S)
+        self._worker = None
+
+    # -- the event-tap thread ----------------------------------------------
+
+    def start_session(self) -> None:
+        """The hotkey went down. Open the microphone and return.
+
+        A second press while recording is a no-op rather than an error: this
+        runs on the event tap, where raising is not a diagnostic anyone reads,
+        and the listener's own transition guard already makes it unreachable.
+        """
+        if self._recording is not None:
+            return
+
+        self.capture.start()
+        self._recording = {"started_at": datetime.now(UTC), "at": time.perf_counter()}
+        self._set_state(DictationState.RECORDING)
+
+    def end_session(self) -> DictationSession:
+        """The hotkey came up. Hand the audio to the worker and return.
+
+        **Does not wait for transcription.** The returned session is populated
+        asynchronously; callers observe completion through `session.wait()`,
+        never by polling its fields.
+
+        Raises when no session is open. That is unreachable through
+        `HotkeyListener`, which only emits transitions — and it is a raise
+        rather than a fabricated empty session because a session with no audio
+        in it would be indistinguishable from a real dictation of silence.
+        """
+        recording = self._recording
+        if recording is None:
+            raise RuntimeError("no session is being recorded; call start_session first")
+
+        audio = self.capture.stop()
+        self._recording = None
+
+        timings_capture_ms = (time.perf_counter() - recording["at"]) * 1000.0
+        session = DictationSession(
+            id=uuid.uuid4().hex,
+            started_at=recording["started_at"],
+            audio=audio,
+            sample_rate=self.config.audio.sample_rate,
+        )
+        session.timings.capture_ms = timings_capture_ms
+
+        # Read on this thread, not the worker's: this is the application the
+        # user was looking at when they released the key, and by the time the
+        # worker reaches the session it may not be (§6.3, objection A6).
+        focus = self.injector.focus_identity()
+
+        self._set_state(DictationState.TRANSCRIBING)
+        self._queue.put(session)
+        # Stashed alongside rather than on the session: it is a fact about the
+        # delivery, not about the dictation, and `to_history_row` should not
+        # grow a column for it.
+        self._focus_by_session[session.id] = focus
+        return session
+
+    def abort_session(self) -> None:
+        """Throw the capture away. Nothing is persisted (choice-story #7).
+
+        §8's guarantee protects words the user committed to. An aborted
+        session has no such claim, and §5.5 is explicit that every misfired
+        session used to be written to disk before the user had seen it.
+        """
+        if self._recording is None:
+            return
+        self._recording = None
+        try:
+            self.capture.stop()
+        finally:
+            self._set_state(DictationState.IDLE)
+
+    # -- the worker thread -------------------------------------------------
+
+    def _drain(self) -> None:
+        while True:
+            session = self._queue.get()
+            if session is None:
+                return
+            try:
+                self._process(session)
+            finally:
+                # Last, always, and after every field is written. A thread
+                # that sees this set is guaranteed a fully populated session.
+                session.completed.set()
+
+    def _process(self, session: DictationSession) -> None:
+        """Transcribe, post-process, persist, inject. On the worker thread.
+
+        Every failure is caught and recorded on the session rather than
+        raised: this is the bottom of a thread, so an exception here vanishes
+        into a stack nobody reads and leaves the indicator claiming the
+        microphone is live.
+        """
+        focus = self._focus_by_session.pop(session.id, None)
+        try:
+            started = time.perf_counter()
+            trimmed = self.detector.trim(session.audio, session.sample_rate)
+            session.timings.vad_ms = (time.perf_counter() - started) * 1000.0
+
+            started = time.perf_counter()
+            session.raw_transcript = self.engine.transcribe(
+                trimmed.audio, session.sample_rate
+            )
+            session.timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
+            session.engine = f"{self.config.engine.backend}:{self.engine.model_name}"
+
+            started = time.perf_counter()
+            text = session.raw_transcript
+            for processor in self.processors:
+                text = processor.process(text, session)
+            session.timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
+            if self.processors:
+                session.final_text = text
+
+            result = deliver(session, self.history, self.injector, focus)
+            if not result.succeeded and result.error is not None:
+                # Not necessarily a failure the user loses anything to — §8's
+                # write already ran — but the tray has to be able to say so.
+                session.error = result.error
+        except Exception as exc:
+            session.error = f"{type(exc).__name__}: {exc}"
+            self._set_state(DictationState.ERROR)
+            return
+
+        self._set_state(DictationState.ERROR if session.error else DictationState.IDLE)

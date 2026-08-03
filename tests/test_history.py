@@ -34,7 +34,9 @@ before the user has seen it — retained for thirty days by default.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -308,3 +310,90 @@ def test_the_store_resolves_its_own_directory_when_not_given_one(
     store = HistoryStore(HistoryConfig())
 
     assert store.db_path == tmp_path / "elsewhere" / "history.db"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b — the orphan sweep §5.5 gap 2 asks for at daemon start
+# ---------------------------------------------------------------------------
+
+
+def _orphan(store: HistoryStore, session_id: str, age_days: float) -> Path:
+    """A pending file left behind by a failed injection, aged by its mtime."""
+    store.pending_dir.mkdir(parents=True, exist_ok=True)
+    path = store.pending_dir / f"{session_id}.json"
+    path.write_text(f'{{"id": "{session_id}", "transcript": "words"}}')
+    stamp = time.time() - age_days * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_the_sweep_does_not_delete_a_recoverable_transcript(tmp_path: Path) -> None:
+    """The single most important property of this method.
+
+    §5.5 gap 2 asks for a sweep because failed injections accumulate plaintext.
+    §8 says the words must survive a failed injection. A sweep that deleted on
+    sight would resolve the first by breaking the second — and it would break
+    it precisely for the user who set `retain = false`, who has no `history.db`
+    row to fall back on.
+    """
+    store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    fresh = _orphan(store, "recent", age_days=1)
+
+    result = store.sweep_pending()
+
+    assert fresh.exists()
+    assert result.removed == 0
+    assert result.remaining == 1
+
+
+def test_the_sweep_applies_retain_days(tmp_path: Path) -> None:
+    """`retain_days` is the spec's existing expiry knob and there is no reason
+    for the pending path to invent a second one."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=30), data_dir=tmp_path)
+    stale = _orphan(store, "old", age_days=31)
+    fresh = _orphan(store, "new", age_days=29)
+
+    result = store.sweep_pending()
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert result.removed == 1
+    assert result.remaining == 1
+
+
+def test_retain_days_zero_sweeps_everything(tmp_path: Path) -> None:
+    """§5.3 admits 0, and the only coherent reading of "retain for zero days"
+    is that nothing is kept."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=0), data_dir=tmp_path)
+    _orphan(store, "old", age_days=31)
+    _orphan(store, "new", age_days=0)
+
+    result = store.sweep_pending()
+
+    assert result.removed == 2
+    assert result.remaining == 0
+
+
+def test_a_missing_pending_directory_is_not_an_error(tmp_path: Path) -> None:
+    """The overwhelmingly common case: `retain = true`, or a daemon that has
+    never had an injection fail. Daemon start must not care."""
+    store = HistoryStore(HistoryConfig(), data_dir=tmp_path)
+
+    result = store.sweep_pending()
+
+    assert result.removed == 0
+    assert result.remaining == 0
+
+
+def test_the_sweep_ignores_files_it_did_not_write(tmp_path: Path) -> None:
+    """A sweep that unlinked by directory rather than by pattern is a sweep
+    that deletes whatever a user or another tool put there."""
+    store = HistoryStore(HistoryConfig(retain=False, retain_days=0), data_dir=tmp_path)
+    _orphan(store, "old", age_days=31)
+    stranger = store.pending_dir / "notes.txt"
+    stranger.write_text("not ours")
+
+    result = store.sweep_pending()
+
+    assert stranger.exists()
+    assert result.removed == 1
