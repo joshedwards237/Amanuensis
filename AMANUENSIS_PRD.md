@@ -1841,6 +1841,36 @@ the first full-path number. Decide *before* Phase 1 what happens if it passes at
 and Phase 2b lands at 520 ms — whether the go/no-go is re-run or was already spent —
 and record that decision in `docs/gates/phase-1.md`.
 
+> **Decided 2026-08-02: the go/no-go is re-armed, not spent.** A Phase 2b G1 miss on a
+> Tier A machine rejects the phase *and* re-triggers Phase 1's "stop and renegotiate
+> §7.1". A floor clearing a budget shows the budget is reachable; it does not measure
+> the thing the budget is about, and Phase 1's record labels every one of its numbers a
+> floor. Recorded in `docs/gates/phase-1.md` — **backfilled**, because Phase 1 closed
+> without making this decision at all. Deciding it after seeing Phase 2b's number would
+> have let the number choose the rule.
+
+**`chain = ["rules"]` in this gate names a Phase 3 component** (recorded 2026-08-02).
+`RuleBasedPostProcessor` is built in Phase 3; Phase 2b cannot run the condition as
+written. Same shape as Phase 2a's gate requiring a Phase 4 tray, and resolved the same
+way rather than by moving the clause: **Phase 2b measures end to end with an empty
+chain and labels `g1_ms` a floor once more**, naming `postprocess_ms` as the one stage
+still missing. The reject condition binds on what is measured. The real G1 number —
+every stage populated, nothing labelled — is taken at the **Phase 3** gate.
+
+This is the **second** gate whose conditions reference a component from a later phase,
+after Phase 2a's tray indicator. The remaining gates were checked rather than assumed:
+Phases 0, 1, 3 and 4 name nothing they do not build. So the pattern is confined to the
+two phases the 2026-07-31 split created, which is where it would be — the split moved
+work across a boundary and the gate text either side of it was not re-read.
+
+The same check found staleness pointing the other way, recorded here rather than left
+for whoever opens Phase 3: **that phase's deliverable list names two things already
+built.** `HistoryStore` landed in Phase 2a with the §8 write, and "silence trimming via
+VAD" landed in Phase 1 when §7.4 moved it. Phase 3's remaining scope is
+`RuleBasedPostProcessor`, `VocabularyPostProcessor`, and history's *retention* half —
+`retain_days`, purge, `manu history`, and surfacing the `pending/` orphans §5.5 gap 3
+describes.
+
 ### Phase 3 — Post-processing and history
 `RuleBasedPostProcessor`, `VocabularyPostProcessor`, `HistoryStore`, silence trimming via VAD.
 
@@ -2139,6 +2169,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-02 | **Two §9 gate conditions name components from later phases, and one Phase 1 decision was never made.** Phase 2b's gate asks for `chain = ["rules"]`, which Phase 3 builds — resolved the way Phase 2a's tray indicator was: Phase 2b measures end to end with an empty chain and labels `g1_ms` a floor, and the real G1 number is taken at the Phase 3 gate. Phases 0, 1, 3 and 4 were checked and name nothing they do not build, so the pattern is confined to the two phases the 2026-07-31 split created. Separately: §9 required Phase 1 to decide whether a Phase 2b G1 miss re-runs the project-level go/no-go, and Phase 1 closed without deciding. **Backfilled: re-armed.** A floor clearing a budget shows the budget is reachable and does not measure the thing the budget is about. Also recorded: Phase 3's deliverable list names `HistoryStore` (built in 2a) and VAD trimming (built in Phase 1). |
 | 2026-08-02 | **Phase 2a gate findings applied** (`docs/gates/phase-2a.md`). §6.3's `LatencyBreakdown` gains **`persist_ms`** (inside `g1_ms` — §8's write precedes injection) and **`restore_ms`** (**outside** it — the clipboard restore runs after the text is present). §2's G1 note now says "fully present" fixes the *end* of the window and not only its unit. §6.3's `TextInjector` gains **`warm_up`**, concrete and defaulting to a no-op. §7.3 records that **synthetic keystrokes are rewritten by the target application's text substitution** and that clipboard-manager capture is now measured against a real manager. §9's Phase 2a tray-indicator wording resolved the way Phase 2b resolves the recording indicator. §5.5's engine field reaches `to_history_row`. |
 | 2026-08-02 | **The clipboard restore was being charged to G1, and is not in it.** The first real end-to-end dictation reported `g1_ms` **421.9 ms** against a 400 ms budget, with `inject_ms` **180.3 ms** — roughly 150 of which was `restore_delay_ms` sleeping, after the user already had their words. Split correctly, the same path measures **231.6 ms**. `InjectionResult` carries `restore_ms` because `inject()` returns after both and no caller can separate them from outside. Third phase running in which a stage had nowhere to be recorded, so §6.3 now states the rule rather than patching a fourth time. |
 | 2026-08-02 | **`TextInjector.warm_up` added, from measurement.** The first `inject()` cost **165.8 ms** and every later one under 2 ms — the pyobjc bridges load on first use, 165 ms against a 400 ms budget, on the user's first dictation. §6.3 gave `TranscriptionEngine` a `warm_up` on that exact argument and left this boundary without one; Phase 2a escaped the cost only because the permission check and the manager detection happen to load both bridges first. Tighter than the engine's contract in one respect: an injector must not type a throwaway character into whatever window has focus. |

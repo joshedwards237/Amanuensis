@@ -387,6 +387,40 @@ Phase 2a is released. It inherits three open items: the reference clip's
 provenance (finding 5, blocks Phase 4), `beam_size` unswept, and Phase 5 still
 `UNRESOLVED, corpus-blocked` on spontaneous unscripted speech.
 
+### The go/no-go is re-armed, not spent (backfilled 2026-08-02)
+
+§9's Phase 2b note assigned this decision to Phase 1 and required it to be
+recorded here:
+
+> Decide *before* Phase 1 what happens if it passes at 360 ms and Phase 2b
+> lands at 520 ms — whether the go/no-go is re-run or was already spent — and
+> record that decision in `docs/gates/phase-1.md`.
+
+**It was not recorded.** This gate closed without it, and it is backfilled here
+rather than at the Phase 2b gate deliberately: deciding it *after* seeing
+Phase 2b's number would let the number choose the rule.
+
+**Decision: re-armed.** A Phase 2b G1 miss on a Tier A machine rejects the
+phase **and** re-triggers §9 Phase 1's "stop and renegotiate §7.1", exactly as
+a Phase 1 miss would have.
+
+The reasoning is this record's own words. Every `g1_ms` above is labelled a
+floor, because Phase 1 populates at most two of `LatencyBreakdown`'s stages. A
+floor clearing a budget is evidence that the budget is *reachable*; it is not a
+measurement of the thing the budget is about. Treating it as having discharged
+a project-level go/no-go would mean the decision was spent on a number that was
+declared incomplete in the same breath.
+
+The cost of being wrong is asymmetric, which settles it. If the go/no-go is
+re-armed and never needed, nothing happens. If it is spent and Phase 2b misses,
+§7.1's batch-vs-streaming decision stands on a number that never measured the
+full path — and §9 says no later phase makes this faster.
+
+Backfilled after the Phase 2a gate, where the end-to-end path first ran and
+measured `g1_ms` **231.6 ms** against the 400 ms budget with injection included.
+That makes a Phase 2b miss unlikely, which is the reason to fix the rule now:
+the decision costs nothing while it is cheap and everything while it is not.
+
 ## Rollback
 
 Everything is additive on a branch. `git checkout main` restores the tree as of
