@@ -7,22 +7,26 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: Phase 2a complete. Phase 2b next.
+## Status: Phase 2b complete. Phase 3 next.
 
-**Words now reach the cursor, but there is still no hotkey.** `manu transcribe
---inject` records from the microphone, transcribes, persists the transcript, and
-pastes it into whatever application has focus. That is the product's whole path
-except the thing that triggers it — a global hotkey and the resident daemon are
-Phase 2b, so today you type a command instead of pressing a key.
+**The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
+your words appear at the cursor in whatever application has focus. That is the
+product, minus post-processing.
 
-Working: model download and the install-time tier check (`manu install`),
-microphone capture, silence trimming, transcription, the pre-injection history
-write, and injection with clipboard save/restore. Still refusing and naming
-their phase: `daemon`, `toggle`, `status`, `history`.
+Working: model download and the install-time tier check (`manu install`), the
+global hotkey, the resident daemon, microphone capture, silence trimming,
+transcription, the pre-injection history write, injection with clipboard
+save/restore, and a menu-bar recording indicator. Still refusing and naming
+their phase: `history` (Phase 3), `toggle` and `status` (Phase 4).
+
+Not built yet: **post-processing**. The transcript you get is what the model
+emitted — leading whitespace, missing sentence-final punctuation, occasional
+spurious capitals. Phase 3.
 
 Injection is verified in TextEdit, Terminal, VS Code and Chrome, on both
 strategies, by reading the text back out of each application rather than by eye.
-Zero failures. See [`docs/gates/phase-2a.md`](docs/gates/phase-2a.md).
+Zero failures. See [`docs/gates/phase-2a.md`](docs/gates/phase-2a.md) and
+[`docs/gates/phase-2b.md`](docs/gates/phase-2b.md).
 
 The specification behind it has been adversarially reviewed twice — 41
 dispositions across two rounds, all resolved — and every phase since has
@@ -37,11 +41,12 @@ measured rather than assumed. See [`docs/gates/`](docs/gates/).
 | [`docs/gates/`](docs/gates/) | One measurement record per phase gate, plus the probe and the Phase 5 experiments |
 | [`docs/adr/`](docs/adr/) | Architecture decisions — 0001 selects the ASR engine |
 
-If you are looking for a dictation tool you can use today, this is not one yet —
-a tool you must run a command to start is not a dictation tool.
+It is usable now, if you are willing to run it from a source checkout and live
+without post-processing. There is no packaged app, no installer, and no signed
+binary — that is Phase 4.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
-[Talon](https://talonvoice.com/) both work now; PRD §1 records why this exists
-alongside them.
+[Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
+this exists alongside them.
 
 ## What it will do
 
@@ -50,18 +55,23 @@ injected at the cursor. A daemon keeps the ASR model resident in memory, because
 loading a model per invocation costs 3–8 seconds and there is no version of that
 which is acceptable.
 
-Today the same path runs from a command instead of a key:
-
 ```sh
 manu install                        # download the model once, measure this machine's tier
-manu transcribe --seconds 10        # record and print, no injection
-manu transcribe --inject            # record, persist, and paste at the cursor
+manu daemon                         # hold right-option, speak, release
+manu transcribe --seconds 10        # one-shot diagnostic: record and print
+manu transcribe --inject            # one-shot: record, persist, paste at the cursor
 ```
 
-`--inject` needs macOS **Accessibility** permission, and it will tell you which
-application to grant it to — macOS attaches the grant to whatever launched
-`manu`, so until this ships as an `.app` the entry you are looking for carries
-your terminal's name.
+The daemon needs **two separate macOS permissions** and will name both if
+either is missing: **Accessibility** to type into other applications, and
+**Input Monitoring** to see the hotkey. They live in different Settings panes
+and granting one does not grant the other. macOS attaches both to whatever
+launched `manu`, so until this ships as an `.app` the entry you are looking for
+carries your terminal's name.
+
+While the daemon runs there is a glyph in your menu bar: `○` idle, `●`
+recording, `◐` transcribing. macOS shows its own microphone indicator too, and
+that one is not ours to get wrong.
 
 - **Batch transcription**, not streaming, for v1 (PRD §7.1)
 - **faster-whisper** by default, behind an abstraction so the engine can be
@@ -77,7 +87,7 @@ your terminal's name.
 
 | Goal | Target | Status |
 |---|---|---|
-| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met, still a floor.** ASR p50 299.7 / p95 373.3 ms over 54 observations; injection and the history write add p50 3.3 / p95 6.9 ms. A real end-to-end dictation measured **231.6 ms**. Post-processing is the one stage not yet in the number |
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met, still a floor.** Measured end to end through the hotkey over ten real dictations: **p50 223.0 ms / p95 270.0 ms**. Post-processing is the one stage not yet in the number. **Read the scaling note below before quoting this figure** |
 | Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
 | Accuracy | edit rate ≤ 5% | **not yet measured.** Edit rate is a Phase 3 measurement; the WER figures in `docs/adr/0001-engine-selection.md` are a different quantity |
 | Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat below |
@@ -86,9 +96,23 @@ Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Meta
 backend, so "Apple Silicon" was never a distinct execution path — a machine's tier
 is decided by what it measures at install.
 
-Every latency figure here is from **one machine and one speaker in one room**.
-The 231.6 ms end-to-end number is a single dictation; the distributions behind it
-come from replayed corpus audio, not from ten people using it.
+**The latency figure is for a ten-second utterance and it does not generalise
+across lengths.** Transcription scales with how long you spoke — measured across
+0.7 to 43 seconds of speech, `transcribe_ms ≈ 49 + 13.7 × seconds`:
+
+| you spoke for | text appears after |
+|---|---|
+| 10 s | ~225 ms — the figure G1 gates |
+| 30 s | ~500 ms |
+| 60 s | ~910 ms — over the 800 ms p95 |
+
+That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
+so. But dictating a paragraph is the ordinary case, and the headline number says
+nothing about it, so both are here.
+
+Every latency figure here is from **one machine and one speaker in one room**,
+and the p95 above is the *maximum* of ten observations rather than an estimate of
+a 95th percentile. Treat it as an extreme that was survived, not a distribution.
 
 **The latency claim is hardware-conditional and that is a real caveat**, not a
 footnote. Privacy motivation and offline constraint correlate with older
