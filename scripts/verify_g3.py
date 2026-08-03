@@ -199,6 +199,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--seconds", type=float, default=3.0)
     parser.add_argument(
+        "--inject",
+        action="store_true",
+        help=(
+            "observe `manu transcribe --inject` instead. Phase 2a added the "
+            "clipboard and the pyobjc bridges to the runtime path, and a "
+            "dependency that was not in the tree when G3 was last verified is "
+            "exactly what this check exists to catch"
+        ),
+    )
+    parser.add_argument(
         "--tcpdump",
         action="store_true",
         help="also run an interface-wide packet capture (needs root)",
@@ -224,7 +234,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print()
     print(f"2/3. Full transcribe cycle under observation ({args.seconds:g}s capture)")
     subject = observe(
-        "manu transcribe", [manu, "transcribe", "--seconds", str(args.seconds)], samples
+        "manu transcribe" + (" --inject" if args.inject else ""),
+        [manu, "transcribe", "--seconds", str(args.seconds)]
+        + (["--inject"] if args.inject else []),
+        samples,
     )
     report(subject)
 

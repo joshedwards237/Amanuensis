@@ -64,6 +64,15 @@ dev = [
 bench = [
     "useful-moonshine-onnx>=20251120",
 ]
+# Gate-only. `scripts/gate_2a_inject.py` reads injected text back out of the
+# target application through the Accessibility API, which is how PRD §9's
+# four-application check becomes a measurement rather than four dictations
+# judged by eye. Nothing under `src/` imports it and the product never reads
+# another application's contents — a capability that belongs in a maintainer's
+# gate harness and emphatically not in a dictation tool.
+gate = [
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
+]
 
 [project.scripts]
 manu = "amanuensis.cli:main"

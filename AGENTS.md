@@ -148,6 +148,46 @@
   with "my earlier output went to plain text, which you cannot see", which means the
   analysis had been completing all along and only the delivery channel was failing.
 
+- **macOS text substitution rewrites synthetic keystrokes.** `strategy =
+  "keystroke"` is not a slower-but-faithful alternative to clipboard paste.
+  Injected into TextEdit, `don't use --dashes... "quoted" and i said so` arrives
+  as `don't use —dashes… "quoted" and I said so` — smart quotes, em dash,
+  ellipsis and autocapitalisation, five changes in one sentence. Pasting the
+  same string is byte-identical. Nothing in this app can reach another app's
+  substitution settings. Found 2026-08-02.
+
+- **The Accessibility grant belongs to the hosting binary, not to `manu`.**
+  `CGPreflightPostEventAccess()` returned True on a machine that had never seen
+  this project, because the terminal running Python already held the grant. Any
+  remediation message must name the *terminal*, not "Amanuensis", until Phase 4
+  packages an `.app`. Corollary: a permission check passing locally says nothing
+  about a packaged build.
+
+- **Electron ships its accessibility tree switched off.** VS Code answers
+  `kAXErrorNoValue` (-25212) to every AX query until
+  `AXUIElementSetAttributeValue(app, "AXManualAccessibility", True)` is set —
+  and it does not appear synchronously afterwards, so the read has to be
+  retried. `scripts/gate_2a_inject.py` first reported VS Code as unmeasurable,
+  then "passed" only because a throwaway probe had set the flag by hand minutes
+  earlier. **A gate whose result depends on something a previous command did is
+  not a gate.**
+
+- **A stage that runs after the user has their text is not in G1.** §2 ends G1
+  at "text fully present in the focused application". The clipboard restore runs
+  after that and cost ~155 ms; charging it to `inject_ms` reported a 272 ms
+  delivery as a 422 ms G1 *miss* on the first real dictation. Three phases
+  running have now found a stage `LatencyBreakdown` could not express —
+  `vad_ms`, `persist_ms`, `restore_ms`. Before adding a stage, decide which side
+  of "fully present" it falls on.
+
+- **Lazy imports move a cost, they do not remove it.** The first `inject()` cost
+  **165.8 ms** and every later one under 2 ms, because `import AppKit` and
+  `import Quartz` land inside it — 165 ms against a 400 ms budget, on the user's
+  *first* dictation. Phase 2a avoided it only because the permission check and
+  the clipboard-manager detection happen to touch both bridges first. Any lazily
+  imported dependency on a latency-gated path needs a `warm_up` that something
+  actually calls.
+
 - **Check the command doc for output paths, not the agent's suggestion.** The
   cost-estimator recommended `observability/costs/`; the canonical path in
   `commands/cost-estimate.md` is `cost-estimates/<YYYY-MM-DD>-<slug>-estimate.md`.
