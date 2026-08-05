@@ -341,3 +341,41 @@ def test_a_sample_rate_other_than_16k_is_rejected_with_both_reasons(
     message = str(exc.value)
     assert "audio.sample_rate" in message
     assert "16000" in message
+
+
+# ---------------------------------------------------------------------------
+# §5.7 — the [guard] block
+# ---------------------------------------------------------------------------
+
+
+def test_guard_defaults() -> None:
+    """The floor sits 4.4x below the slowest genuine corpus sample (§5.7)."""
+    cfg = AppConfig()
+    assert cfg.guard.min_words_per_second == 0.5
+    assert cfg.guard.min_audio_seconds == 5.0
+    assert cfg.guard.retry_unbiased is True
+
+
+def test_a_negative_floor_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nmin_words_per_second = -1.0\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(path)
+    assert "min_words_per_second" in str(caught.value)
+
+
+def test_a_negative_minimum_duration_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nmin_audio_seconds = -0.5\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(path)
+    assert "min_audio_seconds" in str(caught.value)
+
+
+def test_a_zero_floor_is_accepted_because_it_is_the_off_switch(tmp_path: Path) -> None:
+    """§5.7: the threshold is provisional and derived from one speaker, so a
+    user it is wrong about must be able to turn it off. This is why the
+    §5.3 bounded exception does not apply here."""
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nmin_words_per_second = 0.0\n")
+    assert load_config(path).guard.min_words_per_second == 0.0

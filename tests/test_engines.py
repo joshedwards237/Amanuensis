@@ -332,3 +332,47 @@ def test_warm_up_on_the_real_model_does_not_hang_on_silence() -> None:
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
     assert elapsed_ms < 3_000.0, f"warm-up took {elapsed_ms:.0f} ms"
+
+
+# --------------------------------------------------------------------------
+# §5.7 — an unbiased decode is a thing the contract can ask for
+# --------------------------------------------------------------------------
+
+
+def test_the_configured_prompt_reaches_the_decoder_by_default(
+    fake_whisper: type,
+) -> None:
+    engine = _engine(initial_prompt="spreadsheets, XLSX, Airtable")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+
+    call = _FakeWhisperModel.instances[0].transcribe_calls[0]
+    assert call["initial_prompt"] == "spreadsheets, XLSX, Airtable"
+
+
+def test_an_unbiased_decode_suppresses_the_prompt(fake_whisper: type) -> None:
+    """§5.7's retry. `beam_size = 1` is greedy, so a retry that left the prompt
+    in place would return the same words and recover nothing."""
+    engine = _engine(initial_prompt="spreadsheets, XLSX, Airtable")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000, biased=False)
+
+    call = _FakeWhisperModel.instances[0].transcribe_calls[0]
+    assert call["initial_prompt"] is None
+
+
+def test_an_unbiased_decode_changes_nothing_else(fake_whisper: type) -> None:
+    """Only the bias is dropped. A retry that also changed beam size or the
+    VAD flag would be measuring a different pipeline than the one that failed."""
+    engine = _engine(initial_prompt="anything", language="en")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000, biased=False)
+
+    biased, unbiased = _FakeWhisperModel.instances[0].transcribe_calls
+    assert {k: v for k, v in biased.items() if k != "initial_prompt"} == {
+        k: v for k, v in unbiased.items() if k != "initial_prompt"
+    }

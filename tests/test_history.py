@@ -45,6 +45,7 @@ from typing import Any
 import pytest
 
 from amanuensis.config import HistoryConfig
+from amanuensis.models.results import GuardOutcome, GuardVerdict
 from amanuensis.models.session import DictationSession, LatencyBreakdown
 from amanuensis.storage.history import HistoryStore
 
@@ -465,3 +466,164 @@ def test_marking_injected_records_the_restore_as_well(tmp_path: Path) -> None:
     store.mark_injected(session)
 
     assert _rows(store.db_path)[0]["restore_ms"] == pytest.approx(155.1)
+
+
+# ---------------------------------------------------------------------------
+# §5.7 — the verdict is stored, or the Phase 3 gate cannot report on it
+# ---------------------------------------------------------------------------
+
+
+def test_the_guard_verdict_is_persisted(tmp_path: Path) -> None:
+    """The slicing record asks the gate to report "whether the guard fired, and
+    on what". A verdict that lives only in memory cannot answer that, and this
+    project has now shipped two fields that had nowhere to be recorded."""
+    store = _store(tmp_path)
+    session = _session(
+        guard=GuardVerdict(
+            outcome=GuardOutcome.FAILED,
+            retained_seconds=30.5,
+            words_per_second=0.066,
+            reason="no initial_prompt to drop",
+            retried=False,
+        )
+    )
+
+    store.write_pending(session)
+
+    row = _rows(store.db_path)[0]
+    assert row["guard_outcome"] == "failed"
+    assert row["guard_words_per_second"] == pytest.approx(0.066)
+    assert row["guard_retained_seconds"] == pytest.approx(30.5)
+
+
+def test_a_session_with_no_verdict_stores_nulls(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    store.write_pending(_session())
+
+    row = _rows(store.db_path)[0]
+    assert row["guard_outcome"] is None
+    assert row["guard_words_per_second"] is None
+
+
+def test_an_older_database_gains_the_guard_columns(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write_pending(_session())
+    connection = sqlite3.connect(store.db_path)
+    for column in ("guard_outcome", "guard_words_per_second", "guard_retained_seconds"):
+        connection.execute(f"ALTER TABLE transcripts DROP COLUMN {column}")
+    connection.commit()
+    connection.close()
+
+    store.write_pending(_session(id="second"))
+
+    columns = set(_rows(store.db_path)[0].keys())
+    assert {"guard_outcome", "guard_words_per_second", "guard_retained_seconds"} <= columns
+
+
+# ---------------------------------------------------------------------------
+# §5.5 — store_audio, which validated and did nothing for three phases
+# ---------------------------------------------------------------------------
+
+
+def _audible(seconds: float = 1.0) -> Any:
+    import numpy as np
+
+    return np.linspace(-0.5, 0.5, int(16000 * seconds), dtype=np.float32)
+
+
+def test_audio_is_not_written_by_default(tmp_path: Path) -> None:
+    """§5.3's default is off because audio is the sensitive artefact (§7.6)."""
+    store = _store(tmp_path)
+
+    store.write_pending(_session(audio=_audible()))
+
+    assert list(tmp_path.glob("audio/*.wav")) == []
+
+
+def test_audio_is_written_when_the_key_is_set(tmp_path: Path) -> None:
+    """The whole point of the fix: setting the key now does something.
+
+    Before 2026-08-05 this key parsed, validated, had a test asserting its
+    default, and was read by no code anywhere.
+    """
+    store = HistoryStore(
+        HistoryConfig(store_audio=True), data_dir=tmp_path
+    )
+    session = _session(audio=_audible())
+
+    store.write_pending(session)
+
+    written = list(tmp_path.glob("audio/*.wav"))
+    assert len(written) == 1
+    assert written[0].stem == session.id
+
+
+def test_stored_audio_is_not_readable_by_other_users(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(store_audio=True), data_dir=tmp_path)
+
+    store.write_pending(_session(audio=_audible()))
+
+    written = next(iter(tmp_path.glob("audio/*.wav")))
+    assert oct(written.stat().st_mode & 0o777) == "0o600"
+
+
+def test_stored_audio_is_readable_back_as_what_went_in(tmp_path: Path) -> None:
+    """A recording that cannot be replayed does not make a collapse
+    reproducible, which is the only reason this key was implemented."""
+    import numpy as np
+
+    from tests.conftest import read_wav
+
+    store = HistoryStore(HistoryConfig(store_audio=True), data_dir=tmp_path)
+    audio = _audible(0.5)
+
+    store.write_pending(_session(audio=audio))
+
+    written = next(iter(tmp_path.glob("audio/*.wav")))
+    samples, rate = read_wav(written)
+    assert rate == 16000
+    assert len(samples) == len(audio)
+    assert np.abs(samples - audio).max() < 1e-3
+
+
+def test_no_audio_is_written_when_history_is_not_retained(tmp_path: Path) -> None:
+    """`retain = false` is the privacy path. The pending mechanism exists to
+    keep a *transcript* recoverable across a crash; audio is not needed for
+    that and is the artefact §7.6 cares most about."""
+    store = HistoryStore(
+        HistoryConfig(retain=False, store_audio=True), data_dir=tmp_path
+    )
+
+    store.write_pending(_session(audio=_audible()))
+
+    assert list(tmp_path.glob("audio/*.wav")) == []
+
+
+def test_the_sweep_applies_retain_days_to_audio(tmp_path: Path) -> None:
+    """A writer for the sensitive artefact without a reaper is a directory that
+    grows without bound and that no command reaches — `manu history --purge` is
+    Phase 3."""
+    store = HistoryStore(
+        HistoryConfig(store_audio=True, retain_days=1), data_dir=tmp_path
+    )
+    store.write_pending(_session(audio=_audible()))
+    stale = next(iter(tmp_path.glob("audio/*.wav")))
+    old = time.time() - 3 * 86400
+    os.utime(stale, (old, old))
+
+    store.sweep_pending()
+
+    assert not stale.exists()
+
+
+def test_the_sweep_keeps_audio_inside_the_window(tmp_path: Path) -> None:
+    store = HistoryStore(
+        HistoryConfig(store_audio=True, retain_days=30), data_dir=tmp_path
+    )
+    store.write_pending(_session(audio=_audible()))
+    fresh = next(iter(tmp_path.glob("audio/*.wav")))
+
+    store.sweep_pending()
+
+    assert fresh.exists()

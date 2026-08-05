@@ -39,13 +39,13 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from amanuensis.config import AppConfig, HistoryConfig, InjectionConfig
+from amanuensis.config import AppConfig, GuardConfig, HistoryConfig, InjectionConfig
 from amanuensis.controllers.dictation_controller import (
     DictationController,
     DictationState,
     deliver,
 )
-from amanuensis.models.results import InjectionResult, PermissionStatus
+from amanuensis.models.results import GuardOutcome, InjectionResult, PermissionStatus
 from amanuensis.models.session import DictationSession
 
 
@@ -67,35 +67,57 @@ class _FakeCapture:
 
 
 class _FakeTrim:
-    def __init__(self, audio: NDArray[np.float32]) -> None:
+    def __init__(
+        self,
+        audio: NDArray[np.float32],
+        retained_seconds: float = 1.0,
+        fell_back: bool = False,
+    ) -> None:
         self.audio = audio
-        self.original_seconds = 1.0
-        self.retained_seconds = 1.0
+        self.original_seconds = retained_seconds
+        self.retained_seconds = retained_seconds
         self.speech_segments = 1
-        self.fell_back = False
+        self.fell_back = fell_back
 
 
 class _FakeDetector:
-    def __init__(self) -> None:
+    def __init__(
+        self, retained_seconds: float = 1.0, fell_back: bool = False
+    ) -> None:
         self.calls = 0
+        self.retained_seconds = retained_seconds
+        self.fell_back = fell_back
 
     def load(self) -> None:
         pass
 
     def trim(self, audio: NDArray[np.float32], _rate: int) -> _FakeTrim:
         self.calls += 1
-        return _FakeTrim(audio)
+        return _FakeTrim(audio, self.retained_seconds, self.fell_back)
 
 
 class _FakeEngine:
     model_name = "tiny.en"
     cpu_threads = 4
 
-    def __init__(self, text: str = "hello there", delay_s: float = 0.0) -> None:
+    def __init__(
+        self,
+        text: str = "hello there",
+        delay_s: float = 0.0,
+        unbiased_text: str | None = None,
+    ) -> None:
         self.text = text
+        #: What the §5.7 retry gets back. `None` means the engine ignores
+        #: `biased` entirely, which is the pre-guard behaviour and the right
+        #: default for every test that is not about the retry.
+        self.unbiased_text = unbiased_text
         self.delay_s = delay_s
         self.is_loaded = False
         self.calls = 0
+        #: One entry per call, True when biased. The retry is only meaningful
+        #: if it actually asked for a different decode, and a test that checks
+        #: the *text* cannot tell a real retry from a lucky second roll.
+        self.bias_flags: list[bool] = []
 
     def load(self) -> None:
         self.is_loaded = True
@@ -103,10 +125,15 @@ class _FakeEngine:
     def warm_up(self) -> None:
         pass
 
-    def transcribe(self, _audio: NDArray[np.float32], _rate: int) -> str:
+    def transcribe(
+        self, _audio: NDArray[np.float32], _rate: int, *, biased: bool = True
+    ) -> str:
         self.calls += 1
+        self.bias_flags.append(biased)
         if self.delay_s:
             time.sleep(self.delay_s)
+        if not biased and self.unbiased_text is not None:
+            return self.unbiased_text
         return self.text
 
 
@@ -699,3 +726,174 @@ def test_nothing_is_injected_when_there_was_nothing_to_persist() -> None:
 
     assert result.succeeded is False
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# §5.7 — the collapse guard, as orchestration
+# ---------------------------------------------------------------------------
+#
+# The arithmetic lives in `tests/test_guard.py`. What is asserted here is what
+# the controller does with the answer, and the three properties that are easy
+# to get wrong: the retry has to actually ask for a different decode, a failed
+# guard must not reach the cursor, and §8's write has to precede that refusal
+# rather than be skipped along with the injection.
+
+
+def _long_dictation(**overrides: Any) -> DictationController:
+    """A controller whose sessions are long enough for the guard to judge."""
+    parts: dict[str, Any] = {
+        "detector": _FakeDetector(retained_seconds=30.0),
+        "capture": _FakeCapture(np.ones(16000 * 30, dtype=np.float32)),
+    }
+    parts.update(overrides)
+    return _controller(**parts)
+
+
+def _biased_config(prompt: str = "notes about spreadsheets") -> AppConfig:
+    from dataclasses import replace
+
+    base = AppConfig()
+    return replace(base, engine=replace(base.engine, initial_prompt=prompt))
+
+
+def _dictate(controller: DictationController) -> DictationSession:
+    controller.start()
+    try:
+        controller.start_session()
+        session = controller.end_session()
+        assert session.wait(timeout=5.0)
+        return session
+    finally:
+        controller.shutdown()
+
+
+def test_a_healthy_transcript_passes_the_guard_and_is_injected() -> None:
+    injector = _FakeInjector()
+    engine = _FakeEngine(" ".join(["word"] * 90))
+    controller = _long_dictation(engine=engine, injector=injector)
+
+    session = _dictate(controller)
+
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.PASSED
+    assert engine.calls == 1
+    assert injector.injected == [" ".join(["word"] * 90)]
+
+
+def test_a_collapse_is_retried_without_the_bias_and_recovers() -> None:
+    """The recovery path, and the assertion that it is a real one.
+
+    §7.2 fixes `beam_size = 1`, so a retry that did not change the inputs would
+    return the same words. Asserting on `bias_flags` rather than on the text is
+    the difference between testing the retry and testing the fake.
+    """
+    injector = _FakeInjector()
+    engine = _FakeEngine(" For Tenants.", unbiased_text=" ".join(["word"] * 80))
+    controller = _long_dictation(
+        engine=engine, injector=injector, config=_biased_config()
+    )
+
+    session = _dictate(controller)
+
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.RECOVERED
+    assert session.guard.retried is True
+    assert engine.bias_flags == [True, False]
+    assert injector.injected == [" ".join(["word"] * 80)]
+    assert session.raw_transcript == " ".join(["word"] * 80)
+
+
+def test_a_collapse_the_retry_cannot_fix_is_not_injected() -> None:
+    """§5.7: at the cursor, a destroyed transcript costs the user an undo."""
+    injector = _FakeInjector()
+    engine = _FakeEngine(" For Tenants.", unbiased_text=" Tenants.")
+    controller = _long_dictation(
+        engine=engine, injector=injector, config=_biased_config()
+    )
+
+    session = _dictate(controller)
+
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.FAILED
+    assert session.guard.retried is True
+    assert injector.injected == []
+    assert session.error is not None
+    assert controller.state is DictationState.ERROR
+
+
+def test_the_transcript_is_still_persisted_when_the_guard_refuses() -> None:
+    """§8's ordering is unconditional and this path does not weaken it.
+
+    The words the user said are exactly as recoverable on the refused path as
+    on the injected one — that is the entire reason refusing is acceptable.
+    """
+    history = _FakeHistory()
+    engine = _FakeEngine(" For Tenants.", unbiased_text=" Tenants.")
+    controller = _long_dictation(
+        engine=engine, history=history, config=_biased_config()
+    )
+
+    session = _dictate(controller)
+
+    assert "write_pending" in history.calls
+    assert "mark_injected" not in history.calls
+    assert history.written[0] is session
+
+
+def test_there_is_no_retry_when_no_bias_was_configured() -> None:
+    """Reporting a recovery attempt that was mechanically identical to the
+    first decode would be an instrument describing work it did not do."""
+    engine = _FakeEngine(" For Tenants.")
+    controller = _long_dictation(engine=engine)  # AppConfig(): initial_prompt = ""
+
+    session = _dictate(controller)
+
+    assert engine.calls == 1
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.FAILED
+    assert session.guard.retried is False
+    assert session.guard.reason is not None
+    assert "initial_prompt" in session.guard.reason
+
+
+def test_the_retry_can_be_turned_off() -> None:
+    from dataclasses import replace
+
+    config = replace(_biased_config(), guard=GuardConfig(retry_unbiased=False))
+    engine = _FakeEngine(" For Tenants.")
+    controller = _long_dictation(engine=engine, config=config)
+
+    session = _dictate(controller)
+
+    assert engine.calls == 1
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.FAILED
+    assert session.guard.retried is False
+
+
+def test_a_short_dictation_is_never_judged() -> None:
+    """The default fixture is one second of audio — below `min_audio_seconds`."""
+    injector = _FakeInjector()
+    controller = _controller(engine=_FakeEngine("ok"), injector=injector)
+
+    session = _dictate(controller)
+
+    assert session.guard is not None
+    assert session.guard.outcome is GuardOutcome.SKIPPED
+    assert injector.injected == ["ok"]
+
+
+def test_post_processing_runs_on_the_recovered_text() -> None:
+    """The chain must see what will be injected, not what was thrown away."""
+    engine = _FakeEngine(" For Tenants.", unbiased_text=" ".join(["word"] * 80))
+    injector = _FakeInjector()
+    controller = _long_dictation(
+        engine=engine,
+        injector=injector,
+        processors=[_Upper()],
+        config=_biased_config(),
+    )
+
+    _dictate(controller)
+
+    assert injector.injected == [" ".join(["WORD"] * 80)]

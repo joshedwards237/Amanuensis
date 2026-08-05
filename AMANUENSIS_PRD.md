@@ -2488,6 +2488,7 @@ same day.
 | Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 1 merged, 4 pending |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
+| Objections — `collapse-guard` | `docs/superpowers/objections/collapse-guard.md` | 8 objections — 8 pending |
 | Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — 2 accepted, 9 pending |
 | Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — 3 accepted, 5 pending |
