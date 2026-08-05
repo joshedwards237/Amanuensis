@@ -2297,10 +2297,13 @@ same day.
 <!-- BEGIN sentinel-index (generated) -->
 | Record | Path | State |
 |---|---|---|
-| Slicing | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
+| Slicing — `amanuensis-prd` | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
+| Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 1 merged, 4 pending |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
-| Choice stories | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
+| Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — 2 accepted, 9 pending |
+| Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
+| Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — 3 accepted, 5 pending |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 

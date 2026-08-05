@@ -47,6 +47,39 @@
   prompt must say explicitly: paste the complete record as your message, do not
   summarise it, do not reference a file path.
 
+  **Upgraded 2026-08-03: assume they will not deliver, and budget to do the work
+  yourself.** Three sentinels were dispatched for the dictionary spec —
+  advocatus-diaboli, choice-cartographer, carpaccio — each with the absolute
+  charter path this file already recommends AND an explicit output contract
+  spelling out that message text is the only channel. **All three returned zero
+  output.** Advocatus-diaboli was re-asked twice, the second time with the ask
+  reduced to "three objections, plain prose, no format", and went idle again.
+  The advice above ("say so in the dispatch") was followed in full and did not
+  help.
+
+  **CAUSE FOUND 2026-08-04, and it is the `name` parameter.** Passing `name:` to
+  the Agent tool turns a sentinel into a persistent addressable teammate: it
+  finishes its turn, emits an `idle_notification`, and **waits in a mailbox**.
+  Its final message is not returned to the caller, because a named teammate is
+  expected to deliver via `SendMessage` — which these agent definitions know
+  nothing about, since their charters tell them their final message IS the
+  return value. Every failed dispatch in this repo used `name:`.
+
+  **Dispatch sentinels WITHOUT `name:`.** An unnamed agent runs in the
+  background and its final text arrives in the completion notification.
+  Verified: the same advocatus-diaboli agent, same charter path, same spec, no
+  `name` — returned three substantial objections in 64 seconds after three
+  named dispatches of the identical ask returned nothing. Use `name:` only when
+  you genuinely intend to hold a conversation with the agent.
+
+  What worked instead: writing the objection record, the slicing record and the
+  choice-story record in the main session, each marked with a provenance line
+  naming the sentinel that failed. That is weaker — a reviewer reviewing its own
+  draft is not an independent one — and saying so in the record is the honest
+  minimum. **Do not present self-authored records as sentinel-reviewed.** Dispatch
+  them if you like, bound the wait, and start the work in parallel rather than
+  blocking on output that has not arrived in four attempts across two features.
+
 - **Adjudicating objections creates new unmapped decisions.** Twelve accepted objections
   amended the PRD heavily in one day; the cartographer's second pass returned 13 stories,
   7 of them mapping choices the amendments had just introduced. Re-run the cartographer
