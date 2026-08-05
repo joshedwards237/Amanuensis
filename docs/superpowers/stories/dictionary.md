@@ -3,7 +3,42 @@ target: "docs/superpowers/specs/dictionary.md (revision 2, 2026-08-03)"
 task_slug: dictionary
 date: 2026-08-03
 authored_by: "main session — the choice-cartographer sentinel was dispatched twice and returned nothing"
-stories: 8
+stories:
+  - id: C1
+    title: "initial_prompt was inherited as the biasing mechanism, never chosen"
+    stated: false
+    disposition: pending
+  - id: C2
+    title: "The dictionary is global, and per-application was rejected before it got cheap"
+    stated: partially
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-04. The rejection is overturned: [boost] is scoped per application. TextInjector.focus_identity() already returns the frontmost bundle identifier and is already called on every dictation for the §6.3 focus check, so the information a per-application dictionary needs is on the path and measured. The cost is a table key, not a subsystem. This is also the only mechanism on the table that addresses C8 — the limit on [boost] is relevance, not term count, and scoping is how relevance gets expressed."
+  - id: C3
+    title: "A file edit takes effect on daemon restart, and nothing says so"
+    stated: false
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-04. vocabulary.toml is re-read when its mtime changes, not only at startup. §6.3's argument against ambient configuration was made for config.toml, which changes rarely; a dictionary's whole use pattern is notice a mangled word, add a line, try again, and under restart-only semantics 'try again' means reloading a model. The §6.3 contract is not weakened for config.toml itself."
+  - id: C4
+    title: "The guard fails open, and the alternative was never named"
+    stated: partially
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-04, confirmed 2026-08-05. The guard retries with the bias removed, and if the retry also fails the transcript is not injected and the failure is reported loudly. Transcription is ~200 ms at 10 s, so a retry is affordable on a path already known to be broken. §7.5's 'degrade rather than stall' precedent does not apply — that governs a pass that is too slow, and this is a pass that is wrong. Two consequences recorded rather than discovered later: the retry must drop initial_prompt or it is worthless, because beam_size = 1 is greedy and re-running the same audio the same way returns the same words; and where no initial_prompt is configured there is nothing to retry, so the guard goes straight to the loud failure rather than reporting a recovery attempt it never made."
+  - id: C5
+    title: "'The user's words' silently became final_text"
+    stated: false
+    disposition: pending
+  - id: C6
+    title: "The user is assumed to be someone who edits TOML by hand"
+    stated: partially
+    disposition: pending
+  - id: C7
+    title: "Two tables was chosen before the mechanisms were known to differ"
+    stated: true
+    disposition: pending
+  - id: C8
+    title: "[boost] was assumed free"
+    stated: false
+    disposition: pending
 ---
 
 # Choice-story record — Dictionary

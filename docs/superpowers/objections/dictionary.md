@@ -4,7 +4,64 @@ task_slug: dictionary
 date: 2026-08-03
 mode: spec
 authored_by: "main session — the advocatus-diaboli sentinel was dispatched three times and returned nothing"
-objections: 11
+objections:
+  - id: O1
+    category: premise
+    severity: high
+    claim: "B9 says the raw transcript is persisted so a bad rule is recoverable. It is not: to_history_row() emits one transcript and history.db has one column."
+    disposition: pending
+  - id: O2
+    category: evidence
+    severity: high
+    claim: "The headline 4/10 to 9/10 proper-noun result comes from one corpus sample, and the [boost] table, slice V3 and open question O2 all rest on it."
+    disposition: pending
+  - id: O3
+    category: premise
+    severity: high
+    claim: "The collapse mechanism is unexplained, so a words-per-second floor may be a guard against a symptom rather than the failure."
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. The guard ships as a Phase 2b follow-up defect fix rather than dictionary slice V1, and it does not wait for the mechanism to be explained. Grounds: the hazard reached production before the guard did — a 30.5-second dictation on the operator's machine returned two words (0.066 w/s, three times worse than the measured collapse) with initial_prompt live and no dictionary involved. The objection's point stands and is met differently than it proposed: rather than explain the collapse first, the guard's response to a fired verdict is a retry with the bias removed, which treats the prompt as the suspected cause without asserting it. A floor is accepted as half a guard; the hallucinated-expansion direction the objection names is recorded as unguarded in the spec rather than silently omitted. store_audio is implemented in the same change because the failure that prompted this is unreproducible without it."
+  - id: O4
+    category: alternatives
+    severity: medium-high
+    claim: "B4's casing preservation is the macOS text-substitution hazard from §7.3, re-committed by the one mechanism whose selling point is determinism."
+    disposition: pending
+  - id: O5
+    category: completeness
+    severity: medium-high
+    claim: "Nothing tells the user a rule fired, so a wrongly-firing entry presents as an ASR error and sends them to the wrong fix."
+    disposition: pending
+  - id: O6
+    category: measurement
+    severity: medium
+    claim: "The Phase 3 gate measures edit rate, which the dictionary reduces by construction, so entries written against the gate dictations produce a number that measures nothing."
+    disposition: pending
+  - id: O7
+    category: alternatives
+    severity: medium
+    claim: "[boost] and [engine] initial_prompt are two config keys for one behaviour, with an ordering rule between them."
+    disposition: pending
+  - id: O8
+    category: premise
+    severity: low
+    claim: "The 60-character key limit is inherited from a product with a mobile text field and has no constraint here to inherit."
+    disposition: pending
+  - id: O9
+    category: premise
+    severity: medium
+    claim: "§5.6's whole justification for two mechanisms is 'they fail in different places', and neither the PRD nor the draft says where either one fails."
+    disposition: pending
+  - id: O10
+    category: measurement
+    severity: low-medium
+    claim: "The guard's words-per-second denominator trusts the VAD; partial over-trimming inflates the rate and is not observable from inside the guard."
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05, taken together with O3. retained_seconds is recorded on the session alongside the guard's verdict, so a false negative is diagnosable after the fact. The guard is additionally suppressed entirely when TrimResult.fell_back is set."
+  - id: O11
+    category: sequencing
+    severity: low
+    claim: "manu vocab check arrives fourth, after users have been writing entries for two slices with no way to see how they interact."
+    disposition: pending
 ---
 
 # Objection record — Dictionary

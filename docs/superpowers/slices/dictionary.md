@@ -6,6 +6,34 @@ carpaccio_model: null
 authored_by: "main session — the carpaccio sentinel was dispatched twice and returned nothing both times"
 inseparable: false
 progressed_slice: null
+slices:
+  - id: V0
+    title: "raw_transcript column and migration"
+    scope: "history.db grows a second transcript column so the pre-post-processing text survives. Migration through the existing _MIGRATIONS path."
+    lens_used: safety-floor
+    disposition: pending
+  - id: V1
+    title: "The collapse guard"
+    scope: "A deterministic check that a transcript is not implausibly short for the speech that produced it, applied to every transcription regardless of whether any dictionary exists."
+    lens_used: safety-floor
+    disposition: merged
+    merged_into: "Phase 2b follow-up defect fix"
+    disposition_rationale: "Human decision, 2026-08-05. Removed from the dictionary feature and built now, ahead of Phase 3, as a defect fix. The slicing record argued this slice leads 'and not because of the dictionary' — that reasoning is upheld and taken one step further: a slice that is not about the feature is not a slice of the feature. The trigger was live evidence rather than the argument, which the record should say plainly. A 30.5-second dictation on the operator's machine on 2026-08-05 returned two words at 0.066 w/s, with initial_prompt set and no dictionary in existence. The record predicted the hazard was already in production; it was."
+  - id: V2
+    title: "[replace] map, B3–B8, B10"
+    scope: "vocabulary.toml with a [replace] table only. Load, validate, apply as VocabularyPostProcessor in the §5.3 chain."
+    lens_used: decision-boundary
+    disposition: pending
+  - id: V3
+    title: "[boost] list"
+    scope: "The [boost] table, scoped per application, appended to the engine prompt."
+    lens_used: decision-boundary
+    disposition: pending
+  - id: V4
+    title: "manu vocab check"
+    scope: "One verb. Takes text, prints which entries would fire and what the result would be. No file writes."
+    lens_used: acceptance-criterion
+    disposition: pending
 ---
 
 # Slicing record — Dictionary
@@ -46,7 +74,41 @@ of them found by measuring rather than by reading:
 
 ## Slices
 
-### V1 — The collapse guard
+### V0 — `raw_transcript` gets a column
+
+**Scope.** `history.db` grows a second transcript column so the text the engine
+produced survives post-processing. Migration through the existing `_MIGRATIONS`
+path, which already exists because `restore_ms` needed it.
+
+**Decision focus.** Does §8's "never lose a transcript" protect the words the
+user said, or the words the last processor left behind?
+
+**Lens.** Safety floor.
+
+**Sequencing.** Before V2, and not only for V2 — §7.5's four Phase 5 constraints
+open with "raw transcript persisted", so the LLM pass needs this identically.
+It is a precondition of two features and the business of neither.
+
+**Added after the record's first draft**, by objection O1. The draft's B9 asserted
+this behaviour already existed. It does not: `to_history_row()` emits
+`final_text or raw_transcript` into one column, so the raw output is lost the
+moment post-processing runs.
+
+---
+
+### V1 — The collapse guard — **left this feature, 2026-08-05**
+
+**No longer a dictionary slice.** Built ahead of Phase 3 as a Phase 2b follow-up
+defect fix. The reasoning below is why, and it survived the move intact — a
+slice that is not about the feature is not a slice of the feature.
+
+What settled it was not the argument but a measurement. On 2026-08-05 a
+30.5-second dictation on the operator's machine returned two words: 0.066 words
+per second, **three times worse than the collapse this record was written
+about**, with `initial_prompt` set and no dictionary in existence. The record
+predicted the hazard was already in production. It was.
+
+The original scoping follows, unchanged.
 
 **Scope.** A deterministic check that a transcript is not implausibly short for
 the speech that produced it, applied to every transcription regardless of

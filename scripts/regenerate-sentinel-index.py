@@ -84,6 +84,30 @@ def tally(path: Path) -> tuple[int, dict[str, int]]:
     return entries, counts
 
 
+def is_uncountable(path: Path, entries: int) -> bool:
+    """True when the record clearly holds entries the frontmatter does not list.
+
+    A record whose frontmatter carries `objections: 11` as a scalar instead of a
+    list parses to zero entries, and the table then reports "0 objections" for a
+    file containing eleven. That reads as a feature reviewed and found clean —
+    the opposite of what happened.
+
+    This is the same failure the directory scan above was written to fix, one
+    layer down: that version could not see new *records*, this one could not see
+    entries *inside* a record it could see. Both were green because they looked
+    at nothing. Found 2026-08-05, when four self-authored dictionary records all
+    reported zero.
+
+    The tell is a scalar `<noun>: <digits>` key in the frontmatter, which is what
+    a hand-written record naturally produces. Nothing else is guessed at: a
+    record with genuinely no entries has no such key and still reports zero,
+    honestly.
+    """
+    if entries:
+        return False
+    return any(re.match(r"^\w+:\s*\d+\s*$", line) for line in frontmatter(path))
+
+
 def describe(entries: int, counts: dict[str, int], noun: str) -> str:
     if not counts:
         return f"{entries} {noun}"
@@ -102,8 +126,10 @@ def records_in(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("*.md") if p.name != ".gitkeep")
 
 
-def build_table() -> str:
+def build_table() -> tuple[str, list[str]]:
+    """The table, and the records whose entries could not be counted."""
     rows = ["| Record | Path | State |", "|---|---|---|"]
+    uncountable: list[str] = []
     for label, reldir, key in RECORD_DIRS:
         found = records_in(ROOT / reldir)
         if not found:
@@ -115,11 +141,16 @@ def build_table() -> str:
             # the common single-record case reads exactly as it did before.
             name = label if len(found) == 1 else f"{label} — `{path.stem}`"
             entries, counts = tally(path)
-            rows.append(f"| {name} | `{rel}` | {describe(entries, counts, key)} |")
+            if is_uncountable(path, entries):
+                uncountable.append(rel)
+                state = f"**UNCOUNTABLE** — {key} not listed in frontmatter"
+            else:
+                state = describe(entries, counts, key)
+            rows.append(f"| {name} | `{rel}` | {state} |")
     label, rel = ESTIMATE
     state = "not adjudicable" if (ROOT / rel).exists() else "*missing*"
     rows.append(f"| {label} | `{rel}` | {state} |")
-    return "\n".join(rows)
+    return "\n".join(rows), uncountable
 
 
 def main() -> int:
@@ -128,20 +159,37 @@ def main() -> int:
     if BEGIN not in text or END not in text:
         print(f"error: markers not found in {PRD.name}", file=sys.stderr)
         return 2
+    table, uncountable = build_table()
     new = re.sub(
         re.escape(BEGIN) + r".*?" + re.escape(END),
-        BEGIN + "\n" + build_table() + "\n" + END,
+        BEGIN + "\n" + table + "\n" + END,
         text,
         flags=re.DOTALL,
     )
-    if new == text:
+    if new != text:
+        if check:
+            print(
+                "sentinel index: STALE — run scripts/regenerate-sentinel-index.py",
+                file=sys.stderr,
+            )
+            return 1
+        PRD.write_text(new)
+        print("sentinel index: regenerated")
+    else:
         print("sentinel index: up to date")
-        return 0
-    if check:
-        print("sentinel index: STALE — run scripts/regenerate-sentinel-index.py", file=sys.stderr)
+
+    # Written last and separately from staleness: an uncountable record makes the
+    # table *wrong*, not out of date, and regenerating does not fix it. Failing
+    # here rather than only under --check means the person who runs the script by
+    # hand is told too, instead of finding out from CI.
+    if uncountable:
+        for rel in uncountable:
+            print(
+                f"sentinel index: UNCOUNTABLE — {rel} has a scalar count in its "
+                "frontmatter, not a list of entries; the table cannot report it",
+                file=sys.stderr,
+            )
         return 1
-    PRD.write_text(new)
-    print("sentinel index: regenerated")
     return 0
 
 
