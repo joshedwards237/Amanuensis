@@ -482,7 +482,8 @@ def test_the_guard_verdict_is_persisted(tmp_path: Path) -> None:
         guard=GuardVerdict(
             outcome=GuardOutcome.FAILED,
             retained_seconds=30.5,
-            words_per_second=0.066,
+            coverage=0.0656,
+            words_per_second=None,
             reason="no initial_prompt to drop",
             retried=False,
         )
@@ -492,7 +493,7 @@ def test_the_guard_verdict_is_persisted(tmp_path: Path) -> None:
 
     row = _rows(store.db_path)[0]
     assert row["guard_outcome"] == "failed"
-    assert row["guard_words_per_second"] == pytest.approx(0.066)
+    assert row["guard_coverage"] == pytest.approx(0.0656)
     assert row["guard_retained_seconds"] == pytest.approx(30.5)
 
 
@@ -503,14 +504,14 @@ def test_a_session_with_no_verdict_stores_nulls(tmp_path: Path) -> None:
 
     row = _rows(store.db_path)[0]
     assert row["guard_outcome"] is None
-    assert row["guard_words_per_second"] is None
+    assert row["guard_coverage"] is None
 
 
 def test_an_older_database_gains_the_guard_columns(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write_pending(_session())
     connection = sqlite3.connect(store.db_path)
-    for column in ("guard_outcome", "guard_words_per_second", "guard_retained_seconds"):
+    for column in ("guard_outcome", "guard_coverage", "guard_retained_seconds"):
         connection.execute(f"ALTER TABLE transcripts DROP COLUMN {column}")
     connection.commit()
     connection.close()
@@ -518,7 +519,7 @@ def test_an_older_database_gains_the_guard_columns(tmp_path: Path) -> None:
     store.write_pending(_session(id="second"))
 
     columns = set(_rows(store.db_path)[0].keys())
-    assert {"guard_outcome", "guard_words_per_second", "guard_retained_seconds"} <= columns
+    assert {"guard_outcome", "guard_coverage", "guard_retained_seconds"} <= columns
 
 
 # ---------------------------------------------------------------------------
