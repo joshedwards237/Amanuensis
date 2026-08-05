@@ -9,42 +9,50 @@ objections:
     category: premise
     severity: high
     claim: "Words-per-second measures the speaker, not the decoder. The failure is a decoder that stopped early, and faster-whisper already returns the signal that says so directly — segment end timestamps against retained duration. §5.7 does not weigh it."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. Accepted in full and it reshaped the design. Decoded coverage becomes the primary instrument and the rate floor is demoted to a fallback for engines that cannot report a span. Verified before acting: faster_whisper.Segment carries start/end/avg_logprob/no_speech_prob/compression_ratio and _decode discarded all of it. Three properties decided it — coverage is duration-independent, which matters because the operator dictates short clips often and the rate floor's min_audio_seconds exemption was a blind spot over his most common input rather than a policy choice; coverage has no false-positive population, which retires O3 and most of O8 rather than mitigating them; and coverage distinguishes early termination from drift, which is dictionary objection O3's open question. transcribe() returns Transcription(text, decoded_seconds) on the InjectionResult.restore_ms precedent."
   - id: O2
     category: risk
     severity: critical
     claim: "Refusing to inject inverts the fail-open posture C4 and slice V1 both specified, and the withheld transcript has no reader — manu history is Phase 3."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. The refusal stands — it is the operator's 2026-08-04 decision and reaffirming it here is not a drafting slip — and manu history --last ships with it, pulled forward from Phase 3. The objection's framing is what carried: written is not recoverable, and a guarantee mechanically preserved and practically unreachable is the failure §5.5 documented once already. §5.7 now records the override of choice-story C4 explicitly rather than citing C4 as support for a posture C4 rejects. The sweep limb is REJECTED as false: sweep_pending expires by retain_days rather than unlinking on sight, so a refused transcript survives thirty days at the default. That correction did not change the disposition, only the severity of the reasoning behind it."
   - id: O3
     category: risk
     severity: high
     claim: "The guard's stated false-positive population — slow or quiet speakers — overlaps §4's secondary user, and the retry does not protect them: an unbiased re-decode of genuinely slow speech fails the same floor."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. Accepted, and answered by O1 rather than by mitigation. Coverage does not ask how fast or quietly anyone speaks, so the population this objection identified — overlapping §4's secondary user — is no longer selected for. The residue stands and is fixed separately: a recovered transcript was arriving at the cursor decoded without the bias the user configured, with no signal, which §5.7 now calls dictionary objection O5 re-committed and §5.4's indicator now distinguishes."
   - id: O4
     category: implementation
     severity: high
     claim: "One threshold makes two decisions with wildly asymmetric costs. Set low enough to be safe for withholding words, 0.5 w/s is blind to every partial collapse in the 4.4x band beneath genuine speech."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. Split into retry_below_coverage = 0.8 and min_decoded_coverage = 0.5. The asymmetry argument is correct: spending a decode and withholding words do not want the same number. The unlooked-for benefit is that the middle band generates the evidence the guard otherwise had no way to produce — biased and unbiased output over the same audio, both recorded."
   - id: O5
     category: implementation
     severity: high
     claim: "The retry is a second full decode inside G1's window with no LatencyBreakdown field and no latency ceiling, contradicting §6.3's own standing rule."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. guard_ms added to LatencyBreakdown inside g1_ms, and retry_max_latency_ms added so the retry is predicted from §2's model and skipped rather than paid. The objection's sharpest point is conceded in the PRD: §6.3's standing rule was broken in the same revision that restates it, making four phases in a row."
   - id: O6
     category: alternatives
     severity: medium
     claim: "The only prompt shape ever observed to collapse a transcript is prose. Constraining initial_prompt at config load is deterministic, costs no latency, and was never weighed."
-    disposition: pending
+    disposition: deferred
+    disposition_rationale: "Human decision, 2026-08-05. Not rejected — the observation that prose is the only prompt shape ever seen to collapse a transcript is real and worth keeping. Deferred because prose detection is itself a heuristic that would false-positive on legitimate prose prompts, and because it is an input-side mitigation for a feature (§5.6's boosting) that is still Phase 3. Revisit when [boost] is specified."
   - id: O7
     category: specification-quality
     severity: medium
     claim: "§5.7 does not say whether min_audio_seconds is measured on raw or retained audio, and the two readings diverge precisely in the over-trim case O10 was written about."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. Largely mooted by O1 — coverage has no duration gate, so the ambiguity has nothing to attach to on the primary path. Where it survives, on the fallback floor, §5.7 now says the gate is retained seconds, the same quantity as the denominator."
   - id: O8
     category: risk
     severity: high
     claim: "The stated verification cannot falsify the direction the guard is most likely wrong in. Six samples from one speaker is the entire negative control, and the positive control is not the failure that motivated the fix."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Human decision, 2026-08-05. The verification could not fail and §9 now says so. Both limits are named — one speaker for the negative control, and a positive control that is not the failure that motivated the fix because store_audio did nothing and that audio is gone. The false-positive direction is labelled untested, which is materially different from tested and clean, and the Phase 3 gate must record coverage and retained_seconds for every dictation so the live distribution can be compared against the six samples the thresholds came from."
 ---
 
 # Objection record — The collapse guard (PRD §5.7)
@@ -284,5 +292,14 @@ switch is named.
 | O7 | medium | `min_audio_seconds`: raw or retained? The readings diverge in O10's case |
 | O8 | high | Verification cannot falsify the false-positive direction: one speaker, wrong positive control |
 
-**Five of eight are high or critical.** O1 is the one that changes the design
-rather than refining it: a better instrument removes O3 and O8 as well.
+**Five of eight are high or critical.** O1 is the one that changed the design
+rather than refining it, and it did: coverage replaced the rate floor as the
+primary instrument, which retired O3 and half of O8 rather than mitigating
+them.
+
+**Seven accepted, one deferred, one limb rejected as false.** Dispositions are
+the operator's, taken 2026-08-05. The rejected limb is O2's claim that a refused
+transcript is swept at the next daemon start; `sweep_pending` expires by
+`retain_days`. Checking it did not change the disposition, which is the useful
+thing to know about checking claims — the objection was right for reasons other
+than the one it led with.
