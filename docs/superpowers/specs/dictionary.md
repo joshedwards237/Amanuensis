@@ -216,15 +216,25 @@ Full reasoning in `docs/superpowers/slices/dictionary.md`.
 
 | | | depends on |
 |---|---|---|
+| ~~**V1**~~ | ~~the collapse guard~~ | **shipped 2026-08-05 — no longer this feature's** |
 | **V0** | `raw_transcript` column + migration (O1) | — |
-| **V1** | the collapse guard | V0 for diagnosis |
 | **V2** | `[replace]` map, B3–B8, B10 | V0 |
-| **V3** | `[boost]` list | **V1, and see below** |
+| **V3** | `[boost]` list, scoped per application | V0 |
 | **V4** | `manu vocab check` | V2 |
 
-**V1 leads, and not because of the dictionary.** `initial_prompt` is wired,
-live, and set on the operator's machine now. Every slice below increases the
-number of people who trip the hazard.
+**V1 left this feature and that was the right reading of its own argument.** The
+slice was justified as *"first, and not because of the dictionary"* — and a
+slice that is not about the feature is not a slice of the feature. It is built
+as a **Phase 2b follow-up defect fix**, specified at PRD §5.7.
+
+What settled it was not the argument. On 2026-08-05 a 30.5-second dictation on
+the operator's machine returned two words at **0.066 w/s**, three times worse
+than the collapse measured here, with `initial_prompt` live and no dictionary in
+existence. This document predicted the hazard was already in production. It was.
+
+**V3 no longer depends on a slice of this feature**, but it still must not ship
+without the guard, which is now a precondition met outside the plan rather than
+inside it.
 
 **V3 is now doubtful and that is the review's most consequential finding.** The
 boost list improves macro WER by **1.1 points** while making two of six samples
