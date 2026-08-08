@@ -35,6 +35,17 @@ tests/fixtures/asr/*.m4a
 # "do disfluencies survive the decoder" and "what does trimming actually
 # remove", neither of which is a WER question.
 tests/fixtures/spontaneous/
+# No trailing slash, deliberately. The slashed form matches a directory and
+# NOT a symlink of the same name — and a symlink is exactly what a worktree
+# uses to reach the corpus in the lobby checkout, so the slashed pattern let
+# a path to a voice recording into a commit on 2026-08-08. A symlink carries
+# no audio, but the rule this file exists to enforce is that nothing about a
+# voice recording reaches a public repository, and a path is something.
+tests/fixtures/spontaneous
+tests/fixtures/phase3/
+tests/fixtures/phase3
+# NOT `tests/fixtures/asr` bare — that directory holds the committed reference
+# transcripts, and WER is meaningless without them. Only its audio is ignored.
 tests/fixtures/asr/*.flac
 probe.wav
 
