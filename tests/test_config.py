@@ -385,9 +385,7 @@ def test_a_retry_gate_below_the_refusal_gate_is_rejected(tmp_path: Path) -> None
     transcripts it never tried to recover — the one configuration in which the
     §5.7 flow has no reachable recovery path."""
     path = tmp_path / "config.toml"
-    path.write_text(
-        "[guard]\nmin_decoded_coverage = 0.6\nretry_below_coverage = 0.3\n"
-    )
+    path.write_text("[guard]\nmin_decoded_coverage = 0.6\nretry_below_coverage = 0.3\n")
     with pytest.raises(ConfigError) as caught:
         load_config(path)
     assert "retry_below_coverage" in str(caught.value)

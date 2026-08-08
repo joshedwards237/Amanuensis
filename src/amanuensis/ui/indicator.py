@@ -54,6 +54,7 @@ GLYPHS: Final[dict[DictationState, str]] = {
     DictationState.IDLE: "○",
     DictationState.RECORDING: "●",
     DictationState.TRANSCRIBING: "◐",
+    DictationState.RECOVERED: "◍",
     DictationState.ERROR: "⚠",
 }
 
@@ -63,6 +64,10 @@ _TOOLTIPS: Final[dict[DictationState, str]] = {
     DictationState.IDLE: "Amanuensis — idle, the microphone is not live",
     DictationState.RECORDING: "Amanuensis — RECORDING, the microphone is live",
     DictationState.TRANSCRIBING: "Amanuensis — transcribing, the microphone is closed",
+    DictationState.RECOVERED: (
+        "Amanuensis — recovered: the transcript was re-decoded without your "
+        "initial_prompt, so proper nouns may be wrong"
+    ),
     DictationState.ERROR: "Amanuensis — something failed; see the terminal",
 }
 

@@ -219,7 +219,7 @@ def _one_pass(
     timings.vad_ms = (time.perf_counter() - start) * 1000.0
 
     start = time.perf_counter()
-    text = engine.transcribe(trimmed.audio, SAMPLE_RATE)
+    text = engine.transcribe(trimmed.audio, SAMPLE_RATE).text
     timings.transcribe_ms = (time.perf_counter() - start) * 1000.0
 
     return timings, trimmed, text

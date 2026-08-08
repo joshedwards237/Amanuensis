@@ -86,9 +86,7 @@ class _FakeTrim:
 
 
 class _FakeDetector:
-    def __init__(
-        self, retained_seconds: float = 1.0, fell_back: bool = False
-    ) -> None:
+    def __init__(self, retained_seconds: float = 1.0, fell_back: bool = False) -> None:
         self.calls = 0
         self.retained_seconds = retained_seconds
         self.fell_back = fell_back
@@ -746,6 +744,7 @@ def test_nothing_is_injected_when_there_was_nothing_to_persist() -> None:
 
     assert result.succeeded is False
     assert calls == []
+
 
 # ---------------------------------------------------------------------------
 # §5.7 — the collapse guard, as orchestration

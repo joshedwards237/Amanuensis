@@ -58,6 +58,7 @@ from numpy.typing import NDArray
 
 from amanuensis.config import resolve_cpu_threads
 from amanuensis.engines.base import TranscriptionEngine
+from amanuensis.models.results import Transcription
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
     from amanuensis.config import EngineConfig
@@ -260,13 +261,19 @@ class FasterWhisperEngine(TranscriptionEngine):
         )
         self._decode(model, noise)
 
-    def transcribe(self, audio: NDArray[np.float32], sample_rate: int) -> str:
+    def transcribe(
+        self, audio: NDArray[np.float32], sample_rate: int, *, biased: bool = True
+    ) -> Transcription:
         """One utterance in, raw transcript out.
 
         `sample_rate` is accepted to satisfy the ABC and validated rather than
         used: Whisper's feature extractor is built for 16 kHz and there is no
         resampling here, so a mismatched rate would silently produce a
         transcript of audio played at the wrong speed.
+
+        `biased=False` drops `initial_prompt`, which is §5.7's retry. Nothing
+        else changes: a retry that also moved the beam size or the VAD flag
+        would be measuring a different pipeline than the one that failed.
         """
         from amanuensis.config import SUPPORTED_SAMPLE_RATE
 
@@ -275,27 +282,41 @@ class FasterWhisperEngine(TranscriptionEngine):
                 f"audio must be {SUPPORTED_SAMPLE_RATE} Hz; got {sample_rate}"
             )
         model = self._require_model("transcribe")
-        return self._decode(model, audio)
+        return self._decode(model, audio, biased=biased)
 
-    def _decode(self, model: Any, audio: NDArray[np.float32]) -> str:
+    def _decode(
+        self, model: Any, audio: NDArray[np.float32], *, biased: bool = True
+    ) -> Transcription:
         """The one place decoding parameters are set.
 
         `transcribe()` returns a generator and the work happens on iteration —
         a timer stopped before the generator is drained measures almost
         nothing. The join is therefore part of the call, not a caller's
         responsibility, so no measurement in this project can get it wrong.
+
+        Draining is also what makes `decoded_seconds` available at all. Each
+        segment carries `start` and `end`; this method used to join the texts
+        and drop everything else, which meant §5.7's signal was crossing the
+        boundary and being discarded on the floor.
         """
         segments, _info = model.transcribe(
             audio,
             language=self._config.language or None,
             beam_size=BEAM_SIZE,
-            initial_prompt=self._config.initial_prompt or None,
+            initial_prompt=(self._config.initial_prompt or None) if biased else None,
             # Trimming is `audio/vad.py`'s job, for every engine. Explicit
             # rather than defaulted, so a library default flip cannot quietly
             # start double-trimming.
             vad_filter=False,
         )
-        return "".join(segment.text for segment in segments)
+        text: list[str] = []
+        decoded_seconds = 0.0
+        for segment in segments:
+            text.append(segment.text)
+            # `max` rather than "the last one": segment order is the decoder's
+            # and nothing in the API promises it is monotonic in `end`.
+            decoded_seconds = max(decoded_seconds, float(segment.end))
+        return Transcription("".join(text), decoded_seconds)
 
     def _require_model(self, verb: str) -> Any:
         if self._model is None:

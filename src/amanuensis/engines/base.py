@@ -24,6 +24,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 from numpy.typing import NDArray
 
+from amanuensis.models.results import Transcription
+
 __all__ = ["TranscriptionEngine"]
 
 
@@ -38,12 +40,25 @@ class TranscriptionEngine(ABC):
         """
 
     @abstractmethod
-    def transcribe(self, audio: NDArray[np.float32], sample_rate: int) -> str:
+    def transcribe(
+        self, audio: NDArray[np.float32], sample_rate: int, *, biased: bool = True
+    ) -> Transcription:
         """Transcribe one utterance. Returns the raw transcript, unprocessed.
 
         Formatting, filler removal and vocabulary correction belong to the
         post-processing chain. An engine that tidies its own output makes the
         chain's behaviour depend on which engine ran.
+
+        `biased=False` suppresses every vocabulary bias this engine applies —
+        for faster-whisper, `initial_prompt`. §5.7's collapse guard needs a
+        decode with the bias removed, and asks for the *behaviour* rather than
+        handing over a mechanism-specific parameter: an engine with no prompt
+        concept cannot be told to use an empty prompt, but it can be told it is
+        already unbiased and ignore the flag.
+
+        `Transcription.decoded_seconds` reports where decoding stopped, in the
+        timebase of the audio handed in. `None` from an engine that cannot say,
+        which routes §5.7 to its fallback instrument rather than to a pass.
         """
 
     @abstractmethod

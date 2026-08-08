@@ -52,6 +52,7 @@ __all__ = [
     "AudioConfig",
     "ConfigError",
     "EngineConfig",
+    "GuardConfig",
     "HistoryConfig",
     "HotkeyConfig",
     "InjectionConfig",
@@ -130,6 +131,37 @@ class EngineConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GuardConfig:
+    """§5.7. Two gates, because one number was doing two jobs.
+
+    Spending a decode and withholding the user's words have costs that differ
+    by orders of magnitude, so a single threshold tuned to be safe for the
+    second is blind to everything short of total collapse (objection O4).
+    """
+
+    #: Refuse to inject below this fraction of retained speech. 0 disables the
+    #: guard entirely — permitted here, unlike `[vad] enabled`, because no
+    #: stated guarantee depends on it yet and a provisional threshold that can
+    #: be wrong about a user must be adjustable by that user.
+    min_decoded_coverage: float = 0.5
+    #: Re-decode with the vocabulary bias dropped below this. Must be at least
+    #: `min_decoded_coverage`, or the guard refuses transcripts it never tried
+    #: to recover. 0 never retries.
+    retry_below_coverage: float = 0.8
+    #: Predicted from §2's `transcribe_ms ≈ 48.8 + 13.69 × seconds`, not
+    #: measured after the fact — the point is to decline the cost, not to
+    #: notice it afterwards. The default allows a retry on roughly 140 seconds
+    #: of speech and declines on a five-minute dictation.
+    retry_max_latency_ms: int = 2000
+    #: The fallback floor, used only when an engine cannot report a decoded
+    #: span. Inert under faster-whisper. See §5.7's blind spot: under the
+    #: fallback, short dictation is unguarded, because word count is an integer
+    #: and at two seconds the rate quantises to 0.5 w/s per word.
+    min_words_per_second: float = 0.5
+    min_audio_seconds: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
 class LLMConfig:
     enabled: bool = False
     model_path: str = ""
@@ -176,6 +208,7 @@ class AppConfig:
     audio: AudioConfig = AudioConfig()
     vad: VadConfig = VadConfig()
     engine: EngineConfig = EngineConfig()
+    guard: GuardConfig = GuardConfig()
     postprocess: PostprocessConfig = PostprocessConfig()
     injection: InjectionConfig = InjectionConfig()
     history: HistoryConfig = HistoryConfig()
@@ -242,6 +275,10 @@ def _probability(value: Any) -> str | None:
     return None if 0.0 <= value <= 1.0 else "must be between 0.0 and 1.0"
 
 
+def _non_negative_number(value: Any) -> str | None:
+    return None if value >= 0 else "must be 0 or greater"
+
+
 _PROCESSORS: Final = ("rules", "vocabulary", "llm")
 
 
@@ -277,6 +314,13 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "language": _Rule((str,)),
         "initial_prompt": _Rule((str,)),
     },
+    "guard": {
+        "min_decoded_coverage": _Rule((float, int), _probability),
+        "retry_below_coverage": _Rule((float, int), _probability),
+        "retry_max_latency_ms": _Rule((int,), _non_negative),
+        "min_words_per_second": _Rule((float, int), _non_negative_number),
+        "min_audio_seconds": _Rule((float, int), _non_negative_number),
+    },
     "postprocess": {
         "chain": _Rule((list,), _chain),
         "strip_fillers": _Rule((bool,)),
@@ -304,6 +348,7 @@ _TOP_LEVEL_TABLES: Final = (
     "audio",
     "vad",
     "engine",
+    "guard",
     "postprocess",
     "injection",
     "history",
@@ -451,6 +496,18 @@ def _check_coherence(config: AppConfig) -> None:
             'postprocess.chain: contains "llm" but postprocess.llm.enabled '
             "is false — enable it or remove it from the chain"
         )
+    guard = config.guard
+    if 0.0 < guard.retry_below_coverage < guard.min_decoded_coverage:
+        # The one configuration in which §5.7's flow has no reachable recovery
+        # path: the guard would refuse transcripts it never attempted to
+        # recover. Zero is exempt because it means "never retry", which is a
+        # coherent choice rather than an unreachable one.
+        raise ConfigError(
+            f"guard.retry_below_coverage ({guard.retry_below_coverage}) is below "
+            f"guard.min_decoded_coverage ({guard.min_decoded_coverage}) — the "
+            "guard would refuse transcripts it never tried to recover. Set it "
+            "to 0 to disable the retry deliberately."
+        )
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -500,6 +557,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         audio=AudioConfig(**_collect("audio", raw.get("audio", {}), AudioConfig)),
         vad=VadConfig(**_collect("vad", raw.get("vad", {}), VadConfig)),
         engine=EngineConfig(**_collect("engine", raw.get("engine", {}), EngineConfig)),
+        guard=GuardConfig(**_collect("guard", raw.get("guard", {}), GuardConfig)),
         postprocess=PostprocessConfig(
             **_collect("postprocess", postprocess_raw, PostprocessConfig),
             llm=LLMConfig(**_collect("postprocess.llm", llm_raw, LLMConfig)),

@@ -29,7 +29,7 @@ import pytest
 
 from amanuensis.config import GuardConfig
 from amanuensis.guard import evaluate, resolve
-from amanuensis.models.results import GuardOutcome
+from amanuensis.models.results import GuardOutcome, GuardVerdict
 
 
 def _verdict(
@@ -39,7 +39,7 @@ def _verdict(
     retained_seconds: float = 30.0,
     fell_back: bool = False,
     config: GuardConfig | None = None,
-):
+) -> GuardVerdict:
     return evaluate(
         text,
         decoded_seconds=decoded_seconds,
@@ -237,7 +237,7 @@ def test_coverage_is_none_rather_than_zero_when_it_was_not_measured() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _at(coverage: float, retained: float = 30.0):
+def _at(coverage: float, retained: float = 30.0) -> GuardVerdict:
     return _verdict(decoded_seconds=coverage * retained, retained_seconds=retained)
 
 

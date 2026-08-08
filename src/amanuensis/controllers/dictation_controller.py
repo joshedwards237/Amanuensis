@@ -48,11 +48,13 @@ import queue
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
-from amanuensis.models.results import InjectionResult
+from amanuensis import guard
+from amanuensis.models.results import GuardOutcome, InjectionResult, Transcription
 from amanuensis.models.session import DictationSession
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
@@ -73,13 +75,24 @@ __all__ = [
 #: that would lose the injection §8 exists to protect.
 _SHUTDOWN_TIMEOUT_S = 30.0
 
+#: §2's measured decode model — `transcribe_ms ≈ 48.8 + 13.69 × seconds`, taken
+#: across 0.7–43.4 s of speech at the Phase 2b gate. Used to *predict* the cost
+#: of §5.7's retry before paying it, which is the only useful moment: a ceiling
+#: checked after the fact is a report, not a budget.
+#:
+#: These are Tier A figures on one machine. A slower machine under-predicts and
+#: retries where it should not, which costs latency on an already-degraded path
+#: and never costs a transcript. That is the right direction for the error.
+_DECODE_INTERCEPT_MS = 48.8
+_DECODE_MS_PER_SECOND = 13.69
+
 
 class DictationState(StrEnum):
     """What the user must be able to see without opening a menu (§5.4).
 
-    Exactly §5.4's four values, and no more. A state the indicator cannot
-    render is a state the user cannot read, and §5.4 makes ambiguity about the
-    microphone a privacy problem rather than a polish one.
+    Exactly §5.4's values, and no more. A state the indicator cannot render is
+    a state the user cannot read, and §5.4 makes ambiguity about the microphone
+    a privacy problem rather than a polish one.
 
     A `StrEnum` so it can be logged and compared against a literal without a
     conversion that a future reader would have to check.
@@ -88,6 +101,11 @@ class DictationState(StrEnum):
     IDLE = "idle"
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
+    #: §5.7's retry produced the text at the cursor, which means it was decoded
+    #: *without* the vocabulary bias the user configured. Distinct from IDLE
+    #: because the transcript was substituted, and distinct from ERROR because
+    #: they did get their words (§5.4, 2026-08-05).
+    RECOVERED = "recovered"
     ERROR = "error"
 
 
@@ -384,6 +402,72 @@ class DictationController:
                 # that sees this set is guaranteed a fully populated session.
                 session.completed.set()
 
+    def _judge(
+        self, session: DictationSession, decoded: Transcription, trimmed: Any
+    ) -> Transcription:
+        """Run §5.7's guard, and the retry if one is both advised and payable.
+
+        Deciding *whether* to spend a second decode is scheduling, which is why
+        it lives here rather than in `guard.py`: it needs the engine, the clock
+        and the config. Choosing between the two decodes once both exist is a
+        judgement about transcripts and stays in `guard.resolve`.
+        """
+        first = guard.evaluate(
+            decoded.text,
+            decoded_seconds=decoded.decoded_seconds,
+            retained_seconds=trimmed.retained_seconds,
+            fell_back=trimmed.fell_back,
+            config=self.config.guard,
+        )
+        if not first.retry_advised:
+            session.guard = guard.resolve(first, None)
+            return decoded
+
+        refusal = self._why_no_retry(trimmed.retained_seconds)
+        if refusal is not None:
+            session.guard = replace(guard.resolve(first, None), reason=refusal)
+            return decoded
+
+        retried = self.engine.transcribe(
+            trimmed.audio, session.sample_rate, biased=False
+        )
+        second = guard.evaluate(
+            retried.text,
+            decoded_seconds=retried.decoded_seconds,
+            retained_seconds=trimmed.retained_seconds,
+            fell_back=trimmed.fell_back,
+            config=self.config.guard,
+        )
+        verdict = guard.resolve(first, second)
+        session.guard = verdict
+        return retried if verdict.chose_retry else decoded
+
+    def _why_no_retry(self, retained_seconds: float) -> str | None:
+        """`None` when a retry is worth running, otherwise why it is not.
+
+        Two refusals, and both would otherwise be silent. Re-decoding with no
+        bias configured is mechanically the same call — `beam_size = 1` is
+        greedy, so identical inputs return identical words — and reporting it
+        as a recovery attempt would be an instrument describing work it did not
+        do. And the cost is predicted from §2's measured model rather than
+        discovered afterwards, because the point is to decline it.
+        """
+        settings = self.config.guard
+        if settings.retry_below_coverage <= 0.0:
+            return "the retry is disabled (retry_below_coverage = 0)"
+        if not self.config.engine.initial_prompt:
+            return (
+                "no initial_prompt is configured, so an unbiased retry would be "
+                "the same decode — nothing to drop"
+            )
+        predicted_ms = _DECODE_INTERCEPT_MS + _DECODE_MS_PER_SECOND * retained_seconds
+        if predicted_ms > settings.retry_max_latency_ms:
+            return (
+                f"an unbiased retry would cost about {predicted_ms:.0f} ms, over "
+                f"retry_max_latency_ms ({settings.retry_max_latency_ms}) — skipped"
+            )
+        return None
+
     def _process(self, session: DictationSession) -> None:
         """Transcribe, post-process, persist, inject. On the worker thread.
 
@@ -399,11 +483,26 @@ class DictationController:
             session.timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
             started = time.perf_counter()
-            session.raw_transcript = self.engine.transcribe(
-                trimmed.audio, session.sample_rate
-            )
+            decoded = self.engine.transcribe(trimmed.audio, session.sample_rate)
             session.timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
             session.engine = f"{self.config.engine.backend}:{self.engine.model_name}"
+
+            started = time.perf_counter()
+            decoded = self._judge(session, decoded, trimmed)
+            session.timings.guard_ms = (time.perf_counter() - started) * 1000.0
+            session.raw_transcript = decoded.text
+            verdict = session.guard
+            if verdict is not None and verdict.outcome is GuardOutcome.FAILED:
+                # §5.7. The words are written by `deliver` below and reachable
+                # with `manu history --last`; what does not happen is putting a
+                # transcript known to be destroyed at the user's cursor, where
+                # noticing and undoing it is their problem.
+                started = time.perf_counter()
+                self.history.write_pending(session)
+                session.timings.persist_ms = (time.perf_counter() - started) * 1000.0
+                session.error = verdict.reason
+                self._set_state(DictationState.ERROR)
+                return
 
             started = time.perf_counter()
             text = session.raw_transcript
@@ -423,4 +522,9 @@ class DictationController:
             self._set_state(DictationState.ERROR)
             return
 
-        self._set_state(DictationState.ERROR if session.error else DictationState.IDLE)
+        if session.error:
+            self._set_state(DictationState.ERROR)
+        elif session.guard is not None and session.guard.chose_retry:
+            self._set_state(DictationState.RECOVERED)
+        else:
+            self._set_state(DictationState.IDLE)

@@ -346,6 +346,7 @@ def test_warm_up_on_the_real_model_does_not_hang_on_silence() -> None:
 
     assert elapsed_ms < 3_000.0, f"warm-up took {elapsed_ms:.0f} ms"
 
+
 # --------------------------------------------------------------------------
 # §5.7 — an unbiased decode, and where the decoder stopped
 # --------------------------------------------------------------------------

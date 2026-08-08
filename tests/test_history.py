@@ -548,9 +548,7 @@ def test_audio_is_written_when_the_key_is_set(tmp_path: Path) -> None:
     Before 2026-08-05 this key parsed, validated, had a test asserting its
     default, and was read by no code anywhere.
     """
-    store = HistoryStore(
-        HistoryConfig(store_audio=True), data_dir=tmp_path
-    )
+    store = HistoryStore(HistoryConfig(store_audio=True), data_dir=tmp_path)
     session = _session(audio=_audible())
 
     store.write_pending(session)
@@ -573,7 +571,6 @@ def test_stored_audio_is_readable_back_as_what_went_in(tmp_path: Path) -> None:
     """A recording that cannot be replayed does not make a collapse
     reproducible, which is the only reason this key was implemented."""
     import numpy as np
-
     from tests.conftest import read_wav
 
     store = HistoryStore(HistoryConfig(store_audio=True), data_dir=tmp_path)
@@ -628,3 +625,69 @@ def test_the_sweep_keeps_audio_inside_the_window(tmp_path: Path) -> None:
     store.sweep_pending()
 
     assert fresh.exists()
+
+
+# ---------------------------------------------------------------------------
+# §5.7 / objection O2 — the refused transcript has to be readable
+# ---------------------------------------------------------------------------
+
+
+def test_the_latest_transcript_can_be_read_back(tmp_path: Path) -> None:
+    """§8's write is unconditional, but *written* is not *recoverable*. Before
+    this, a transcript the guard refused went somewhere no shipped command
+    could show the user."""
+    store = _store(tmp_path)
+    store.write_pending(_session(id="first", raw_transcript="the older one"))
+    store.write_pending(
+        _session(
+            id="second",
+            started_at=datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+            raw_transcript="the newer one",
+        )
+    )
+
+    latest = store.latest()
+
+    assert latest is not None
+    assert latest.transcript == "the newer one"
+
+
+def test_the_latest_transcript_carries_the_guard_verdict(tmp_path: Path) -> None:
+    """Reading back a refused transcript without being told why it was refused
+    leaves the user with no way to act on it."""
+    store = _store(tmp_path)
+    store.write_pending(
+        _session(
+            guard=GuardVerdict(
+                outcome=GuardOutcome.FAILED,
+                retained_seconds=30.5,
+                coverage=0.0656,
+                reason="the decoder covered 7% of 30.5s of speech",
+            )
+        )
+    )
+
+    latest = store.latest()
+
+    assert latest is not None
+    assert latest.guard_outcome == "failed"
+    assert latest.injected is False
+
+
+def test_the_latest_transcript_is_found_on_the_non_retaining_path(
+    tmp_path: Path,
+) -> None:
+    """`retain = false` never opens the database, so the pending file is the
+    only copy — and the user who set it is §4's privacy-motivated primary user,
+    who is exactly as entitled to their refused words as anyone else."""
+    store = _store(tmp_path, retain=False)
+    store.write_pending(_session(raw_transcript="kept out of the database"))
+
+    latest = store.latest()
+
+    assert latest is not None
+    assert latest.transcript == "kept out of the database"
+
+
+def test_there_is_no_latest_when_nothing_was_ever_written(tmp_path: Path) -> None:
+    assert _store(tmp_path).latest() is None
