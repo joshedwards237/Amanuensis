@@ -13,7 +13,7 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 2b closed 2026-08-03. Phase 3 next.
+## Status: Phase 2b closed 2026-08-03, follow-up fix closed 2026-08-07. Phase 3 next.
 
 The loop is closed. `manu daemon` holds the model and the microphone, a
 listen-only `CGEventTap` watches right-option, and `DictationController` runs
@@ -25,6 +25,32 @@ dictations in the 7–16 s band, read from the daemon's own `history.db` rows �
 `LatencyBreakdown` already persists, so the daemon measures itself and there is
 no harness between a voice and the number. Still a floor: `postprocess_ms` is
 the one unfilled stage, and Phase 3 fills it.
+
+**The Phase 2b follow-up shipped 2026-08-07** — the collapse guard, PRD §5.7,
+record at `docs/gates/phase-2b-followup.md`. `initial_prompt` could silently
+destroy a transcript and had shipped in Phase 1 with nothing watching it; a
+30.5-second dictation returned two words and injected them. The guard measures
+**decoded coverage** — how much of the retained speech the decoder got through —
+and below `min_decoded_coverage` the text is not injected. Verified on real
+audio: 8.3% on a reproduced collapse, 82.8% floor on six genuine samples, zero
+false positives.
+
+Three things from it that will bite again:
+
+- **A guard that measures the user is measuring the wrong thing.** The first
+  design was words per second. It carries speaking rate as a confound, and it
+  cannot judge short audio at all — word count is an integer, so at two seconds
+  the rate quantises to 0.5 w/s *per word* and a genuine "Yes." is the same
+  measurement as a collapse. Short dictation is the ordinary case here, so the
+  duration exemption that fell out of it was a blind spot over the most common
+  input.
+- **A verification written against a remembered failure is written against a
+  description.** The first `verify_guard.py` used a prompt reconstructed from
+  the gate record's prose, collapsed nothing, ran the negative control twice and
+  printed PASS. Fourth instance of a check that could not fail.
+- **`mypy --strict` is not optional after a contract change.** 337 tests went
+  green with `manu transcribe` broken by the `str` → `Transcription` return
+  type. The suite mocks past those callers; the type checker names both lines.
 
 `docs/gates/phase-2b.md` is the gate record. Six findings, four amended the PRD.
 Three are worth carrying:
