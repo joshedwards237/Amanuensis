@@ -7,7 +7,7 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: Phase 2b complete. Phase 3 next.
+## Status: Phase 2b complete, plus one defect fix. Phase 3 next.
 
 **The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
 your words appear at the cursor in whatever application has focus. That is the
@@ -15,13 +15,34 @@ product, minus post-processing.
 
 Working: model download and the install-time tier check (`manu install`), the
 global hotkey, the resident daemon, microphone capture, silence trimming,
-transcription, the pre-injection history write, injection with clipboard
-save/restore, and a menu-bar recording indicator. Still refusing and naming
-their phase: `history` (Phase 3), `toggle` and `status` (Phase 4).
+transcription, the collapse guard, the pre-injection history write, injection
+with clipboard save/restore, and a menu-bar recording indicator. Still refusing
+and naming their phase: `history` without `--last` (Phase 3), `toggle` and
+`status` (Phase 4).
+
+**The collapse guard** (2026-08-07, PRD §5.7) exists because `initial_prompt`
+can silently destroy a transcript, and shipped in Phase 1 with nothing watching
+it. A 30.5-second dictation returned two words, no error, injected at the
+cursor. The guard measures how much of your speech the decoder actually got
+through; below half, the audio is decoded again with the vocabulary bias
+dropped, and if that fails too the text is **not** injected — `manu history
+--last` gives you the words. Verified on real audio: fires at 8.3% coverage on a
+reproduced collapse, silent on all six corpus samples with a floor of 82.8%.
+[`docs/gates/phase-2b-followup.md`](docs/gates/phase-2b-followup.md).
+
+Two menu-bar states are worth knowing: `◍` means the guard recovered a
+transcript, so what landed was decoded without your `initial_prompt` and is less
+reliable at proper nouns. `⚠` after a dictation means the words were withheld.
 
 Not built yet: **post-processing**. The transcript you get is what the model
 emitted — leading whitespace, missing sentence-final punctuation, occasional
 spurious capitals. Phase 3.
+
+What the guard cannot see: a transcript that is too *long*, and one that covers
+the audio and gets the words wrong. It catches a decoder that stopped early,
+which is the failure that was observed. The false-positive direction — refusing
+something you actually said — is **untested**, because six corpus samples from
+one speaker cannot produce a speaker it is wrong about.
 
 Injection is verified in TextEdit, Terminal, VS Code and Chrome, on both
 strategies, by reading the text back out of each application rather than by eye.

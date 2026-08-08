@@ -80,6 +80,56 @@
   them if you like, bound the wait, and start the work in parallel rather than
   blocking on output that has not arrived in four attempts across two features.
 
+- **CONFIRMED 2026-08-07: an unnamed sentinel delivers, and it is worth the
+  dispatch.** `advocatus-diaboli` on PRD §5.7, no `name:` — **eight objections in
+  400 seconds**, one critical and five high, against a spec the main session had
+  already reviewed itself. `docs/superpowers/objections/collapse-guard.md` is the
+  first sentinel record in this repository a sentinel actually produced.
+
+  Its O1 **changed the design rather than refining it**: the guard was measuring
+  the speaker (words per second) when the failure was in the decoder, and the
+  signal it should have used was already crossing the boundary and being
+  discarded. The main session had not seen it in three passes over its own draft.
+
+  **Check its claims before acting on them.** Two were verified against the
+  source; one held and one was false — O2 asserted a pending file is swept at the
+  next daemon start, and `sweep_pending` expires by `retain_days` instead. The
+  disposition did not change, which is the useful part: the objection was right
+  for a different reason than the one it led with. A sentinel is an instrument
+  and instruments fabricate in both directions.
+
+- **A check written against a remembered failure is written against a
+  description.** `verify_guard.py`'s first positive control used a prompt
+  *reconstructed from a gate record's prose*, because the prompt itself was never
+  written down. It reproduced nothing, so the script ran the negative control
+  twice, found no false positives both times, and printed PASS. **Fourth instance
+  in this repo of a check that could not fail** — after `sentinel-integrity-check.sh`
+  passing on zero agents, the generated index that could not see new records, and
+  that index reporting zero entries inside records it could see.
+
+  Two rules follow. **Record the input that produced a failure, not your
+  description of it** — "a prose prompt collapsed the transcript" was not enough
+  to rebuild the control, and the real prompt took a nine-candidate sweep to
+  find. And **make the control's own failure an error**: the script now exits
+  non-zero when the positive control catches nothing, so "verified" cannot be
+  printed by a harness that reproduced nothing.
+
+- **Unit tests supply the numbers, so they cannot find a wrong denominator.**
+  §5.7 divided by `TrimResult.retained_seconds` and called it speech. It is not:
+  `[vad] speech_pad_ms` adds 400 ms of deliberate non-speech per side, which the
+  decoder correctly does not transcribe. Every unit test passed, because each one
+  handed in both numbers. Running the guard against **real audio** showed the
+  shortest genuine sample reading 62.2% against a 50% refusal gate — twelve
+  points from withholding a real transcript, with the bias scaling as the clip
+  gets shorter. Corrected, 82.8%. A ratio whose denominator comes from another
+  subsystem is not tested until both come from that subsystem.
+
+- **Run `mypy --strict` after any contract change, before believing the suite.**
+  `transcribe()` went from `str` to `Transcription` and **337 tests stayed
+  green** while `manu transcribe` was broken — two call sites still called
+  `.strip()` on the result, and the suite mocks past both. mypy names both lines.
+  Verified as a positive control by reintroducing the bug.
+
 - **Adjudicating objections creates new unmapped decisions.** Twelve accepted objections
   amended the PRD heavily in one day; the cartographer's second pass returned 13 stories,
   7 of them mapping choices the amendments had just introduced. Re-run the cartographer
