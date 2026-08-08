@@ -90,6 +90,13 @@ class TrimResult:
     original_seconds: float
     retained_seconds: float
     speech_segments: int
+    #: How much of `retained_seconds` is padding this detector added rather
+    #: than speech it found. `speech_pad_ms` on each side of every segment.
+    #:
+    #: Reported because §5.7 divides by the retained duration and calls it
+    #: speech: without this the padding inflates the denominator, and it does
+    #: so worst on short audio, where 0.8 s is a quarter of the clip.
+    padding_seconds: float
     #: True when no speech was detected and the input was passed through whole.
     #: Distinct from `speech_segments == 0` for a caller that wants to say
     #: "I heard nothing, so I trimmed nothing" rather than guessing.
@@ -162,6 +169,7 @@ class VoiceActivityDetector:
                 original_seconds=0.0,
                 retained_seconds=0.0,
                 speech_segments=0,
+                padding_seconds=0.0,
                 fell_back=True,
             )
 
@@ -174,6 +182,7 @@ class VoiceActivityDetector:
                 original_seconds=original_seconds,
                 retained_seconds=original_seconds,
                 speech_segments=0,
+                padding_seconds=0.0,
                 fell_back=True,
             )
 
@@ -191,6 +200,7 @@ class VoiceActivityDetector:
                 original_seconds=original_seconds,
                 retained_seconds=original_seconds,
                 speech_segments=len(segments),
+                padding_seconds=0.0,
                 fell_back=True,
             )
 
@@ -199,6 +209,14 @@ class VoiceActivityDetector:
             original_seconds=original_seconds,
             retained_seconds=len(trimmed) / sample_rate,
             speech_segments=len(segments),
+            # Two sides per segment. Capped at what was actually retained: on a
+            # segment shorter than its own padding Silero cannot have added the
+            # full amount, and claiming it did would produce a denominator of
+            # nothing.
+            padding_seconds=min(
+                2.0 * len(segments) * self._config.speech_pad_ms / 1000.0,
+                len(trimmed) / sample_rate,
+            ),
             fell_back=False,
         )
 

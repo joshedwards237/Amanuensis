@@ -26,8 +26,88 @@ running" is not something a user can act on.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
-__all__ = ["ClipboardExposure", "InjectionResult", "PermissionStatus"]
+__all__ = [
+    "ClipboardExposure",
+    "GuardOutcome",
+    "GuardVerdict",
+    "InjectionResult",
+    "PermissionStatus",
+    "Transcription",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Transcription:
+    """What one decode produced, and how far through the audio it got.
+
+    `decoded_seconds` is where the decoder stopped, in the timebase of the
+    audio handed in — trimmed audio, so it compares directly against
+    `TrimResult.retained_seconds`. `None` from an engine that cannot say.
+
+    This exists for the same reason `InjectionResult` carries `restore_ms`: a
+    caller needs a quantity only the implementation can compute, and there is
+    no way to get it from outside because the call returns once. The engine was
+    already receiving this information from faster-whisper and throwing it
+    away — segments carry `start`, `end`, `avg_logprob`, `no_speech_prob` and
+    `compression_ratio`, and `_decode` joined the texts and dropped the rest.
+
+    `None` and `0.0` are opposite claims and callers must not conflate them.
+    `None` is "this engine cannot tell you"; `0.0` is "the decoder produced
+    nothing", which is a catastrophe.
+    """
+
+    text: str
+    decoded_seconds: float | None = None
+
+
+class GuardOutcome(StrEnum):
+    """§5.7's verdict on a transcript.
+
+    A `StrEnum` because it is persisted in `history.db` and read back by
+    humans; an integer code would need a lookup table living somewhere else.
+    """
+
+    #: Judged and acceptable.
+    PASSED = "passed"
+    #: Judged, found wanting, and an unbiased re-decode did better.
+    RECOVERED = "recovered"
+    #: Judged, found wanting, and nothing recovered it. Not injected.
+    FAILED = "failed"
+    #: Not judged. The reason is always recorded — see `GuardVerdict.reason`.
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class GuardVerdict:
+    """§5.7's answer about one transcript, and the evidence behind it.
+
+    Every quantity is carried even when the guard did not run. Objection O10's
+    failure is a guard that *silently* never fires — an over-trimming VAD
+    shrinks the denominator and nothing about that is visible from the outcome
+    alone — so the denominator travels with the verdict on every path,
+    including the ones where no judgement was made.
+    """
+
+    outcome: GuardOutcome
+    #: Seconds of speech the VAD retained. Always populated.
+    retained_seconds: float
+    #: Decoded span over retained speech. `None` when the engine could not
+    #: report a span and the fallback floor was used instead.
+    coverage: float | None = None
+    #: The fallback instrument, and only ever that. `None` on the coverage path.
+    words_per_second: float | None = None
+    #: Why the guard skipped, why a retry did not run, or what failed. Prose,
+    #: because its only consumer is a person reading an error.
+    reason: str | None = None
+    #: Was an unbiased second decode actually performed.
+    retried: bool = False
+    #: Should the caller run one. Set on the first judgement, never on a final
+    #: verdict from `resolve`.
+    retry_advised: bool = False
+    #: Did `resolve` pick the retry's transcript over the original.
+    chose_retry: bool = False
 
 
 @dataclass(frozen=True, slots=True)

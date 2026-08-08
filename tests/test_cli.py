@@ -12,6 +12,9 @@ decided by implementation order.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from amanuensis.cli import (
@@ -328,3 +331,87 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
     err = capsys.readouterr().err
     assert "Accessibility" in err
     assert "Input Monitoring" in err
+
+
+# ---------------------------------------------------------------------------
+# §5.7 / objection O2 — `manu history --last`
+# ---------------------------------------------------------------------------
+
+
+def test_history_without_last_still_names_phase_three(capsys: Any) -> None:
+    """Only the one flag is pulled forward. Search, filtering and purge stay
+    where §9 puts them, and the refusal has to keep saying so."""
+    assert main(["history"]) == 1
+
+    assert "Phase 3" in capsys.readouterr().err
+
+
+def test_history_last_prints_the_transcript(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    from datetime import UTC, datetime
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.models.session import DictationSession
+    from amanuensis.storage.history import HistoryStore
+
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(tmp_path))
+    HistoryStore(HistoryConfig(), data_dir=tmp_path).write_pending(
+        DictationSession(
+            id="01J",
+            started_at=datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+            audio=None,
+            sample_rate=16000,
+            raw_transcript="the words the guard would not inject",
+        )
+    )
+
+    assert main(["history", "--last"]) == 0
+
+    assert "the words the guard would not inject" in capsys.readouterr().out
+
+
+def test_history_last_says_when_the_guard_refused(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """Handing back the words without saying why they were withheld leaves the
+    user with no way to act on it."""
+    from datetime import UTC, datetime
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.models.results import GuardOutcome, GuardVerdict
+    from amanuensis.models.session import DictationSession
+    from amanuensis.storage.history import HistoryStore
+
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(tmp_path))
+    HistoryStore(HistoryConfig(), data_dir=tmp_path).write_pending(
+        DictationSession(
+            id="01J",
+            started_at=datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+            audio=None,
+            sample_rate=16000,
+            raw_transcript=" For Tenants.",
+            guard=GuardVerdict(
+                outcome=GuardOutcome.FAILED,
+                retained_seconds=30.5,
+                coverage=0.0656,
+                reason="the decoder covered 7% of 30.5s of speech",
+            ),
+        )
+    )
+
+    assert main(["history", "--last"]) == 0
+
+    out = capsys.readouterr().out
+    assert "not injected" in out
+    assert "For Tenants." in out
+
+
+def test_history_last_says_so_when_there_is_nothing(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(tmp_path))
+
+    assert main(["history", "--last"]) == 0
+
+    assert "no transcripts" in capsys.readouterr().out.lower()

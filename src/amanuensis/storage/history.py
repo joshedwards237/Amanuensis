@@ -72,16 +72,19 @@ import json
 import os
 import sqlite3
 import time
+import wave
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+import numpy as np
+
 from amanuensis.config import HistoryConfig, default_data_dir
 from amanuensis.models.session import DictationSession
 
-__all__ = ["HistoryStore", "SweepResult"]
+__all__ = ["HistoryStore", "StoredTranscript", "SweepResult"]
 
 _SECONDS_PER_DAY: Final = 86400.0
 
@@ -101,6 +104,24 @@ class SweepResult:
     failed: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class StoredTranscript:
+    """One transcript, read back. The smallest thing `manu history --last` needs.
+
+    Deliberately not the whole row. This exists so a user can retrieve words
+    the §5.7 guard refused to inject, and the read surface a Phase 2b follow-up
+    is entitled to open is the one that discharges that — search, filtering and
+    purge remain Phase 3.
+    """
+
+    id: str
+    started_at: str
+    transcript: str
+    injected: bool
+    guard_outcome: str | None = None
+    guard_reason: str | None = None
+
+
 #: Owner-only. The database and the pending files both hold transcripts, which
 #: §7.6 treats as the sensitive artefact and the default umask does not.
 _FILE_MODE: Final = 0o600
@@ -117,9 +138,13 @@ _COLUMNS: Final = (
     "duration_seconds",
     "engine",
     "error",
+    "guard_outcome",
+    "guard_coverage",
+    "guard_retained_seconds",
     "capture_ms",
     "vad_ms",
     "transcribe_ms",
+    "guard_ms",
     "postprocess_ms",
     "persist_ms",
     "inject_ms",
@@ -134,9 +159,13 @@ CREATE TABLE IF NOT EXISTS transcripts (
     duration_seconds REAL    NOT NULL,
     engine           TEXT    NOT NULL DEFAULT '',
     error            TEXT,
+    guard_outcome    TEXT,
+    guard_coverage   REAL,
+    guard_retained_seconds REAL,
     capture_ms       REAL    NOT NULL DEFAULT 0,
     vad_ms           REAL    NOT NULL DEFAULT 0,
     transcribe_ms    REAL    NOT NULL DEFAULT 0,
+    guard_ms         REAL    NOT NULL DEFAULT 0,
     postprocess_ms   REAL    NOT NULL DEFAULT 0,
     persist_ms       REAL    NOT NULL DEFAULT 0,
     inject_ms        REAL    NOT NULL DEFAULT 0,
@@ -156,10 +185,30 @@ CREATE TABLE IF NOT EXISTS transcripts (
 #: added the field as that phase's headline finding and the schema never grew
 #: the column, so `to_history_row()` emitted the value and `_insert` dropped
 #: it. Found by reading a real row at the Phase 2b gate.
+#: The §5.7 columns are nullable with no default, deliberately. A row written
+#: before the guard existed has no verdict, and `NULL` says so; a `0` would
+#: claim the decoder covered none of the audio, which is the catastrophe the
+#: guard exists to report.
 _MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
     (
         "restore_ms",
         "ALTER TABLE transcripts ADD COLUMN restore_ms REAL NOT NULL DEFAULT 0",
+    ),
+    (
+        "guard_ms",
+        "ALTER TABLE transcripts ADD COLUMN guard_ms REAL NOT NULL DEFAULT 0",
+    ),
+    (
+        "guard_outcome",
+        "ALTER TABLE transcripts ADD COLUMN guard_outcome TEXT",
+    ),
+    (
+        "guard_coverage",
+        "ALTER TABLE transcripts ADD COLUMN guard_coverage REAL",
+    ),
+    (
+        "guard_retained_seconds",
+        "ALTER TABLE transcripts ADD COLUMN guard_retained_seconds REAL",
     ),
 )
 
@@ -196,6 +245,11 @@ class HistoryStore:
     def pending_dir(self) -> Path:
         return self._data_dir / "pending"
 
+    @property
+    def audio_dir(self) -> Path:
+        """Where `store_audio` puts WAVs. Empty and absent unless enabled."""
+        return self._data_dir / "audio"
+
     # -- the two operations ------------------------------------------------
 
     def write_pending(self, session: DictationSession) -> bool:
@@ -212,9 +266,81 @@ class HistoryStore:
 
         if self._config.retain:
             self._insert(row)
+            self._write_audio(session)
         else:
             self._write_pending_file(row)
         return True
+
+    def latest(self) -> StoredTranscript | None:
+        """The most recently started transcript, on whichever path is in use.
+
+        Exists because of objection O2. §5.7 refuses to inject a transcript the
+        decoder destroyed, and §8's write makes the words *present* rather than
+        *reachable* — `manu history` is Phase 3, so before this the refused
+        transcript went somewhere no shipped command could show it. A guarantee
+        mechanically preserved and practically unreachable is the failure §5.5
+        already documented once.
+
+        Both paths are searched rather than the configured one, because a user
+        who has just changed `retain` is precisely the user who cannot find
+        their last transcript.
+        """
+        return max(
+            (
+                candidate
+                for candidate in (self._latest_row(), self._latest_pending())
+                if candidate is not None
+            ),
+            key=lambda found: found.started_at,
+            default=None,
+        )
+
+    def _latest_row(self) -> StoredTranscript | None:
+        if not self.db_path.exists():
+            return None
+        with self._transaction() as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT id, started_at, transcript, injected, guard_outcome "
+                "FROM transcripts ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return StoredTranscript(
+            id=row["id"],
+            started_at=row["started_at"],
+            transcript=row["transcript"],
+            injected=bool(row["injected"]),
+            guard_outcome=row["guard_outcome"],
+        )
+
+    def _latest_pending(self) -> StoredTranscript | None:
+        """The newest orphan under `pending/`, which is by definition uninjected.
+
+        A pending file exists only until injection succeeds, so anything found
+        here is a transcript the user did not receive — the case this method
+        exists for.
+        """
+        if not self.pending_dir.exists():
+            return None
+        newest: StoredTranscript | None = None
+        for path in self.pending_dir.glob("*.json"):
+            try:
+                row = json.loads(path.read_text())
+            except (OSError, ValueError):
+                # A half-written or hand-edited file must not stop the user
+                # reading the transcripts that are intact.
+                continue
+            found = StoredTranscript(
+                id=str(row.get("id", path.stem)),
+                started_at=str(row.get("started_at", "")),
+                transcript=str(row.get("transcript", "")),
+                injected=False,
+                guard_outcome=row.get("guard_outcome"),
+            )
+            if newest is None or found.started_at > newest.started_at:
+                newest = found
+        return newest
 
     def mark_injected(self, session: DictationSession) -> None:
         """The user has their words. Complete the row, or erase the file.
@@ -245,11 +371,15 @@ class HistoryStore:
         Errors are counted, not raised. This runs at daemon start, and a file
         another process holds open must not stop the microphone coming up.
         """
-        if not self.pending_dir.exists():
-            return SweepResult(removed=0, remaining=0, failed=0)
-
         cutoff = time.time() - self._config.retain_days * _SECONDS_PER_DAY
-        removed = remaining = failed = 0
+        # Audio seeds the totals so the two artefacts expire on one clock and
+        # are reported as one number. They are swept together because a caller
+        # who has to remember a second sweep will eventually not.
+        removed, remaining, failed = self._sweep_audio(cutoff)
+
+        if not self.pending_dir.exists():
+            return SweepResult(removed=removed, remaining=remaining, failed=failed)
+
         # Globbed by the pattern this module writes, never by directory. A
         # sweep that unlinked everything under `pending/` would delete whatever
         # a user or another tool had put there.
@@ -263,6 +393,28 @@ class HistoryStore:
             except OSError:
                 failed += 1
         return SweepResult(removed=removed, remaining=remaining, failed=failed)
+
+    def _sweep_audio(self, cutoff: float) -> tuple[int, int, int]:
+        """Expire stored audio on the same clock as pending transcripts.
+
+        Audio is the sensitive artefact (§7.6) and `manu history --purge` is
+        Phase 3, so a writer without a reaper would leave a directory that
+        grows without bound and that nothing reaches. `retain_days` is what
+        §5.3 already means by how long things are kept, so it governs here too.
+        """
+        if not self.audio_dir.exists():
+            return 0, 0, 0
+        removed = remaining = failed = 0
+        for path in self.audio_dir.glob("*.wav"):
+            try:
+                if path.stat().st_mtime > cutoff:
+                    remaining += 1
+                    continue
+                path.unlink()
+                removed += 1
+            except OSError:
+                failed += 1
+        return removed, remaining, failed
 
     # -- retain = true -----------------------------------------------------
 
@@ -336,6 +488,43 @@ class HistoryStore:
         connection.execute(_SCHEMA)
         _add_missing_columns(connection)
         return connection
+
+    # -- store_audio -------------------------------------------------------
+
+    def _write_audio(self, session: DictationSession) -> None:
+        """Keep the recording, when `[history] store_audio` says to.
+
+        This key validated and did nothing for three phases — it parsed, it had
+        a rule, `test_config.py` asserted its default, and no code anywhere
+        read it. The cost came due when a live transcript collapse turned out
+        to be unreproducible: the one setting that would have preserved the
+        evidence was the one that did nothing.
+
+        Written under `retain = true` only. The `retain = false` path exists so
+        a transcript survives a crash; audio is not needed for that, and it is
+        the artefact §7.6 cares most about. `0600` for the same reason the
+        database is.
+        """
+        if not self._config.store_audio or session.audio is None:
+            return
+        if len(session.audio) == 0:
+            return
+
+        self.audio_dir.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        path = self.audio_dir / f"{session.id}.wav"
+        # Created before opening, for the same reason the database is: the
+        # umask can only clear bits, and 0600 has none to clear.
+        path.touch(mode=_FILE_MODE)
+        # float32 in [-1, 1] out to 16-bit PCM, which is what `read_wav` in the
+        # test suite and every audio tool expects. Clipped rather than scaled:
+        # a sample above 1.0 is already distorted, and rescaling the whole clip
+        # to accommodate it would quietly change every other sample too.
+        samples = np.clip(session.audio, -1.0, 1.0)
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(session.sample_rate)
+            handle.writeframes((samples * 32767.0).astype("<i2").tobytes())
 
     # -- retain = false ----------------------------------------------------
 

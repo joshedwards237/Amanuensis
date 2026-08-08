@@ -341,3 +341,67 @@ def test_a_sample_rate_other_than_16k_is_rejected_with_both_reasons(
     message = str(exc.value)
     assert "audio.sample_rate" in message
     assert "16000" in message
+
+
+# ---------------------------------------------------------------------------
+# §5.7 — the [guard] block
+# ---------------------------------------------------------------------------
+
+
+def test_guard_defaults() -> None:
+    cfg = AppConfig()
+    assert cfg.guard.min_decoded_coverage == 0.5
+    assert cfg.guard.retry_below_coverage == 0.7
+    assert cfg.guard.retry_max_latency_ms == 2000
+    # The fallback floor, inert under faster-whisper.
+    assert cfg.guard.min_words_per_second == 0.5
+    assert cfg.guard.min_audio_seconds == 5.0
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("min_decoded_coverage", -0.1),
+        ("min_decoded_coverage", 1.5),
+        ("retry_below_coverage", -0.1),
+        ("retry_below_coverage", 1.5),
+        ("min_words_per_second", -1.0),
+        ("min_audio_seconds", -0.5),
+        ("retry_max_latency_ms", -1),
+    ],
+)
+def test_out_of_range_guard_values_are_rejected(
+    tmp_path: Path, key: str, value: float
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(f"[guard]\n{key} = {value}\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(path)
+    assert key in str(caught.value)
+
+
+def test_a_retry_gate_below_the_refusal_gate_is_rejected(tmp_path: Path) -> None:
+    """A retry threshold under the refusal threshold means the guard refuses
+    transcripts it never tried to recover — the one configuration in which the
+    §5.7 flow has no reachable recovery path."""
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nmin_decoded_coverage = 0.6\nretry_below_coverage = 0.3\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(path)
+    assert "retry_below_coverage" in str(caught.value)
+
+
+def test_a_zero_gate_is_accepted_because_it_is_the_off_switch(tmp_path: Path) -> None:
+    """§5.7: the thresholds are provisional and coverage removes the *known*
+    false-positive population without proving there is none. A threshold that
+    can be wrong about a user must be adjustable by that user — which is why
+    §5.3's bounded exception does not withhold this key."""
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nmin_decoded_coverage = 0.0\n")
+    assert load_config(path).guard.min_decoded_coverage == 0.0
+
+
+def test_retry_below_zero_is_accepted_as_never_retry(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[guard]\nretry_below_coverage = 0.0\n")
+    assert load_config(path).guard.retry_below_coverage == 0.0

@@ -341,6 +341,21 @@ cpu_threads = "auto"        # "auto" = performance-core count. NOT the library
 language = "en"
 initial_prompt = ""         # biases vocabulary; see §5.6
 
+[guard]                       # added 2026-08-05, Phase 2b follow-up. See §5.7.
+min_decoded_coverage = 0.5    # refuse below this fraction of retained speech.
+                              # 0 disables the guard entirely.
+retry_below_coverage = 0.7    # re-decode with the bias dropped below this.
+                              # Must be >= min_decoded_coverage. 0 never retries.
+                              # 0.8 left the shortest genuine sample 2.8 points
+                              # of headroom; calibrated against ONE such sample.
+retry_max_latency_ms = 2000   # skip the retry rather than pay it. Predicted
+                              # from §2's model, not measured after the fact.
+
+# The fallback floor, for engines that cannot report a decoded span. Both keys
+# are inert under faster-whisper. See §5.7's blind spot.
+min_words_per_second = 0.5
+min_audio_seconds = 5.0
+
 [postprocess]
 chain = ["rules"]           # ordered: rules | llm
 strip_fillers = false       # "um", "uh" — off by default, it is lossy
@@ -423,6 +438,15 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   transcripts transit the system clipboard (§7.3, objection O12). Same
   reasoning as recording state: a privacy-relevant condition the user cannot
   see is a privacy problem regardless of whether it is ever exercised.
+- **A recovered transcript is signalled distinctly from a clean one** (added
+  2026-08-05, §5.7, objection O3). When the collapse guard's retry succeeds,
+  what reaches the cursor was decoded *without* the vocabulary bias the user
+  configured, and is therefore systematically worse at exactly the proper nouns
+  `initial_prompt` exists for. Folding that into the idle state would leave the
+  user reading substituted text with no signal that anything but the model
+  produced it — which is dictionary objection O5, that a rewriting pass
+  presents as an ASR error and sends the user to the wrong fix. Distinct from
+  `error`, which is what a *refused* transcript raises.
 
 ### 5.5 History
 
@@ -434,6 +458,36 @@ duration, engine, and latency breakdown. Audio is **not** stored unless explicit
 
 Latency breakdown is a product requirement, not a debugging nicety — G1 cannot be defended
 without per-stage timings.
+
+**`store_audio` validated and did nothing for three phases** (found 2026-08-03,
+implemented 2026-08-05). It was a config key with a documented meaning, a
+validation rule, a test asserting its default, and no code that read it. Setting
+it to `true` had no effect of any kind.
+
+That is not a missing feature, it is §5.3's rule broken at the surface the rule
+is about: a key that exists is a promise that the behaviour behind it is
+reachable. The cost came due when the live collapse in §5.7 turned out to be
+unreproducible — the one setting that would have preserved the evidence was the
+one that did nothing, and nobody could have known without reading the source.
+
+Implemented now, minimally and with its own retention:
+
+- Audio is written to `audio/<session-id>.wav` under the data directory, on the
+  same `platformdirs` path as everything else this product writes.
+- **It is swept by `retain_days` at daemon start**, through the existing
+  `sweep_pending` mechanism. Audio is the sensitive artefact (§7.6), and adding
+  a writer without a reaper would create a directory that grows without bound
+  and that no command reaches — `manu history --purge` is Phase 3.
+- `retain = false` writes no audio at all, on either path. The pending-file
+  mechanism above exists to keep a transcript recoverable across a crash; audio
+  is not needed for that and §5.3's privacy default is `store_audio = false`
+  precisely because this is the artefact that matters.
+
+**Third instance of "an amendment must reach the tooling."** The first was
+`bench_engines.py` regenerating a withdrawn WER figure, the second was
+`restore_ms` having no column. A key that parses is not a key that works, and
+nothing in the test suite could tell the difference — `test_config.py` asserted
+the default and passed.
 
 **`retain` controls retention, not the write** (resolved 2026-07-30, objection
 O10; key renamed 2026-07-31, choice-story #10). The pre-injection write in §8 happens
@@ -522,6 +576,187 @@ Users have proper nouns the model will never get right. Two mechanisms:
 
 Both. They fail in different places.
 
+### 5.7 The collapse guard
+
+**Added 2026-08-05, as a Phase 2b follow-up defect fix.** Mechanism 1 above can
+silently destroy a transcript, and it shipped in Phase 1 with nothing watching it.
+
+The failure is not theoretical and it is not the dictionary's. On 2026-08-05 a
+**30.5-second dictation on the operator's machine returned two words** —
+`" For Tenants."` — with `initial_prompt` set, no error raised, the audio buffer
+full, and the text injected at the cursor as though it were what had been said.
+
+| | words per second of retained speech |
+|---|---|
+| Phase 1 corpus, slowest genuine sample | 2.18 |
+| Phase 1 corpus, fastest | 3.33 |
+| Measured collapse, prose prompt on `03-proper-nouns` | 0.20 |
+| **The live failure** | **0.066** |
+
+**The guard measures the decoder, not the speaker.** This is the second design
+and the first one was wrong; the reasoning is worth keeping because the wrong
+version is the intuitive one.
+
+**The denominator is speech, and making that true took a correction.** §5.7
+first divided by `TrimResult.retained_seconds` and called it speech by
+construction. It is not: `[vad] speech_pad_ms` adds 400 ms of deliberate
+non-speech to each side of every retained segment, and the decoder correctly
+emits nothing over it. That under-reports coverage **in proportion to how short
+the clip is** — noise in a 30-second dictation, a quarter of a 3.2-second one.
+Measured: the corpus's shortest genuine sample read **62.2%** against a 50%
+refusal gate before the correction and **82.8%** after. The bias was systematic,
+pointed at refusing genuine transcripts, and concentrated on the input this
+product's first user produces most often. `TrimResult` now reports
+`padding_seconds` and the guard subtracts it.
+
+The obvious instrument is words per second — the transcript is too short for the
+speech, so divide one by the other. It was drafted that way, and objection O1
+killed it. Words per second is a property of *how the user talks* divided by
+*how long they talked*. The failure is a property of *where the decoder
+stopped*. The proxy carries a confound the product has no evidence about, and
+a direct measurement was available the whole time.
+
+`faster_whisper` returns segments carrying `start` and `end`; `_decode` was
+discarding them. **Decoded coverage** is the last segment's `end` over retained
+seconds — did the decoder traverse the audio it was given.
+
+**Measured on the Phase 1 corpus, 2026-08-07** (`scripts/verify_guard.py`),
+not estimated:
+
+| | coverage |
+|---|---|
+| Reproduced collapse — `03-proper-nouns` under a prompt the decoder echoes | **8.3%** |
+| Genuine speech, lowest of six samples (`06-short`, 3.2 s) | **82.8%** |
+| Genuine speech, highest | 100.0% |
+
+The collapse and the genuine floor differ by a factor of ten, and the 50%
+refusal gate sits between them with 33 points of margin below and 42 above.
+
+Three properties follow, and each one is a defect in the rate floor:
+
+1. **Coverage is duration-independent.** It reads the same at two seconds and at
+   sixty. The rate floor could not: word count is an integer, so at two seconds
+   the rate is quantised to 0.5 w/s *per word* — a genuine one-word "Yes." and a
+   transcript collapsed to one word are **the same measurement**. `min_audio_seconds`
+   was never a policy choice; it was the floor conceding it cannot work on short
+   audio. And short utterances are the ordinary case for this product's first
+   user, so the exemption was a blind spot over the most common input.
+2. **Coverage has no false-positive population.** A slow or quiet speaker still
+   produces segments spanning their audio. The rate floor's worst outcome —
+   refusing a *genuine* transcript from someone who talks slowly — was a hazard
+   this project had no evidence about, aimed squarely at §4's secondary user.
+3. **Coverage explains rather than detects.** Dictionary objection O3 asked
+   whether the collapse is early termination or domain drift, and said a floor
+   answers only the first. Coverage distinguishes them on every firing.
+
+**The threshold does two jobs and therefore is two numbers.** Spending a decode
+and withholding the user's words have costs that differ by orders of magnitude,
+and one number tuned for the second is blind to everything short of total
+collapse (objection O4).
+
+| coverage | what happens |
+|---|---|
+| ≥ `retry_below_coverage` (0.7) | nothing; the transcript is used |
+| between the two | decoded again with the bias dropped, then re-judged |
+| < `min_decoded_coverage` (0.5) after recovery | **not injected**; the error state reports it |
+
+The middle band is also where the evidence comes from. A retry produces biased
+and unbiased output over the same audio, both recorded, which is the comparison
+§5.7 otherwise has no way to generate.
+
+**On a fired verdict the transcript is retried, not discarded** (choice-story
+C4). Two consequences are recorded here rather than discovered later:
+
+1. **The retry must drop `initial_prompt` or it is worthless.** §7.2 fixes
+   `beam_size = 1`; greedy decoding of the same audio with the same prompt
+   returns the same words. The prompt is the only lever available, which makes
+   the retry a test of the hypothesis as well as a recovery.
+2. **Where no `initial_prompt` is configured there is nothing to retry**, and
+   the guard goes straight to the loud failure. Reporting a recovery attempt
+   that was mechanically identical to the first would be an instrument
+   describing work it did not do.
+
+3. **The retry itself has a ceiling**, and skipping it is a recorded outcome
+   rather than a silent one. §2's model gives `transcribe_ms ≈ 48.8 + 13.69 ×
+   seconds`, so a retry is *predicted* before it is attempted and skipped when
+   the prediction exceeds `retry_max_latency_ms`. §6.3's standing rule is that a
+   stage inside G1's window needs a field; this one has `guard_ms`. The default
+   of 2000 ms allows a retry on anything up to about 140 seconds of speech and
+   declines on a five-minute dictation, where doubling the decode helps nobody.
+
+**When the retry also fails, the text is not injected**, and the words are
+reachable. §8's write is unconditional and precedes this decision, but *written*
+is not *recoverable*: `manu history` refuses and names Phase 3, so before this
+change a refused transcript went somewhere no shipped command could show it
+(objection O2). **`manu history --last` ships with the refusal**, for that
+reason and no other. A guarantee that is mechanically preserved and practically
+unreachable is the failure §5.5 already documented once.
+
+**This overrides choice-story C4, which specified failing open.** C4 is titled
+*"The guard fails open"* and slice V1 says the same. Recorded as an override
+rather than cited as support: human decision, 2026-08-04, reaffirmed 2026-08-05.
+The argument is that a destroyed transcript at the cursor costs the user a
+noticing and an undo, and the refusal is only defensible because the words are
+retrievable — which is why the retrieval verb is in scope and not deferred.
+
+**Three cases where the guard does not run**, each recorded on the session
+rather than inferred from a missing value:
+
+| | why |
+|---|---|
+| `min_decoded_coverage = 0` | Explicitly disabled |
+| `TrimResult.fell_back` | No speech was detected, so the denominator is the whole clip rather than speech |
+| The engine reports no decoded span | The fallback floor applies instead — see below |
+
+**The fallback floor, and its blind spot.** An engine that cannot report where
+decoding stopped falls back to words per second of retained speech, with
+`min_audio_seconds` exempting audio too short for the quantisation to mean
+anything. Both keys are inert under faster-whisper. **Stated as a blind spot
+rather than a setting:** under the fallback, short dictation is unguarded, and
+that is a limitation of the fallback, not a decision about short dictation.
+
+**Why an off switch is permitted here and was refused for `[vad] enabled`.**
+§5.3's bounded exception withholds a key when a stated guarantee depends on the
+behaviour. No guarantee depends on this one yet, the thresholds are provisional,
+and a threshold that can be wrong about a user must be adjustable by that user.
+Coverage removes the *known* false-positive population; it does not prove there
+is none. If it holds across the Phase 3 dictation set, this reasoning is what
+has to be revisited to remove the switch.
+
+**What the guard cannot see.** Coverage catches a decoder that stopped early.
+The opposite failure — a hallucinated *expansion*, plausible and wrong — passes
+it untouched, as does a decode that traverses the audio and gets the words
+wrong. §7.5 carries a no-invent check for the first and it is a Phase 5
+concern; recording the gap is the honest alternative to implying the guard
+covers more than one failure.
+
+**A recovered transcript is not silently substituted.** When the retry succeeds,
+what reaches the cursor was decoded *without* the vocabulary bias the user
+configured, and is therefore systematically worse at the proper nouns
+`initial_prompt` exists for. §5.4's indicator distinguishes recovery from
+success, because a transcript the product quietly swapped is dictionary
+objection O5 re-committed: the user sees different text and has no signal that
+anything but the model produced it.
+
+**The mechanism, which was unexplained until the guard was built.** Dictionary
+objection O3 posed it as a fork: *"if the cause is early-termination, a floor is
+right; if it is domain drift, a floor is half a guard."* Reproduced 2026-08-07,
+it is neither of the things the record guessed. **The decoder echoes the prompt
+and terminates.** `initial_prompt = "And how much is this?"` produces exactly
+that string as the transcript of a 25-second clip, deterministically.
+
+That retires the "prose prompt" description in the 2026-08-03 record, which
+described the *output* and attributed it to the prompt's register. The register
+is not the variable — five other prompts of comparable shape, including a
+600-character one, collapsed nothing. What the collapsing prompt has is the form
+of a complete short utterance the model can plausibly emit as a whole
+transcript.
+
+Coverage measures early termination directly, so the instrument and the failure
+now match rather than the instrument being aimed at a symptom. **Not answered:**
+why this clip and not the other five. The guard does not need that answer, which
+is the point of building it against the failure rather than against the cause.
+
 ---
 
 ## 6. Architecture
@@ -577,6 +812,9 @@ class DictationSession:
     raw_transcript: str | None = None
     final_text: str | None = None
     timings: LatencyBreakdown = field(default_factory=LatencyBreakdown)
+    #: §5.7. Always set once the worker reaches the check, including when the
+    #: check does not run — `None` here means the worker never got that far.
+    guard: GuardVerdict | None = None
     error: str | None = None
     #: Set by the worker, last, after every field above is written. See the
     #: concurrency model below — this is the only synchronisation point.
@@ -601,6 +839,7 @@ class LatencyBreakdown:
     vad_ms: float = 0.0            # inside G1 — trimming happens after release
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
+    guard_ms: float = 0.0          # inside G1 — §5.7's check and any retry
     persist_ms: float = 0.0        # inside G1 — §8's write precedes injection
     inject_ms: float = 0.0
     restore_ms: float = 0.0        # OUTSIDE G1 — runs after the text is present
@@ -617,6 +856,68 @@ class LatencyBreakdown:
     def total_ms(self) -> float:
         """Every stage including capture. Diagnostics only — never assert G1 on this."""
 ```
+
+```python
+@dataclass(frozen=True, slots=True)
+class Transcription:
+    """What one decode produced, and how much of the audio it got through.
+
+    `decoded_seconds` is where the decoder stopped, in the timebase of the
+    audio handed in — which is trimmed audio, so it is directly comparable to
+    `TrimResult.retained_seconds`. `None` from an engine that cannot report it.
+
+    This follows the `InjectionResult.restore_ms` precedent exactly: a caller
+    needs a quantity only the implementation can compute, and timing it from
+    outside is impossible because the call returns once. Phase 2a made that
+    argument for the injector; §5.7 is the same argument at the engine.
+    """
+    text: str
+    decoded_seconds: float | None
+```
+
+```python
+@dataclass(frozen=True, slots=True)
+class GuardVerdict:
+    """§5.7's answer about one transcript, and the evidence behind it.
+
+    Every quantity is carried even when the guard did not run, because
+    objection O10's failure is a guard that *silently* never fires: an
+    over-trimming VAD shrinks the denominator and nothing about that is
+    visible from the verdict alone.
+    """
+    outcome: GuardOutcome            # passed | recovered | failed | skipped
+    retained_seconds: float
+    coverage: float | None           # decoded / retained; None on the fallback
+    words_per_second: float | None   # the fallback instrument only
+    reason: str | None               # why it was skipped, or what failed
+    retried: bool                    # was an unbiased second decode attempted
+```
+
+**`transcribe` returns `Transcription` and gains a `biased` keyword**
+(2026-08-05, §5.7). Two changes for two reasons.
+
+`biased=False` asks for a decode with vocabulary bias suppressed, which the
+retry needs and the contract could not express. An alternative was weighed and
+rejected: passing `initial_prompt=""` through as a parameter. That makes the
+*caller* responsible for knowing what biasing means on a given backend, which is
+the knowledge `TranscriptionEngine` exists to hold — Moonshine and Parakeet
+(§7.2) do not necessarily have the same mechanism, and a caller passing an empty
+prompt string to an engine with no prompt concept is asking a question that does
+not parse. The flag asks for the *behaviour*.
+
+The return type changed because `str` could not carry `decoded_seconds`, and
+**the information was already crossing the boundary and being discarded** —
+`_decode` joined the segment texts and dropped `start`, `end`, `avg_logprob`,
+`no_speech_prob` and `compression_ratio` on the floor. Four production call
+sites, all of which want `.text`.
+
+**`guard_ms` joins `LatencyBreakdown`, inside `g1_ms`.** §5.7's retry is a
+second decode on the path between hotkey release and text at the cursor, so it
+is inside the window by the rule stated above — which this revision broke in the
+same document that restates it, making four phases in a row. The field covers
+the check and any retry it triggers; a passed guard costs microseconds and a
+recovered one costs a full decode, and one figure that mixed them would hide the
+only case worth looking at.
 
 **`vad_ms` and `asr_ms` added 2026-08-01** (Phase 1 finding 1). §7.4 calls
 trimming "the dominant latency lever, not a free bonus" and moves it into
@@ -701,7 +1002,18 @@ class TranscriptionEngine(ABC):
         """Called once at daemon start. Blocking. Must be idempotent."""
 
     @abstractmethod
-    def transcribe(self, audio: np.ndarray, sample_rate: int) -> str: ...
+    def transcribe(
+        self, audio: np.ndarray, sample_rate: int, *, biased: bool = True
+    ) -> Transcription:
+        """`biased=False` suppresses every vocabulary bias this engine applies.
+
+        For faster-whisper that is `initial_prompt`. An engine with no biasing
+        mechanism ignores the flag — it is already unbiased.
+
+        `Transcription.decoded_seconds` is `None` from an engine that cannot
+        say where decoding stopped; §5.7 falls back to a rate floor there
+        rather than treating silence as a pass. See §5.7.
+        """
 
     @abstractmethod
     def warm_up(self) -> None:
@@ -2021,8 +2333,75 @@ VAD" landed in Phase 1 when §7.4 moved it. Phase 3's remaining scope is
 `retain_days`, purge, `manu history`, and surfacing the `pending/` orphans §5.5 gap 3
 describes.
 
+#### Phase 2b follow-up — the collapse guard (2026-08-05)
+
+**Not a reopening of the gate, and not the start of Phase 3.** Phase 2b closed
+PASS on 2026-08-03 and stays closed. This is defect work against what that phase
+shipped, taken before Phase 3 begins because the defect is live.
+
+**Why it is Phase 2b's and not Phase 3's.** The dictionary's slicing record put
+the guard first among its slices and said so in terms that turned out to decide
+the question: *"first, and not because of the dictionary — `initial_prompt` is a
+config key any user can set, is wired today, and is set on the operator's machine
+now."* A slice that is not about the feature is not a slice of the feature. It
+was scheduled inside a Phase 3 feature only because that is where it was noticed.
+
+**What settled it was evidence, not the argument.** On 2026-08-05 a 30.5-second
+dictation returned two words at 0.066 w/s — see §5.7. The record predicted the
+hazard was already in production; it was, and it had been for two phases.
+
+**Scope:** §5.7's guard, the `[guard]` config block, `GuardVerdict` and
+`Transcription` in §6.3, `guard_ms` in `LatencyBreakdown`, the verdict in
+`history.db`, `store_audio` implemented (§5.5), and **`manu history --last`**,
+which is Phase 3 surface pulled forward because §5.7's refusal is only
+defensible if the refused words are reachable.
+
+**Not in scope:** the dictionary itself. `[replace]`, `[boost]`, `vocabulary.toml`
+and `manu vocab check` remain Phase 3, unstarted and ungated. `manu history`
+without `--last` — search, purge, retention against `history.db` — stays there
+too.
+
+**How it is verified, and what the verification cannot do.**
+`scripts/verify_guard.py` runs both directions over the corpus: the guard fires
+on a reproduced collapse (8.3% coverage) and on none of the six genuine samples
+(floor 82.8%).
+
+**The first run of that verification was worthless and reported a pass.** Its
+positive control used a prompt reconstructed from the 2026-08-03 record's
+description rather than the prompt itself, which was never written down. It
+collapsed nothing, so the script measured the negative control twice and called
+it a verification. The real prompt was found by sweeping nine candidates. The
+script now exits non-zero when the positive control catches nothing, because a
+control that cannot fail is not a control — the fourth instance of that failure
+in this repository.
+
+That is not sufficient and the record says so rather than implying otherwise
+(objection O8). Two named limits:
+
+1. **The negative control is one speaker.** Six samples from one voice cannot
+   produce a speaker the guard is wrong about, so it passes by construction.
+   Coverage is duration- and rate-independent by design, which is the argument
+   that it *should* generalise — an argument, not a measurement.
+2. **The positive control is not the failure that motivated the fix.** §5.5
+   records the live 30.5-second collapse as unreproducible, because
+   `store_audio` did nothing. The guard is validated against the corpus
+   collapse, which is n=1 of six with no explanation of why that sample.
+
+The Phase 3 gate records `coverage` and `retained_seconds` for **every**
+dictation, fired or not, so the live distribution can be compared against the
+six samples these thresholds came from. Until then the false-positive direction
+is **untested**, which is different from tested and clean.
+
 ### Phase 3 — Post-processing and history
 `RuleBasedPostProcessor`, `VocabularyPostProcessor`, `HistoryStore`, silence trimming via VAD.
+
+> **This deliverable list is stale and the Phase 2b gate said so** (see above).
+> `HistoryStore` landed in Phase 2a and VAD trimming landed in Phase 1. The real
+> remaining scope is `RuleBasedPostProcessor`, `VocabularyPostProcessor`, and
+> history's *retention* half — `retain_days` against `history.db`, purge,
+> `manu history`, and surfacing the `pending/` orphans of §5.5 gap 3. Left in
+> place above rather than rewritten, because the phase has not been opened and
+> its scope is the operator's to approve, not this document's to quietly revise.
 
 **Gate:** Ten real dictations of ≥ 60 seconds. Report edit rate — what fraction of output
 needed manual correction, and what kind.
@@ -2301,6 +2680,7 @@ same day.
 | Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 1 merged, 4 pending |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
+| Objections — `collapse-guard` | `docs/superpowers/objections/collapse-guard.md` | 8 objections — 7 accepted, 1 deferred |
 | Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — 2 accepted, 9 pending |
 | Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — 3 accepted, 5 pending |
@@ -2342,6 +2722,15 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-05 | **`initial_prompt` can silently destroy a transcript, and it shipped in Phase 1 with nothing watching it. New §5.7, the collapse guard**, plus a `[guard]` block in §5.3 and `GuardVerdict` in §6.3. A 30.5-second dictation on the operator's machine returned two words — `" For Tenants."` — with no error raised and the text injected as though it were what was said. On a fired verdict the audio is decoded once more with the bias dropped; **the retry must be unbiased or it is worthless**, because `beam_size = 1` is greedy and re-running identical inputs returns identical words — and where no `initial_prompt` is configured there is nothing to retry, so the guard reports the loud failure rather than a recovery attempt it never made. When recovery also fails the text is **not injected**, which overrides choice-story C4's fail-open decision and is recorded as an override rather than cited as support. Built as a **Phase 2b follow-up defect fix**, not as dictionary slice V1: the slicing record's own case for it — *"first, and not because of the dictionary"* — is a case for it not being part of the dictionary at all. |
+| 2026-08-05 | **The guard measures the decoder, not the speaker — the first design was wrong and the wrong one is the intuitive one** (§5.7, objection O1). Words per second divides *how the user talks* by *how long they talked*; the failure is *where the decoder stopped*. `faster_whisper` returns segments carrying `start`, `end`, `avg_logprob`, `no_speech_prob` and `compression_ratio`, and `_decode` was discarding every one of them — the signal was already crossing the boundary. **Decoded coverage** — last segment `end` over retained seconds — reads 6.5% on the live failure and ~95% on a genuine two-second utterance. It is duration-independent, which the rate floor could not be: word count is an integer, so at two seconds the rate quantises to 0.5 w/s *per word* and a genuine one-word "Yes." is **the same measurement** as a transcript collapsed to one word. `min_audio_seconds` was therefore never a policy choice — it was the floor conceding it cannot work on short audio, over the input the product's first user produces most often. Coverage also has **no false-positive population**: a slow or quiet speaker still produces segments spanning their audio, which retires the hazard aimed at §4's secondary user rather than mitigating it with a config key. The rate floor survives as a fallback for engines that cannot report a span, with its blind spot labelled. |
+| 2026-08-05 | **One threshold was doing two jobs with costs differing by orders of magnitude** (§5.7, objection O4). Spending a decode and withholding the user's words are split: `retry_below_coverage = 0.8` triggers an unbiased re-decode, `min_decoded_coverage = 0.5` gates the refusal. The middle band is where the evidence comes from — biased and unbiased output over the same audio, both recorded, which the guard otherwise had no way to generate. **`manu history --last` ships with the refusal** (objection O2), pulled forward from Phase 3: §8's write is unconditional, but *written* is not *recoverable*, and before this a refused transcript went somewhere no shipped command could show it. The refusal is defensible only because the words are reachable. |
+| 2026-08-05 | **`guard_ms` joins `LatencyBreakdown`** (§6.3, objection O5). §5.7's retry is a second full decode inside G1's window, and the standing rule — *a stage inside G1's window with no field is a stage that cannot be defended when G1 is missed* — was broken **in the same revision that restates it**. Four phases in a row now. The retry is also bounded: §2's `transcribe_ms ≈ 48.8 + 13.69 × seconds` predicts its cost before it is attempted, and `retry_max_latency_ms` skips it rather than paying it, with the skip recorded on the verdict. |
+| 2026-08-07 | **The guard verified on real audio, and three things it found.** `scripts/verify_guard.py`, both directions over the Phase 1 corpus: fires on a reproduced collapse at **8.3%** coverage, silent on all six genuine samples, floor **82.8%**. (1) **The first verification was worthless and reported a pass** — its positive control used a prompt reconstructed from the 2026-08-03 record's *description*, since the prompt itself was never written down. It collapsed nothing, so the script measured the negative control twice. The real one was found by sweeping nine candidates; the script now exits non-zero when the positive control catches nothing. Fourth instance of a check that could not fail. (2) **The denominator was not speech.** `[vad] speech_pad_ms` adds 400 ms of deliberate non-speech per side, and the decoder emits nothing over it — which under-reports coverage in proportion to how *short* the clip is. The shortest genuine sample read 62.2% against a 50% refusal gate; corrected, 82.8%. Systematic, pointed at refusing genuine transcripts, worst on this product's most common input. `TrimResult` now reports `padding_seconds`. (3) **`retry_below_coverage` lowered 0.8 → 0.7**, because 82.8% left 2.8 points of headroom and short dictation would have paid a second decode routinely. Calibrated against one short sample, which is thinner than the number deserves. |
+| 2026-08-07 | **The collapse mechanism is prompt echo, and dictionary objection O3's fork was a false one.** O3 asked whether the cause is early termination or domain drift, and said a floor answers only the first. It is early termination: `initial_prompt = "And how much is this?"` makes the decoder emit exactly that string as the transcript of a 25-second clip, deterministically. This retires the 2026-08-03 record's "prose prompt" description, which named the *output* and attributed the failure to the prompt's register — the register is not the variable, since five other prompts of comparable shape including a 600-character one collapsed nothing. What the collapsing prompt has is the form of a complete short utterance the model can plausibly emit as a whole transcript. Coverage measures early termination directly, so instrument and failure now match. Still unanswered: why this clip and not the other five — which the guard does not need, because it is built against the failure rather than the cause. |
+| 2026-08-05 | **§9's verification for this fix could not fail, and now says so** (objection O8). The negative control is six samples from one speaker, which cannot produce a speaker the guard is wrong about; the positive control is the corpus collapse rather than the live failure, because §5.5's `store_audio` did nothing and that audio is gone. Both limits are named in §9, the false-positive direction is labelled **untested**, and the Phase 3 gate is required to record `coverage` and `retained_seconds` for every dictation so the live distribution can be compared against the six samples the thresholds came from. Also: this is the **first sentinel record in this repository a sentinel actually produced** (`docs/superpowers/objections/collapse-guard.md`, eight objections, one critical) — dispatched without `name:`, per the cause found on 2026-08-04. Two of its claims were checked against the source before being acted on; one held and one did not. |
+| 2026-08-05 | **`store_audio` validated and did nothing for three phases** (§5.5). A documented key with a validation rule and a test asserting its default, and no code anywhere that read it. The cost came due when the collapse above turned out to be unreproducible: the one setting that would have preserved the evidence was the one that did nothing. Implemented with its own retention — audio is swept by `retain_days` at daemon start through the existing `sweep_pending` mechanism, because adding a writer for the sensitive artefact (§7.6) without a reaper would create a directory that grows without bound and that no command reaches until Phase 3 ships `--purge`. **Third instance of "an amendment must reach the tooling"**, after `bench_engines.py` and `restore_ms`, and the first where the test suite passed *because* it only checked that the key parsed. |
+| 2026-08-05 | **§6.3's `TranscriptionEngine.transcribe` gains `biased: bool = True`.** §5.7's retry needs a decode with vocabulary bias suppressed and the contract had no way to ask for one. Rejected alternative: passing `initial_prompt=""` through as a parameter, which makes the caller responsible for knowing what biasing means on a backend it is not supposed to know about — §7.2's Moonshine and Parakeet do not necessarily share the mechanism, and an empty prompt string is a question that does not parse for an engine with no prompt concept. The flag asks for the behaviour; each engine says locally what it means. Default preserves every existing call site. |
 | 2026-08-03 | **Phase 2b closed — PASS. First end-to-end G1 measurement as §2 defines it: p50 223.0 ms / p95 270.0 ms** against 400 / 800 (`docs/gates/phase-2b.md`). Ten real dictations in the 7–16 s band, read from the daemon's own `history.db` rows rather than a harness, because `LatencyBreakdown` already persists. Passes on all fourteen too, at p50 215.3 / p95 795.0 — by 5 ms, and that margin is the utterance-length finding below. **The p95 at n=14 is the maximum observation, not an estimate of a 95th percentile.** Still a floor: `postprocess_ms` is the one unfilled stage. |
 | 2026-08-03 | **G1's gated figure is the best case of a linear relationship** (§2). Measured across 0.7–43.4 s of speech: `transcribe_ms ≈ 48.8 + 13.69 × seconds`. At 10 s that is `g1 ≈ 225 ms`; at 60 s it is **≈ 909 ms, over G1's 800 ms p95**. §2 already bound G1 at 10 s and that stands — what was missing is the consequence, which is that a user dictating a paragraph is the ordinary case and G1 says nothing about what they wait. **This lands on Phase 3 immediately:** its gate is ten dictations of ≥ 60 s, exactly where the model predicts 909 ms, and without this note the result reads as a regression caused by post-processing rather than by utterance length. |
 | 2026-08-03 | **§5.4 gains a recording affordance beyond the menu-bar glyph; Phase 4 builds it.** The minimum indicator meets §5.4's letter — confirmed against a running daemon, the glyph fills on press and empties on release — and its first user said a glyph is not enough to be confident the microphone is live. Recorded because of where it came from: every other requirement here was written before anything existed, and this one came from someone using the product and finding the specified behaviour insufficient. Also noted: macOS's own microphone indicator meets §5.4 independently and cannot be suppressed by this process, which makes the richer affordance a *confidence* requirement rather than a correctness one. |

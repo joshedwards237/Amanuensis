@@ -39,6 +39,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from amanuensis.models.results import GuardVerdict
+
 __all__ = ["DictationSession", "LatencyBreakdown"]
 
 
@@ -65,6 +67,11 @@ class LatencyBreakdown:
     #: have different remedies — a slow write is a storage problem, a slow
     #: injection is a target-application problem, and a combined figure would
     #: send a reader to the wrong one.
+    #: §5.7's check and any retry it triggered. Inside `g1_ms` — the retry is
+    #: a second decode on the path between hotkey release and text at the
+    #: cursor. Added 2026-08-05, the fourth phase running in which a stage
+    #: inside G1's window had nowhere to be recorded.
+    guard_ms: float = 0.0
     persist_ms: float = 0.0
     inject_ms: float = 0.0
     #: Putting the user's clipboard back after a paste (§7.3). Recorded, and
@@ -97,7 +104,13 @@ class LatencyBreakdown:
         recorded tier would make the tier mean something other than what it
         was measured to mean.
         """
-        return self.asr_ms + self.postprocess_ms + self.persist_ms + self.inject_ms
+        return (
+            self.asr_ms
+            + self.guard_ms
+            + self.postprocess_ms
+            + self.persist_ms
+            + self.inject_ms
+        )
 
     @property
     def total_ms(self) -> float:
@@ -127,6 +140,10 @@ class DictationSession:
     #: revisitable if G1 headroom becomes binding.
     engine: str = ""
     timings: LatencyBreakdown = field(default_factory=LatencyBreakdown)
+    #: §5.7's verdict. `None` means the worker never reached the check — which
+    #: is different from the check declining to judge, and that difference is
+    #: why `GuardOutcome.SKIPPED` exists rather than being spelled `None`.
+    guard: GuardVerdict | None = None
     error: str | None = None
     #: Set by the worker, *last*, after every field above is written. A thread
     #: that sees this set is guaranteed a fully populated session; that ordering
@@ -174,5 +191,14 @@ class DictationSession:
             "duration_seconds": self.duration_seconds(),
             "engine": self.engine,
             "error": self.error,
+            # Flattened rather than nested because the row is a SQL row. Only
+            # the three quantities §5.7's gate has to report are stored: the
+            # outcome, the coverage that produced it, and the denominator that
+            # makes a *non*-firing guard diagnosable (objection O10).
+            "guard_outcome": str(self.guard.outcome) if self.guard else None,
+            "guard_coverage": self.guard.coverage if self.guard else None,
+            "guard_retained_seconds": (
+                self.guard.retained_seconds if self.guard else None
+            ),
             **asdict(self.timings),
         }

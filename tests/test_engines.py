@@ -44,8 +44,14 @@ from conftest import requires_corpus
 
 
 class _FakeSegment:
-    def __init__(self, text: str) -> None:
+    #: Where the fake decoder claims to have stopped. Named so §5.7's test can
+    #: assert against it without restating the number.
+    END = 0.9
+
+    def __init__(self, text: str, start: float = 0.0, end: float | None = None) -> None:
         self.text = text
+        self.start = start
+        self.end = _FakeSegment.END if end is None else end
 
 
 class _FakeWhisperModel:
@@ -59,14 +65,21 @@ class _FakeWhisperModel:
         self.transcribe_calls: list[dict[str, Any]] = []
         _FakeWhisperModel.instances.append(self)
 
+    #: Overridable per test, so the empty-decode case does not need its own fake.
+    segments: ClassVar[list[_FakeSegment] | None] = None
+
     def transcribe(self, audio: object, **kwargs: Any) -> tuple[object, object]:
         self.transcribe_calls.append(kwargs)
-        return iter([_FakeSegment(" hello world")]), object()
+        produced = _FakeWhisperModel.segments
+        if produced is None:
+            produced = [_FakeSegment(" hello world")]
+        return iter(produced), object()
 
 
 @pytest.fixture
 def fake_whisper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> type:
     _FakeWhisperModel.instances = []
+    _FakeWhisperModel.segments = None
     monkeypatch.setattr(
         "amanuensis.engines.faster_whisper._whisper_model_class",
         lambda: _FakeWhisperModel,
@@ -302,7 +315,7 @@ def test_a_real_utterance_comes_back_as_text(
     engine.load()
     engine.warm_up()
 
-    text = engine.transcribe(audio, rate)
+    text = engine.transcribe(audio, rate).text
 
     assert text.strip()
     # A loose overlap check, deliberately. WER belongs to the benchmark and
@@ -332,3 +345,73 @@ def test_warm_up_on_the_real_model_does_not_hang_on_silence() -> None:
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
     assert elapsed_ms < 3_000.0, f"warm-up took {elapsed_ms:.0f} ms"
+
+
+# --------------------------------------------------------------------------
+# §5.7 — an unbiased decode, and where the decoder stopped
+# --------------------------------------------------------------------------
+
+
+def test_the_configured_prompt_reaches_the_decoder_by_default(
+    fake_whisper: type,
+) -> None:
+    engine = _engine(initial_prompt="spreadsheets, XLSX, Airtable")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+
+    call = _FakeWhisperModel.instances[0].transcribe_calls[0]
+    assert call["initial_prompt"] == "spreadsheets, XLSX, Airtable"
+
+
+def test_an_unbiased_decode_suppresses_the_prompt(fake_whisper: type) -> None:
+    """§5.7's retry. `beam_size = 1` is greedy, so a retry that left the prompt
+    in place would return the same words and recover nothing."""
+    engine = _engine(initial_prompt="spreadsheets, XLSX, Airtable")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000, biased=False)
+
+    call = _FakeWhisperModel.instances[0].transcribe_calls[0]
+    assert call["initial_prompt"] is None
+
+
+def test_an_unbiased_decode_changes_nothing_else(fake_whisper: type) -> None:
+    """Only the bias is dropped. A retry that also changed beam size or the
+    VAD flag would be measuring a different pipeline than the one that failed."""
+    engine = _engine(initial_prompt="anything", language="en")
+    engine.load()
+
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+    engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000, biased=False)
+
+    biased, unbiased = _FakeWhisperModel.instances[0].transcribe_calls
+    assert {k: v for k, v in biased.items() if k != "initial_prompt"} == {
+        k: v for k, v in unbiased.items() if k != "initial_prompt"
+    }
+
+
+def test_the_decoded_span_is_reported(fake_whisper: type) -> None:
+    """§5.7's primary instrument. The segments were already crossing this
+    boundary and being discarded — `_decode` joined the texts and dropped
+    `start`, `end`, `avg_logprob`, `no_speech_prob` and `compression_ratio`."""
+    engine = _engine()
+    engine.load()
+
+    result = engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+
+    assert result.text == " hello world"
+    assert result.decoded_seconds == pytest.approx(_FakeSegment.END)
+
+
+def test_a_decode_with_no_segments_reports_a_zero_span(fake_whisper: type) -> None:
+    """Zero, not `None`. `None` means the engine cannot say; zero means it said
+    the decoder produced nothing — and §5.7 treats those oppositely."""
+    engine = _engine()
+    engine.load()
+    _FakeWhisperModel.segments = []
+
+    result = engine.transcribe(np.zeros(16_000, dtype=np.float32), 16_000)
+
+    assert result.text == ""
+    assert result.decoded_seconds == 0.0

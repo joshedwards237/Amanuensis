@@ -30,7 +30,7 @@ import pytest
 
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
-from amanuensis.ui.indicator import RecordingIndicator
+from amanuensis.ui.indicator import _TOOLTIPS, GLYPHS, RecordingIndicator
 
 
 class _FakeButton:
@@ -321,3 +321,25 @@ def test_run_installs_a_timer_so_python_can_run(appkit: _FakeAppKit) -> None:
     assert appkit.timers, "run() must yield to the interpreter or Ctrl-C is dead"
     assert appkit.timers[-1]["repeats"] is True
     assert appkit.timers[-1]["interval"] <= 0.5
+
+
+def test_every_state_has_a_glyph_and_a_tooltip() -> None:
+    """Asserted over the enum rather than by naming the states.
+
+    A fifth state arrived in the §5.7 fix — `RECOVERED` — and a hand-maintained
+    table would have rendered it as whatever `.get` returned. This is the same
+    failure shape as `restore_ms` having no column: an amendment that did not
+    reach the thing that displays it.
+    """
+    for state in DictationState:
+        assert state in GLYPHS, f"{state} has no glyph"
+        assert state in _TOOLTIPS, f"{state} has no tooltip"
+
+
+def test_recovery_is_not_shown_as_success() -> None:
+    """§5.4: what reached the cursor was decoded without the vocabulary bias
+    the user configured, so it is systematically worse at the proper nouns
+    `initial_prompt` exists for. Folding that into idle would leave them
+    reading substituted text with no signal."""
+    assert GLYPHS[DictationState.RECOVERED] != GLYPHS[DictationState.IDLE]
+    assert GLYPHS[DictationState.RECOVERED] != GLYPHS[DictationState.ERROR]

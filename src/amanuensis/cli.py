@@ -109,7 +109,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("toggle", help="start or stop dictation in a running daemon")
     subparsers.add_parser("status", help="report daemon, model, and permission state")
-    subparsers.add_parser("history", help="list or purge stored transcripts")
+    history_parser = subparsers.add_parser(
+        "history", help="list or purge stored transcripts"
+    )
+    history_parser.add_argument(
+        "--last",
+        action="store_true",
+        help=(
+            "print the most recent transcript, including one the collapse "
+            "guard declined to inject"
+        ),
+    )
 
     transcribe = subparsers.add_parser(
         "transcribe", help="record from the microphone once and print the transcript"
@@ -177,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install(config, skip_download=args.skip_download, clip=args.clip)
     if args.verb == "daemon":
         return _daemon(config)
+    if args.verb == "history" and args.last:
+        return _history_last(config)
 
     print(
         f"manu {args.verb}: not implemented yet — it is built in "
@@ -184,6 +196,38 @@ def main(argv: list[str] | None = None) -> int:
         file=sys.stderr,
     )
     return _EXIT_ERROR
+
+
+def _history_last(config: AppConfig) -> int:
+    """Print the most recent transcript. The whole of `history` that exists.
+
+    Pulled forward from Phase 3 by objection O2, and no further. §5.7 refuses
+    to inject a transcript the decoder destroyed, and that refusal is only
+    defensible if the words are reachable — §8 makes them *present*, which is
+    not the same thing. Everything else `manu history` will do — search,
+    filtering, purge, the retention half — stays in Phase 3, and the bare verb
+    still says so.
+    """
+    from amanuensis.storage.history import HistoryStore
+
+    found = HistoryStore(config.history).latest()
+    if found is None:
+        print("no transcripts yet.")
+        return _EXIT_OK
+
+    # The status line comes first because it changes how the transcript below
+    # should be read: words that never reached the cursor are words the user is
+    # about to paste somewhere themselves.
+    if not found.injected:
+        note = "not injected"
+        if found.guard_outcome == "failed":
+            note += " — the collapse guard refused it (§5.7)"
+        print(f"{found.started_at}  [{note}]")
+    else:
+        print(found.started_at)
+    print()
+    print(found.transcript)
+    return _EXIT_OK
 
 
 def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
@@ -300,7 +344,7 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
     started = time.perf_counter()
-    text = engine.transcribe(trimmed.audio, config.audio.sample_rate)
+    text = engine.transcribe(trimmed.audio, config.audio.sample_rate).text
     timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
 
     print()
