@@ -691,3 +691,146 @@ def test_the_latest_transcript_is_found_on_the_non_retaining_path(
 
 def test_there_is_no_latest_when_nothing_was_ever_written(tmp_path: Path) -> None:
     assert _store(tmp_path).latest() is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 V0 — the raw transcript gets a column of its own
+# ---------------------------------------------------------------------------
+
+
+def _session_with_both(session_id: str = "raw-1") -> Any:
+    """A session that has been through post-processing, so the two differ."""
+    from datetime import UTC, datetime
+
+    import numpy as np
+
+    from amanuensis.models.session import DictationSession
+
+    session = DictationSession(
+        id=session_id,
+        started_at=datetime(2026, 8, 8, 12, 0, tzinfo=UTC),
+        audio=np.zeros(16000, dtype=np.float32),
+        sample_rate=16000,
+    )
+    session.raw_transcript = "the breadshoe is open"
+    session.final_text = "The spreadsheet is open."
+    return session
+
+
+def test_the_row_carries_both_transcripts() -> None:
+    """`to_history_row()` emitted `final_text or raw_transcript` into one slot.
+
+    So the engine's own words were lost the moment any processor ran — which
+    made §7.5's first Phase 5 constraint ("raw transcript persisted")
+    unimplementable in the schema, and made a mis-firing `[replace]` entry
+    indistinguishable from an ASR error (dictionary objections O1 and O5).
+    """
+    row = _session_with_both().to_history_row()
+
+    assert row["transcript"] == "The spreadsheet is open."
+    assert (
+        row["raw_transcript"] == "the breadshoe is open"
+    ), "the decoder's own output has to survive post-processing"
+
+
+def test_a_session_with_no_post_processing_reports_a_raw_transcript() -> None:
+    """`raw_transcript` is what the decoder said, whether or not anything ran.
+
+    Not "the raw text when it differs" — a column that is populated only
+    sometimes cannot answer "did the processors change my words?", which is the
+    question the column exists for.
+    """
+    session = _session_with_both("raw-2")
+    session.final_text = None
+    row = session.to_history_row()
+
+    assert row["transcript"] == "the breadshoe is open"
+    assert row["raw_transcript"] == "the breadshoe is open"
+
+
+def test_the_raw_transcript_reaches_the_database(tmp_path: Path) -> None:
+    """All four touch points, not one.
+
+    `_MIGRATIONS` only widens an existing table. Without `_SCHEMA` a new install
+    lacks the column; without `_COLUMNS` the INSERT silently drops the value.
+    `restore_ms` was missed exactly this way in Phase 2a and the miss was that
+    phase's headline finding (objection O12).
+    """
+    import sqlite3
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.storage.history import HistoryStore
+
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    assert store.write_pending(_session_with_both("raw-3"))
+
+    connection = sqlite3.connect(store.db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT transcript, raw_transcript FROM transcripts WHERE id = ?",
+            ("raw-3",),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row["transcript"] == "The spreadsheet is open."
+    assert row["raw_transcript"] == "the breadshoe is open"
+
+
+def test_an_existing_database_is_widened_rather_than_left_behind(
+    tmp_path: Path,
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` cannot widen a table that already exists.
+
+    Which is every table belonging to anyone who has already used the product —
+    so a column that lands only in `_SCHEMA` reaches new installs and nobody
+    else.
+    """
+    import sqlite3
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.storage.history import HistoryStore
+
+    data_dir = tmp_path
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "history.db"
+    # A pre-Phase-3 table: everything except the new column.
+    # The real Phase 2b schema, enumerated rather than derived from `_SCHEMA` —
+    # deriving it would make the test pass by construction the moment the new
+    # column is added to that constant, which is the half of the bug that
+    # `_MIGRATIONS` exists to catch.
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE transcripts ("
+            "id TEXT PRIMARY KEY, started_at TEXT NOT NULL, "
+            "transcript TEXT NOT NULL, duration_seconds REAL NOT NULL, "
+            "engine TEXT NOT NULL DEFAULT '', error TEXT, "
+            "guard_outcome TEXT, guard_coverage REAL, "
+            "guard_retained_seconds REAL, "
+            "capture_ms REAL NOT NULL DEFAULT 0, vad_ms REAL NOT NULL DEFAULT 0, "
+            "transcribe_ms REAL NOT NULL DEFAULT 0, "
+            "guard_ms REAL NOT NULL DEFAULT 0, "
+            "postprocess_ms REAL NOT NULL DEFAULT 0, "
+            "persist_ms REAL NOT NULL DEFAULT 0, "
+            "inject_ms REAL NOT NULL DEFAULT 0, "
+            "restore_ms REAL NOT NULL DEFAULT 0, "
+            "injected INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=data_dir)
+    assert store.write_pending(_session_with_both("raw-4"))
+
+    connection = sqlite3.connect(db_path)
+    try:
+        present = {
+            row[1] for row in connection.execute("PRAGMA table_info(transcripts)")
+        }
+    finally:
+        connection.close()
+
+    assert "raw_transcript" in present

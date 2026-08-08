@@ -135,6 +135,7 @@ _COLUMNS: Final = (
     "id",
     "started_at",
     "transcript",
+    "raw_transcript",
     "duration_seconds",
     "engine",
     "error",
@@ -156,6 +157,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
     id               TEXT PRIMARY KEY,
     started_at       TEXT    NOT NULL,
     transcript       TEXT    NOT NULL,
+    raw_transcript   TEXT,
     duration_seconds REAL    NOT NULL,
     engine           TEXT    NOT NULL DEFAULT '',
     error            TEXT,
@@ -209,6 +211,13 @@ _MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
     (
         "guard_retained_seconds",
         "ALTER TABLE transcripts ADD COLUMN guard_retained_seconds REAL",
+    ),
+    # Nullable with no default, like the guard columns and for the same reason:
+    # a row written before Phase 3 has no separate raw text, and `NULL` says so
+    # where `''` would claim the decoder produced nothing.
+    (
+        "raw_transcript",
+        "ALTER TABLE transcripts ADD COLUMN raw_transcript TEXT",
     ),
 )
 

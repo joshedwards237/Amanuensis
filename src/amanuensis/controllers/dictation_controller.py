@@ -365,12 +365,22 @@ class DictationController:
         # worker reaches the session it may not be (§6.3, objection A6).
         focus = self.injector.focus_identity()
 
-        self._set_state(DictationState.TRANSCRIBING)
-        self._queue.put(session)
         # Stashed alongside rather than on the session: it is a fact about the
         # delivery, not about the dictation, and `to_history_row` should not
         # grow a column for it.
+        #
+        # **Before the queue put, and the order is the point** (Phase 3,
+        # objection O2). Queueing first makes the session visible to the worker
+        # while its focus is not yet recorded, and `deliver` skips the focus
+        # check entirely on a `None` — so losing that race does not degrade the
+        # check, it *disables* it, and §6.3's protection against injecting into
+        # an application the user has switched away from silently stops
+        # applying. A safety check turned off by timing rather than by
+        # configuration is the kind nobody notices.
         self._focus_by_session[session.id] = focus
+
+        self._set_state(DictationState.TRANSCRIBING)
+        self._queue.put(session)
         return session
 
     def abort_session(self) -> None:
@@ -509,7 +519,28 @@ class DictationController:
             started = time.perf_counter()
             text = session.raw_transcript
             for processor in self.processors:
-                text = processor.process(text, session)
+                try:
+                    text = processor.process(text, session)
+                except Exception as exc:
+                    # §6.3 and `postprocess/base.py` both promise this, and
+                    # neither was true until Phase 3 (objection O1): the chain
+                    # runs *before* the §8 write, and the outer handler below
+                    # returns before `deliver` — which is the only caller of
+                    # `write_pending` on this path. So a raising processor used
+                    # to persist nothing and inject nothing.
+                    #
+                    # Abandon the chain, keep the last good text, name the
+                    # processor, and fall through to `deliver` so the words are
+                    # written and delivered anyway. The error is recorded rather
+                    # than swallowed, because a chain that silently stops is a
+                    # transcript the user cannot explain.
+                    name = getattr(processor, "name", type(processor).__name__)
+                    session.error = (
+                        f"the {name!r} post-processor raised "
+                        f"({type(exc).__name__}: {exc}); the chain was "
+                        "abandoned and the text before it was used"
+                    )
+                    break
             session.timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
             if self.processors:
                 session.final_text = text

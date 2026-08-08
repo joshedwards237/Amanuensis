@@ -17,12 +17,27 @@ legitimately needs context like the engine used or the utterance duration; it
 just may not write to it.
 
 **A raising processor must not cost the transcript.** If `process` raises
-mid-chain, the chain is abandoned and the *last good text* proceeds to
-injection. §8's persist-before-inject ordering has already run, so the words
-survive regardless; the error is surfaced in the tray and recorded, never
-swallowed. This is also why `process` returns a string rather than a result
-object — a processor's failure is the chain runner's problem, not a value the
-next processor has to unwrap.
+mid-chain, the chain is abandoned and the *last good text* proceeds to the §8
+write and then to injection; the error is surfaced in the tray and recorded,
+never swallowed. This is also why `process` returns a string rather than a
+result object — a processor's failure is the chain runner's problem, not a
+value the next processor has to unwrap.
+
+**Corrected 2026-08-08 (Phase 3, objection O1), and the correction is the
+interesting part.** This paragraph previously read "§8's persist-before-inject
+ordering has already run, so the words survive regardless." It has not: the
+chain runs *before* the write, and `DictationController._process` had no
+per-processor guard, so its outer handler returned before `deliver` — the only
+caller of `write_pending` on that path. A raising processor persisted nothing
+and injected nothing, on the constraint this project lists first.
+
+It was unreachable for three phases because `cli.py` passed `processors=[]`,
+which is why a paragraph asserting a guarantee sat above code that could not
+honour it. **Fourth instance in this repository of the specification stating a
+constraint the tooling cannot meet**, after `restore_ms` having no column,
+`store_audio` doing nothing for three phases, and `raw_transcript` sharing a
+column with the final text. The ordering above is now what the controller does,
+rather than what it was documented to do.
 
 This contract was frozen before the Phase 5 experiments returned, and that was
 safe precisely because every candidate approach — constrained decoding, a

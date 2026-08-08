@@ -986,3 +986,105 @@ def test_the_guard_is_timed(controller: DictationController) -> None:
 
     assert session.timings.guard_ms > 0.0
     assert session.timings.g1_ms >= session.timings.guard_ms
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — defects the phase's own review found in shipped code
+# ---------------------------------------------------------------------------
+
+
+class _Exploding:
+    """A processor that always raises. The ABC says this must not cost words."""
+
+    name = "exploding"
+
+    def process(self, _text: str, _session: DictationSession) -> str:
+        raise RuntimeError("the chain is on fire")
+
+
+def test_a_raising_processor_does_not_cost_the_transcript() -> None:
+    """PRD §6.3 and postprocess/base.py both promise this and neither was true.
+
+    The chain runs *before* `deliver`, which is the only caller of
+    `write_pending` on that path, and the only handler returned before it. So a
+    processor raising meant nothing persisted and nothing injected — on the one
+    constraint CLAUDE.md lists first. Unreachable for three phases because
+    `cli.py` passed `processors=[]` (objection O1).
+    """
+    made = _controller(processors=[_Exploding()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0), "the worker never completed the session"
+    finally:
+        made.shutdown()
+
+    assert (
+        "write_pending" in made.history.calls
+    ), "the transcript was never persisted — §8's guarantee is unconditional"
+    assert made.injector.injected == [
+        "hello there"
+    ], "the last good text should still reach the cursor"
+    assert (
+        session.error is not None and "exploding" in session.error
+    ), "the failing processor must be named, not swallowed (§6.3)"
+
+
+def test_a_later_processor_survives_an_earlier_one_raising() -> None:
+    """The chain is abandoned at the raise; it does not skip and continue.
+
+    `base.py` says the *last good text* proceeds, not the text a later
+    processor would have produced from a value the failed one never returned.
+    """
+    made = _controller(processors=[_Exploding(), _Upper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == [
+        "hello there"
+    ], "the chain must stop at the raise rather than run the rest"
+
+
+def test_the_focus_is_stashed_before_the_session_is_queued() -> None:
+    """Otherwise the worker can dequeue a session whose focus is not there yet.
+
+    `deliver` skips the focus check entirely when `focus_at_capture` is None, so
+    losing that race does not degrade the check — it *disables* it, and §6.3's
+    protection against injecting into an application the user switched away
+    from stops applying, non-deterministically (objection O2).
+
+    Asserted structurally rather than by racing: the moment the session becomes
+    visible to the worker, its focus must already be recorded.
+    """
+    made = _controller()
+    seen: list[bool] = []
+    real_queue = made._queue
+
+    class _WatchingQueue:
+        def put(self, item: Any) -> None:
+            if item is not None:
+                seen.append(item.id in made._focus_by_session)
+            real_queue.put(item)
+
+        def get(self) -> Any:
+            return real_queue.get()
+
+    made._queue = _WatchingQueue()  # type: ignore[assignment]
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert seen == [True], (
+        "the session was queued before its focus was stashed; a worker "
+        "dequeuing in between reads None and skips the focus check"
+    )

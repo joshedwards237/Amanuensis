@@ -188,6 +188,14 @@ class DictationSession:
             "id": self.id,
             "started_at": self.started_at.isoformat(),
             "transcript": self.final_text or self.raw_transcript,
+            # The decoder's own words, always — not "when they differ". A
+            # column populated only sometimes cannot answer "did the processors
+            # change what I said?", which is the question it exists for. Before
+            # Phase 3 this shared the slot above, so the raw output was lost the
+            # moment any processor ran: §7.5's first Phase 5 constraint is "raw
+            # transcript persisted", and the schema could not express it
+            # (dictionary objection O1).
+            "raw_transcript": self.raw_transcript,
             "duration_seconds": self.duration_seconds(),
             "engine": self.engine,
             "error": self.error,

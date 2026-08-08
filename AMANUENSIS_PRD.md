@@ -1037,9 +1037,17 @@ It is not:
   and does not mutate `DictationSession`, so a chain is replayable against a stored
   transcript and a processor cannot reach the audio.
 - **A raising processor must not cost the transcript.** If `process` raises mid-chain,
-  the chain is abandoned and the **last good text** proceeds to injection. §8's
-  persist-before-inject ordering already ran, so the words survive regardless; the
-  error is surfaced in the tray (§5.4) and recorded, not swallowed silently.
+  the chain is abandoned and the **last good text** proceeds to the §8 write and then
+  to injection; the error is surfaced in the tray (§5.4) and recorded, not swallowed
+  silently.
+
+  **Corrected 2026-08-08** (Phase 3, objection O1). This previously read "§8's
+  persist-before-inject ordering already ran, so the words survive regardless."
+  The chain runs **before** the write, and `_process` had no per-processor guard,
+  so a raising processor persisted nothing and injected nothing. Unreachable for
+  three phases because `cli.py` passed `processors=[]` — a sentence asserting a
+  guarantee above code that could not honour it, and the fourth instance of that
+  shape in this project.
 
 `TranscriptionEngine` got `load` / `warm_up` / `is_loaded` because someone thought about
 its lifecycle. This is that thinking for the boundary that will actually grow — rules,
