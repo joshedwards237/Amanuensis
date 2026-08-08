@@ -77,11 +77,16 @@ class _FakeTrim:
         audio: NDArray[np.float32],
         retained_seconds: float = 1.0,
         fell_back: bool = False,
+        padding_seconds: float = 0.0,
     ) -> None:
         self.audio = audio
         self.original_seconds = retained_seconds
         self.retained_seconds = retained_seconds
         self.speech_segments = 1
+        #: The real detector adds `speech_pad_ms` to each side and reports it,
+        #: so §5.7 can divide by speech rather than by speech-plus-padding.
+        #: Zero here keeps every test's coverage arithmetic readable.
+        self.padding_seconds = padding_seconds
         self.fell_back = fell_back
 
 

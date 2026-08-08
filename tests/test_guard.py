@@ -37,6 +37,7 @@ def _verdict(
     *,
     decoded_seconds: float | None = None,
     retained_seconds: float = 30.0,
+    padding_seconds: float = 0.0,
     fell_back: bool = False,
     config: GuardConfig | None = None,
 ) -> GuardVerdict:
@@ -44,6 +45,7 @@ def _verdict(
         text,
         decoded_seconds=decoded_seconds,
         retained_seconds=retained_seconds,
+        padding_seconds=padding_seconds,
         fell_back=fell_back,
         config=config or GuardConfig(),
     )
@@ -73,10 +75,10 @@ def test_a_decoder_that_emitted_nothing_fires() -> None:
 
 
 def test_a_partial_collapse_is_caught_that_the_old_floor_would_have_missed() -> None:
-    """Objection O4. 40% of the audio never decoded — a substantial loss that
+    """Objection O4. 45% of the audio never decoded — a substantial loss that
     still reads as ordinary speech, so a words-per-second floor set low enough
     to be safe for withholding text cannot see it."""
-    verdict = _verdict(decoded_seconds=18.0, retained_seconds=30.0)
+    verdict = _verdict(decoded_seconds=16.5, retained_seconds=30.0)
 
     assert verdict.outcome is GuardOutcome.PASSED
     assert verdict.retry_advised is True
@@ -294,3 +296,44 @@ def test_a_suspect_first_decode_with_no_retry_still_passes() -> None:
 
     assert final.outcome is GuardOutcome.PASSED
     assert final.retried is False
+
+
+# ---------------------------------------------------------------------------
+# The padding correction — measured against the real corpus, 2026-08-07
+# ---------------------------------------------------------------------------
+
+
+def test_the_denominator_excludes_the_padding_the_vad_added() -> None:
+    """§5.7 says the denominator is "speech by construction". It was not.
+
+    `[vad] speech_pad_ms` deliberately adds 400 ms of non-speech to each side of
+    every retained segment, and the decoder correctly emits no segments over it.
+    On long audio that is noise. On the corpus's 3.22-second sample it is 0.8 s
+    of a 3.22 s denominator — **25% of the clip** — and it dragged a genuine
+    transcript from 82.8% coverage down to 62.2%, twelve points above the
+    refusal gate.
+
+    The bias is systematic and it lands hardest on short dictation, which is
+    this product's ordinary case. Measured on all six samples: the corrected
+    floor is 82.8% where the uncorrected one was 62.2%.
+    """
+    verdict = _verdict(decoded_seconds=2.0, retained_seconds=3.22, padding_seconds=0.8)
+
+    assert verdict.coverage == pytest.approx(0.828, abs=0.005)
+
+
+def test_padding_wider_than_the_clip_does_not_invert_the_ratio() -> None:
+    """A pathological trim must not produce coverage above 1.0 or a negative
+    denominator. Clamped rather than trusted."""
+    verdict = _verdict(decoded_seconds=0.1, retained_seconds=0.5, padding_seconds=2.0)
+
+    assert verdict.coverage is not None
+    assert 0.0 <= verdict.coverage <= 1.0
+
+
+def test_no_padding_reported_leaves_the_denominator_alone() -> None:
+    """An engine or detector that does not report padding is not punished for
+    it — the correction is an improvement, not a precondition."""
+    verdict = _verdict(decoded_seconds=15.0, retained_seconds=30.0)
+
+    assert verdict.coverage == pytest.approx(0.5)

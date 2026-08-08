@@ -344,8 +344,10 @@ initial_prompt = ""         # biases vocabulary; see §5.6
 [guard]                       # added 2026-08-05, Phase 2b follow-up. See §5.7.
 min_decoded_coverage = 0.5    # refuse below this fraction of retained speech.
                               # 0 disables the guard entirely.
-retry_below_coverage = 0.8    # re-decode with the bias dropped below this.
+retry_below_coverage = 0.7    # re-decode with the bias dropped below this.
                               # Must be >= min_decoded_coverage. 0 never retries.
+                              # 0.8 left the shortest genuine sample 2.8 points
+                              # of headroom; calibrated against ONE such sample.
 retry_max_latency_ms = 2000   # skip the retry rather than pay it. Predicted
                               # from §2's model, not measured after the fact.
 
@@ -595,6 +597,18 @@ full, and the text injected at the cursor as though it were what had been said.
 and the first one was wrong; the reasoning is worth keeping because the wrong
 version is the intuitive one.
 
+**The denominator is speech, and making that true took a correction.** §5.7
+first divided by `TrimResult.retained_seconds` and called it speech by
+construction. It is not: `[vad] speech_pad_ms` adds 400 ms of deliberate
+non-speech to each side of every retained segment, and the decoder correctly
+emits nothing over it. That under-reports coverage **in proportion to how short
+the clip is** — noise in a 30-second dictation, a quarter of a 3.2-second one.
+Measured: the corpus's shortest genuine sample read **62.2%** against a 50%
+refusal gate before the correction and **82.8%** after. The bias was systematic,
+pointed at refusing genuine transcripts, and concentrated on the input this
+product's first user produces most often. `TrimResult` now reports
+`padding_seconds` and the guard subtracts it.
+
 The obvious instrument is words per second — the transcript is too short for the
 speech, so divide one by the other. It was drafted that way, and objection O1
 killed it. Words per second is a property of *how the user talks* divided by
@@ -606,11 +620,17 @@ a direct measurement was available the whole time.
 discarding them. **Decoded coverage** is the last segment's `end` over retained
 seconds — did the decoder traverse the audio it was given.
 
-| | retained | decoded | coverage |
-|---|---|---|---|
-| The live failure of 2026-08-05 | 30.5 s | ~2 s | **6.5%** |
-| A genuine two-second utterance | 2.0 s | ~1.9 s | 95% |
-| A genuine sixty-second dictation | 60 s | ~59 s | 98% |
+**Measured on the Phase 1 corpus, 2026-08-07** (`scripts/verify_guard.py`),
+not estimated:
+
+| | coverage |
+|---|---|
+| Reproduced collapse — `03-proper-nouns` under a prompt the decoder echoes | **8.3%** |
+| Genuine speech, lowest of six samples (`06-short`, 3.2 s) | **82.8%** |
+| Genuine speech, highest | 100.0% |
+
+The collapse and the genuine floor differ by a factor of ten, and the 50%
+refusal gate sits between them with 33 points of margin below and 42 above.
 
 Three properties follow, and each one is a defect in the rate floor:
 
@@ -636,7 +656,7 @@ collapse (objection O4).
 
 | coverage | what happens |
 |---|---|
-| ≥ `retry_below_coverage` (0.8) | nothing; the transcript is used |
+| ≥ `retry_below_coverage` (0.7) | nothing; the transcript is used |
 | between the two | decoded again with the bias dropped, then re-judged |
 | < `min_decoded_coverage` (0.5) after recovery | **not injected**; the error state reports it |
 
@@ -718,11 +738,24 @@ success, because a transcript the product quietly swapped is dictionary
 objection O5 re-committed: the user sees different text and has no signal that
 anything but the model produced it.
 
-**The mechanism is still unexplained.** The collapse hits some audio and not
-other audio, and a prose prompt that *matched* the subject of the clip it
-destroyed. Coverage narrows the question — it says whether the decoder stopped
-early or drifted — but does not answer it. What it does buy is that acting
-correctly no longer waits on the answer.
+**The mechanism, which was unexplained until the guard was built.** Dictionary
+objection O3 posed it as a fork: *"if the cause is early-termination, a floor is
+right; if it is domain drift, a floor is half a guard."* Reproduced 2026-08-07,
+it is neither of the things the record guessed. **The decoder echoes the prompt
+and terminates.** `initial_prompt = "And how much is this?"` produces exactly
+that string as the transcript of a 25-second clip, deterministically.
+
+That retires the "prose prompt" description in the 2026-08-03 record, which
+described the *output* and attributed it to the prompt's register. The register
+is not the variable — five other prompts of comparable shape, including a
+600-character one, collapsed nothing. What the collapsing prompt has is the form
+of a complete short utterance the model can plausibly emit as a whole
+transcript.
+
+Coverage measures early termination directly, so the instrument and the failure
+now match rather than the instrument being aimed at a symptom. **Not answered:**
+why this clip and not the other five. The guard does not need that answer, which
+is the point of building it against the failure rather than against the cause.
 
 ---
 
@@ -2328,10 +2361,19 @@ and `manu vocab check` remain Phase 3, unstarted and ungated. `manu history`
 without `--last` — search, purge, retention against `history.db` — stays there
 too.
 
-**How it is verified, and what the verification cannot do.** The guard fires on
-the measured collapse and does not fire on any of the six Phase 1 corpus
-samples. Both halves get a positive control, per the standing rule that a
-failing measurement needs one as much as a null one does.
+**How it is verified, and what the verification cannot do.**
+`scripts/verify_guard.py` runs both directions over the corpus: the guard fires
+on a reproduced collapse (8.3% coverage) and on none of the six genuine samples
+(floor 82.8%).
+
+**The first run of that verification was worthless and reported a pass.** Its
+positive control used a prompt reconstructed from the 2026-08-03 record's
+description rather than the prompt itself, which was never written down. It
+collapsed nothing, so the script measured the negative control twice and called
+it a verification. The real prompt was found by sweeping nine candidates. The
+script now exits non-zero when the positive control catches nothing, because a
+control that cannot fail is not a control — the fourth instance of that failure
+in this repository.
 
 That is not sufficient and the record says so rather than implying otherwise
 (objection O8). Two named limits:
@@ -2684,6 +2726,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-08-05 | **The guard measures the decoder, not the speaker — the first design was wrong and the wrong one is the intuitive one** (§5.7, objection O1). Words per second divides *how the user talks* by *how long they talked*; the failure is *where the decoder stopped*. `faster_whisper` returns segments carrying `start`, `end`, `avg_logprob`, `no_speech_prob` and `compression_ratio`, and `_decode` was discarding every one of them — the signal was already crossing the boundary. **Decoded coverage** — last segment `end` over retained seconds — reads 6.5% on the live failure and ~95% on a genuine two-second utterance. It is duration-independent, which the rate floor could not be: word count is an integer, so at two seconds the rate quantises to 0.5 w/s *per word* and a genuine one-word "Yes." is **the same measurement** as a transcript collapsed to one word. `min_audio_seconds` was therefore never a policy choice — it was the floor conceding it cannot work on short audio, over the input the product's first user produces most often. Coverage also has **no false-positive population**: a slow or quiet speaker still produces segments spanning their audio, which retires the hazard aimed at §4's secondary user rather than mitigating it with a config key. The rate floor survives as a fallback for engines that cannot report a span, with its blind spot labelled. |
 | 2026-08-05 | **One threshold was doing two jobs with costs differing by orders of magnitude** (§5.7, objection O4). Spending a decode and withholding the user's words are split: `retry_below_coverage = 0.8` triggers an unbiased re-decode, `min_decoded_coverage = 0.5` gates the refusal. The middle band is where the evidence comes from — biased and unbiased output over the same audio, both recorded, which the guard otherwise had no way to generate. **`manu history --last` ships with the refusal** (objection O2), pulled forward from Phase 3: §8's write is unconditional, but *written* is not *recoverable*, and before this a refused transcript went somewhere no shipped command could show it. The refusal is defensible only because the words are reachable. |
 | 2026-08-05 | **`guard_ms` joins `LatencyBreakdown`** (§6.3, objection O5). §5.7's retry is a second full decode inside G1's window, and the standing rule — *a stage inside G1's window with no field is a stage that cannot be defended when G1 is missed* — was broken **in the same revision that restates it**. Four phases in a row now. The retry is also bounded: §2's `transcribe_ms ≈ 48.8 + 13.69 × seconds` predicts its cost before it is attempted, and `retry_max_latency_ms` skips it rather than paying it, with the skip recorded on the verdict. |
+| 2026-08-07 | **The guard verified on real audio, and three things it found.** `scripts/verify_guard.py`, both directions over the Phase 1 corpus: fires on a reproduced collapse at **8.3%** coverage, silent on all six genuine samples, floor **82.8%**. (1) **The first verification was worthless and reported a pass** — its positive control used a prompt reconstructed from the 2026-08-03 record's *description*, since the prompt itself was never written down. It collapsed nothing, so the script measured the negative control twice. The real one was found by sweeping nine candidates; the script now exits non-zero when the positive control catches nothing. Fourth instance of a check that could not fail. (2) **The denominator was not speech.** `[vad] speech_pad_ms` adds 400 ms of deliberate non-speech per side, and the decoder emits nothing over it — which under-reports coverage in proportion to how *short* the clip is. The shortest genuine sample read 62.2% against a 50% refusal gate; corrected, 82.8%. Systematic, pointed at refusing genuine transcripts, worst on this product's most common input. `TrimResult` now reports `padding_seconds`. (3) **`retry_below_coverage` lowered 0.8 → 0.7**, because 82.8% left 2.8 points of headroom and short dictation would have paid a second decode routinely. Calibrated against one short sample, which is thinner than the number deserves. |
+| 2026-08-07 | **The collapse mechanism is prompt echo, and dictionary objection O3's fork was a false one.** O3 asked whether the cause is early termination or domain drift, and said a floor answers only the first. It is early termination: `initial_prompt = "And how much is this?"` makes the decoder emit exactly that string as the transcript of a 25-second clip, deterministically. This retires the 2026-08-03 record's "prose prompt" description, which named the *output* and attributed the failure to the prompt's register — the register is not the variable, since five other prompts of comparable shape including a 600-character one collapsed nothing. What the collapsing prompt has is the form of a complete short utterance the model can plausibly emit as a whole transcript. Coverage measures early termination directly, so instrument and failure now match. Still unanswered: why this clip and not the other five — which the guard does not need, because it is built against the failure rather than the cause. |
 | 2026-08-05 | **§9's verification for this fix could not fail, and now says so** (objection O8). The negative control is six samples from one speaker, which cannot produce a speaker the guard is wrong about; the positive control is the corpus collapse rather than the live failure, because §5.5's `store_audio` did nothing and that audio is gone. Both limits are named in §9, the false-positive direction is labelled **untested**, and the Phase 3 gate is required to record `coverage` and `retained_seconds` for every dictation so the live distribution can be compared against the six samples the thresholds came from. Also: this is the **first sentinel record in this repository a sentinel actually produced** (`docs/superpowers/objections/collapse-guard.md`, eight objections, one critical) — dispatched without `name:`, per the cause found on 2026-08-04. Two of its claims were checked against the source before being acted on; one held and one did not. |
 | 2026-08-05 | **`store_audio` validated and did nothing for three phases** (§5.5). A documented key with a validation rule and a test asserting its default, and no code anywhere that read it. The cost came due when the collapse above turned out to be unreproducible: the one setting that would have preserved the evidence was the one that did nothing. Implemented with its own retention — audio is swept by `retain_days` at daemon start through the existing `sweep_pending` mechanism, because adding a writer for the sensitive artefact (§7.6) without a reaper would create a directory that grows without bound and that no command reaches until Phase 3 ships `--purge`. **Third instance of "an amendment must reach the tooling"**, after `bench_engines.py` and `restore_ms`, and the first where the test suite passed *because* it only checked that the key parsed. |
 | 2026-08-05 | **§6.3's `TranscriptionEngine.transcribe` gains `biased: bool = True`.** §5.7's retry needs a decode with vocabulary bias suppressed and the contract had no way to ask for one. Rejected alternative: passing `initial_prompt=""` through as a parameter, which makes the caller responsible for knowing what biasing means on a backend it is not supposed to know about — §7.2's Moonshine and Parakeet do not necessarily share the mechanism, and an empty prompt string is a question that does not parse for an engine with no prompt concept. The flag asks for the behaviour; each engine says locally what it means. Default preserves every existing call site. |

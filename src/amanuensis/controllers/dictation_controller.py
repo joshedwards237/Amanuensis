@@ -416,6 +416,7 @@ class DictationController:
             decoded.text,
             decoded_seconds=decoded.decoded_seconds,
             retained_seconds=trimmed.retained_seconds,
+            padding_seconds=trimmed.padding_seconds,
             fell_back=trimmed.fell_back,
             config=self.config.guard,
         )
@@ -435,6 +436,7 @@ class DictationController:
             retried.text,
             decoded_seconds=retried.decoded_seconds,
             retained_seconds=trimmed.retained_seconds,
+            padding_seconds=trimmed.padding_seconds,
             fell_back=trimmed.fell_back,
             config=self.config.guard,
         )

@@ -315,7 +315,7 @@ def test_a_real_utterance_comes_back_as_text(
     engine.load()
     engine.warm_up()
 
-    text = engine.transcribe(audio, rate)
+    text = engine.transcribe(audio, rate).text
 
     assert text.strip()
     # A loose overlap check, deliberately. WER belongs to the benchmark and

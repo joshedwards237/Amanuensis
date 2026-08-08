@@ -147,7 +147,14 @@ class GuardConfig:
     #: Re-decode with the vocabulary bias dropped below this. Must be at least
     #: `min_decoded_coverage`, or the guard refuses transcripts it never tried
     #: to recover. 0 never retries.
-    retry_below_coverage: float = 0.8
+    #:
+    #: Lowered from 0.8 on 2026-08-07 by measurement. The corpus's shortest
+    #: genuine sample reads 82.8% even after the padding correction, which left
+    #: 2.8 points of headroom — short dictation would have paid a second decode
+    #: routinely, and short dictation is the ordinary case here. **Calibrated
+    #: against one short sample**, which is thinner evidence than this number
+    #: deserves and is why it starts permissive.
+    retry_below_coverage: float = 0.7
     #: Predicted from §2's `transcribe_ms ≈ 48.8 + 13.69 × seconds`, not
     #: measured after the fact — the point is to decline the cost, not to
     #: notice it afterwards. The default allows a retry on roughly 140 seconds

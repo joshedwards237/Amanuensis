@@ -57,12 +57,19 @@ if TYPE_CHECKING:
 
 __all__ = ["evaluate", "resolve"]
 
+#: Floor on the coverage denominator. Padding wider than the retained audio is
+#: pathological rather than impossible — a very short segment is padded on both
+#: sides by more than its own length — and a denominator at or below zero turns
+#: a ratio into an exception or a negative.
+_MINIMUM_DENOMINATOR_S = 0.05
+
 
 def evaluate(
     text: str,
     *,
     decoded_seconds: float | None,
     retained_seconds: float,
+    padding_seconds: float = 0.0,
     fell_back: bool,
     config: GuardConfig,
 ) -> GuardVerdict:
@@ -92,7 +99,7 @@ def evaluate(
 
     if decoded_seconds is None:
         return _by_rate(text, retained_seconds, config)
-    return _by_coverage(decoded_seconds, retained_seconds, config)
+    return _by_coverage(decoded_seconds, retained_seconds, padding_seconds, config)
 
 
 def resolve(first: GuardVerdict, second: GuardVerdict | None) -> GuardVerdict:
@@ -142,19 +149,36 @@ def resolve(first: GuardVerdict, second: GuardVerdict | None) -> GuardVerdict:
 
 
 def _by_coverage(
-    decoded_seconds: float, retained_seconds: float, config: GuardConfig
+    decoded_seconds: float,
+    retained_seconds: float,
+    padding_seconds: float,
+    config: GuardConfig,
 ) -> GuardVerdict:
-    # Whisper timestamps are approximate and can run past the end of the clip.
-    # Coverage above 1.0 is a rounding artefact, never a failure, so it is
-    # clamped rather than allowed to look like an anomaly.
-    coverage = min(decoded_seconds / retained_seconds, 1.0)
+    """Decoded span over *speech*, which is not the same as over retained audio.
+
+    `[vad] speech_pad_ms` adds 400 ms of deliberate non-speech to each side of
+    every retained segment, and the decoder correctly emits nothing over it.
+    Dividing by the padded duration therefore under-reports coverage, and it
+    does so **in proportion to how short the clip is** — 0.8 s of padding is
+    noise in a 30-second dictation and a quarter of a 3.2-second one.
+
+    Measured on the Phase 1 corpus, 2026-08-07: uncorrected, the shortest
+    genuine sample read 62.2% against a 50% refusal gate. Corrected, 82.8%. The
+    bias was systematic, in the direction of refusing genuine transcripts, and
+    concentrated on the input this product's first user produces most often.
+    """
+    speech_seconds = max(retained_seconds - padding_seconds, _MINIMUM_DENOMINATOR_S)
+    # Whisper timestamps are approximate and can run past the end of the clip,
+    # and removing the padding makes that more likely rather than less.
+    # Coverage above 1.0 is a rounding artefact, never a failure.
+    coverage = min(decoded_seconds / speech_seconds, 1.0)
     failed = coverage < config.min_decoded_coverage
     return GuardVerdict(
         outcome=GuardOutcome.FAILED if failed else GuardOutcome.PASSED,
         retained_seconds=retained_seconds,
         coverage=coverage,
         reason=(
-            f"the decoder covered {coverage:.0%} of {retained_seconds:.1f}s of speech"
+            f"the decoder covered {coverage:.0%} of {speech_seconds:.1f}s of speech"
             if failed
             else None
         ),

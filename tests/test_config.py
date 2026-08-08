@@ -351,7 +351,7 @@ def test_a_sample_rate_other_than_16k_is_rejected_with_both_reasons(
 def test_guard_defaults() -> None:
     cfg = AppConfig()
     assert cfg.guard.min_decoded_coverage == 0.5
-    assert cfg.guard.retry_below_coverage == 0.8
+    assert cfg.guard.retry_below_coverage == 0.7
     assert cfg.guard.retry_max_latency_ms == 2000
     # The fallback floor, inert under faster-whisper.
     assert cfg.guard.min_words_per_second == 0.5
