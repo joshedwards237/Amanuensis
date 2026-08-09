@@ -158,9 +158,20 @@ class Vocabulary:
             # Collapse internal whitespace so a phrase key matched across a
             # newline resolves to the same map entry it was written as.
             key = " ".join(match.group(0).split()).lower()
+            # `.get`, not `[]`. `re.IGNORECASE` uses simple case folding and
+            # `str.lower()` uses full folding, so the two disagree on a handful
+            # of characters: `İ` matches an `i` key and lowers to TWO code
+            # points, and dotless `ı` matches and lowers to itself. Verified
+            # both raise `KeyError` under `[]`. The lookup was asserting an
+            # invariant the regex engine does not promise, on user data
+            # (objection C9). A miss leaves the text alone, which is the
+            # behaviour a user reading their own file would predict.
+            replacement = self.replacements.get(key)
+            if replacement is None:
+                return match.group(0)
             if key not in fired:
                 fired.append(key)
-            return self.replacements[key]
+            return replacement
 
         return self._pattern.sub(_swap, text), tuple(f"replace:{key}" for key in fired)
 

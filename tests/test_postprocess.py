@@ -343,3 +343,124 @@ def test_the_chain_is_built_in_order() -> None:
 
     chain = build_chain(PostprocessConfig(chain=("rules",)))
     assert [processor.name for processor in chain] == ["rules"]
+
+
+# ---------------------------------------------------------------------------
+# Code review (2026-08-08): four rules that corrupted real text
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "it was really really good",
+        "that is so so wrong",
+        "we had many many problems",
+        "ok bye bye",
+        "extension 4 4",
+        "the score was 2 2",
+    ],
+)
+def test_reduplication_is_not_a_stutter(text: str) -> None:
+    """C1. `LEGITIMATE_DOUBLES` was a seven-word list standing against an open
+    class, and English reduplication is open: really/so/many/very/bye, and every
+    repeated digit.
+
+    The rule's premise — an adjacent exact duplicate is a stutter — is what was
+    wrong, not the size of the allowlist. The guard is inverted: only a
+    **function word** may be collapsed, which makes the no-deleted-content-word
+    property structural instead of something a test has to remember to probe.
+    """
+    before = _content_words(text)
+    after = _content_words(_processor().process(text, _session()))
+    assert len(after) >= len(before), "the pass deleted a content word"
+    assert set(before) - set(after) == set()
+
+
+def test_a_stuttered_function_word_still_collapses() -> None:
+    """The case the rule exists for, and the only one it can now reach."""
+    assert _processor().process("send the the file.", _session()) == "Send the file."
+
+
+def test_a_transcript_starting_with_a_number_does_not_capitalise_a_later_word() -> None:
+    """C3. `at_boundary` was only cleared by uppercasing a letter, so a leading
+    digit left it set and the first *letter* got capitalised wherever it was:
+    `20 minutes left` -> `20 Minutes left.`
+
+    The rule this module argues hardest about is the one it declines to write,
+    on the grounds that a spurious mid-sentence capital is a cost worth
+    documenting rather than fixing badly. This rule was *creating* them.
+    """
+    assert _processor().process("20 minutes left", _session()) == "20 minutes left."
+    assert _processor().process("15 people attended", _session()) == (
+        "15 people attended."
+    )
+
+
+def test_a_leading_quote_still_capitalises_the_first_word() -> None:
+    """The behaviour the buggy version got right, kept deliberately."""
+    assert _processor().process('"hello there', _session()) == '"Hello there.'
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("the U.S. economy is fine", "The U.S. economy is fine."),
+        ("J.R.R. Tolkien wrote it", "J.R.R. Tolkien wrote it."),
+        ("open Report.PDF now", "Open Report.PDF now."),
+    ],
+)
+def test_acronyms_and_initials_are_not_split(text: str, expected: str) -> None:
+    """C4. `([.!?])(?=[A-Z])` treated every dot-then-capital as a sentence
+    boundary. It is the defect the port already found in `capitalise_sentences`
+    (`file.py` -> `file.Py`) with the case flipped, and the test written for
+    that one asserted only lowercase, so it could not fail here.
+
+    Worse, it compounded: the injected `". "` created a boundary that
+    `capitalise_sentences` then acted on, so `the U.S. economy` became
+    `The U. S. Economy`. Two rules, one input, three corruptions.
+    """
+    assert _processor().process(text, _session()) == expected
+
+
+def test_a_real_sentence_boundary_is_still_split() -> None:
+    """The rule keeps its job: a VAD segment join really can produce this."""
+    assert _processor().process("that is done.Then we ship", _session()) == (
+        "That is done. Then we ship."
+    )
+
+
+def test_a_sentence_beginning_with_the_command_words_survives() -> None:
+    """C11. The guard excluded the phrase mid-sentence and admitted it exactly
+    where it was dangerous — sentence-initial, which is where a command lives
+    *and* where `New line items are on order` lives.
+
+    `Add a note. New line items are on order.` lost three words. The phrase now
+    has to be a complete sentence: terminated, or at the end of the transcript.
+    """
+    text = "Add a note. New line items are on order."
+    assert _processor(spoken_commands=True).process(text, _session()) == text
+
+
+def test_a_terminated_command_still_fires() -> None:
+    out = _processor(spoken_commands=True).process(
+        "First point. New line. Second point.", _session()
+    )
+    assert "\n" in out and "new line" not in out.lower()
+
+
+def test_a_command_at_the_end_of_the_transcript_fires() -> None:
+    out = _processor(spoken_commands=True).process(
+        "Done for now. New paragraph", _session()
+    )
+    assert out.endswith("\n\n") or "\n\n" in out
+
+
+def test_a_candidate_is_not_counted_for_a_sentence_that_merely_starts_with_it() -> None:
+    """The counter feeds the gate's firing rate (choice-story #2). A counter
+    with the same false-positive population as the rule reports a rate for a
+    rule more dangerous than the number suggests."""
+    _, fired = _processor().process_traced(
+        "Add a note. New line items are on order.", _session()
+    )
+    assert not any("spoken_commands" in entry for entry in fired)

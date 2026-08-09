@@ -307,11 +307,36 @@ _PROCESSORS: Final = ("rules", "vocabulary", "llm")
 
 
 def _chain(value: Any) -> str | None:
+    """Membership, uniqueness, and **order**.
+
+    Order was unchecked, and `postprocess/vocabulary.py` states its position as
+    a contract: the map must run *after* the rules, because the rules pass
+    changes capitalisation and punctuation and would otherwise rewrite the
+    replacement. `chain = ["vocabulary", "rules"]` validated, built and ran, and
+    turned `csp is the format` into `Csv is the format` — the casing heuristic
+    dictionary objection O4 rejected, reached by configuration (objection C10).
+
+    Preserving the user's order is not the same as validating it, and a user who
+    lists their processors alphabetically cannot trace the symptom back to this
+    line.
+    """
+    seen: list[str] = []
     for item in value:
         if not isinstance(item, str):
             return f"entries must be strings; found {type(item).__name__}"
         if item not in _PROCESSORS:
             return f"unknown processor {item!r}; known: {', '.join(_PROCESSORS)}"
+        if item in seen:
+            return f"{item!r} appears twice; each processor runs once"
+        seen.append(item)
+    ordered = [name for name in _PROCESSORS if name in seen]
+    if seen != ordered:
+        return (
+            f"must be in this order: {', '.join(ordered)}. Post-processing is "
+            "ordered and the stages are not interchangeable — the rules pass "
+            "rewrites capitalisation and punctuation, so running it after the "
+            "vocabulary would rewrite the replacement the dictionary guarantees"
+        )
     return None
 
 

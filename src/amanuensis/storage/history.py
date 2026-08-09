@@ -507,12 +507,14 @@ class HistoryStore:
             # database telling you it cannot do this yet rather than a bug in
             # the checkpoint. The rows just deleted are still sitting in `-wal`
             # until this runs, and the file is unlinked below.
-            if rows_removed:
-                connection = self._connect()
-                try:
-                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                finally:
-                    connection.close()
+            # Unconditional. It used to be `if rows_removed`, so a purge
+            # against a table that was already empty skipped the checkpoint and
+            # then unlinked the WAL anyway (objection C5).
+            connection = self._connect()
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                connection.close()
 
         files_removed = 0
         for directory, pattern in (
@@ -534,9 +536,18 @@ class HistoryStore:
         for suffix in ("-wal", "-shm"):
             sidecar = self.db_path.with_name(self.db_path.name + suffix)
             try:
-                if sidecar.exists():
-                    sidecar.unlink()
-                    files_removed += 1
+                if not sidecar.exists():
+                    continue
+                # **Only when it is empty.** A non-zero WAL after a TRUNCATE
+                # checkpoint means another connection is holding frames — the
+                # daemon, mid-dictation — and unlinking it would discard the §8
+                # pre-injection write that WAL was adopted to protect. That is
+                # objection O11's own failure, re-entered through the cleanup
+                # added alongside its fix (objection C5).
+                if sidecar.stat().st_size > 0:
+                    continue
+                sidecar.unlink()
+                files_removed += 1
             except OSError:
                 pass
 
@@ -686,7 +697,20 @@ class HistoryStore:
         that gets skipped exactly once, on the path where a transcript is
         being written before injection.
         """
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        # Owner-only, like everything else this module creates. The database is
+        # 0600 and `pending/` and `audio/` are 0700, but the directory holding
+        # all three was created with no mode and landed at 0755 under a default
+        # umask — so session identifiers and the existence of stored audio were
+        # listable by other local users (objection C12). `mode=` applies only on
+        # creation, which is why the chmod below covers a directory that already
+        # exists from an earlier version.
+        self._data_dir.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        try:
+            self._data_dir.chmod(_DIR_MODE)
+        except OSError:
+            # A data directory the user has deliberately shared is their call;
+            # failing to start the daemon over it is not.
+            pass
         if not self.db_path.exists():
             self.db_path.touch(mode=_FILE_MODE)
         connection = sqlite3.connect(self.db_path, timeout=_BUSY_TIMEOUT_S)

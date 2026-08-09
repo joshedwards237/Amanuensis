@@ -1243,7 +1243,12 @@ def test_the_reload_is_timed_into_its_own_stage(tmp_path: Any) -> None:
     finally:
         made.shutdown()
 
-    assert session.timings.vocab_ms >= 0.0
+    # `>= 0.0` was a tautology on a perf_counter delta that defaults to 0.0,
+    # and the arithmetic assertion below it constructed a LatencyBreakdown by
+    # hand and never touched the controller. Deleting the assignment in
+    # `_process` left both green (objection C7).
+    assert session.timings.vocab_ms > 0.0, "the reload was never timed"
+    assert session.timings.g1_ms >= session.timings.vocab_ms
     breakdown = LatencyBreakdown(vocab_ms=3.0, transcribe_ms=100.0)
     assert breakdown.g1_ms == pytest.approx(103.0)
 
@@ -1320,12 +1325,39 @@ def test_the_retry_is_available_when_boost_supplies_the_bias(tmp_path: Any) -> N
     from amanuensis.postprocess.vocabulary import VocabularyLoader
 
     path = tmp_path / "vocabulary.toml"
-    path.write_text('[boost]\nterms = ["Airtable"]\n', encoding="utf-8")
+    path.write_text(
+        '[boost]\n[boost.apps]\n"com.apple.Terminal" = ["Airtable"]\n',
+        encoding="utf-8",
+    )
 
+    # Through a full dictation, asserting on what the ENGINE was asked for.
+    # The first version of this test called `_why_no_retry(10.0, biased=True)`
+    # directly — supplying the value under test as a literal, so reverting
+    # `_judge`'s `biased = ... or bool(boost)` left it green. Verified: the
+    # sabotage passes the whole suite (objection C6).
     config = AppConfig(engine=EngineConfig(initial_prompt=""))
-    made = _controller(config=config, vocabulary=VocabularyLoader(path))
+    engine = _FakeEngine(
+        coverage=0.05, unbiased_text="recovered words", unbiased_coverage=0.99
+    )
+    made = _controller(
+        config=config,
+        engine=engine,
+        injector=_FakeInjector(focus="com.apple.Terminal"),
+        vocabulary=VocabularyLoader(path),
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
 
-    assert made._why_no_retry(10.0, biased=True) is None
+    assert (
+        engine.calls == 2
+    ), "no second decode — [boost] supplied the bias and the retry was refused"
+    assert engine.bias_flags == [True, False], "the retry must drop the bias"
+    assert session.guard is not None and session.guard.retried is True
 
 
 def test_the_retry_still_declines_when_nothing_biased_the_decode() -> None:
@@ -1335,3 +1367,75 @@ def test_the_retry_still_declines_when_nothing_biased_the_decode() -> None:
     made = _controller()
     reason = made._why_no_retry(10.0, biased=False)
     assert reason is not None and "nothing to drop" in reason
+
+
+class _RetryExplodes(_FakeEngine):
+    """Decodes once, then raises on the §5.7 retry."""
+
+    def transcribe(self, audio: Any, rate: int, **kwargs: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            # Coverage low enough that §5.7 advises the retry — otherwise the
+            # second decode never runs and this test passes by not testing.
+            return Transcription(
+                "the words the user actually said", decoded_seconds=0.05
+            )
+        raise RuntimeError("ct2 fell over on the retry")
+
+
+def test_a_raising_retry_does_not_cost_the_transcript() -> None:
+    """§8 is unconditional and the chain guard only covered the chain.
+
+    Objection C2: `_process` sets `session.raw_transcript` *after* `_judge`
+    returns, and `_judge` runs a second decode. A raise there reached the outer
+    handler with the first decode's words in a local variable and nothing
+    persisted — the decoder had produced a transcript and the product threw it
+    away. The retry runs only when the guard has already fired, which is the
+    degraded path and the one where a second failure is most likely.
+    """
+    from amanuensis.config import AppConfig, EngineConfig
+
+    made = _controller(
+        config=AppConfig(engine=EngineConfig(initial_prompt="Airtable, Firestore")),
+        engine=_RetryExplodes(),
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert (
+        session.raw_transcript == "the words the user actually said"
+    ), "the decoder's output must be on the session before anything can raise"
+    assert (
+        "write_pending" in made.history.calls
+    ), "§8: the words existed and were not written"
+    assert made.engine.calls == 2, "the retry never ran, so nothing was tested"
+    assert session.error is not None
+
+
+def test_the_guard_itself_raising_does_not_cost_the_transcript() -> None:
+    """Same shape, one stage earlier — the evaluation rather than the decode."""
+    made = _controller(engine=_FakeEngine())
+    made.start()
+    try:
+        import amanuensis.guard as guard_module
+
+        original = guard_module.evaluate
+        guard_module.evaluate = lambda *a, **k: (_ for _ in ()).throw(  # type: ignore[assignment]
+            RuntimeError("guard exploded")
+        )
+        try:
+            made.start_session()
+            session = made.end_session()
+            assert session.wait(5.0)
+        finally:
+            guard_module.evaluate = original  # type: ignore[assignment]
+    finally:
+        made.shutdown()
+
+    assert session.raw_transcript == "hello there"
+    assert "write_pending" in made.history.calls

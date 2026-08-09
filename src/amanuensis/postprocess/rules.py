@@ -75,13 +75,41 @@ FILLERS: Final = frozenset(
     {"um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "hmm", "mm", "mmm"}
 )
 
-#: Words that legitimately double in English. Without this guard the
-#: repeat-collapse rule corrupts real sentences — "he had had enough", "the food
-#: that that restaurant serves". The guard is what makes the rule defensible at
-#: all, and the residual risk is a rare repeated proper noun.
-LEGITIMATE_DOUBLES: Final = frozenset({"had", "that", "is", "who", "no", "very", "ha"})
+#: The only words `collapse_immediate_repeats` may collapse.
+#:
+#: **This is an allowlist, and it used to be a blocklist.** The rule shipped with
+#: `LEGITIMATE_DOUBLES = {had, that, is, who, no, very, ha}` — seven words
+#: standing against an open class — on the premise that an adjacent exact
+#: duplicate is a stutter. It is not: English reduplication is productive
+#: (`really really`, `so so`, `many many`, `bye bye`) and every repeated numeral
+#: is a duplicate (`extension 4 4`). All of those lost a word.
+#:
+#: Inverting it makes the safety property **structural** rather than tested. A
+#: rule that can only ever delete a closed-class function word cannot delete a
+#: content word, so the module's no-SHRINK constraint holds by construction —
+#: which matters because the test that was supposed to catch this was given five
+#: inputs and every repeat in them was `the the`.
+#:
+#: Third defect found in this one function. The first two (punctuation- and
+#: case-insensitive comparison, which deleted a proper noun) were fixed by adding
+#: conjuncts without revisiting the premise. This revisits the premise.
+#: Note what is ABSENT: `had`, `that`, `is`, `who`, `no`, `very`, `ha`. Those are
+#: function words that legitimately double — `he had had enough`, `the food that
+#: that restaurant serves` — and the old blocklist named exactly them. The
+#: allowlist has to exclude them too, which is the point: a word is collapsible
+#: only if it is closed-class AND does not double in real English, and the two
+#: conditions are different questions.
+COLLAPSIBLE_REPEATS: Final = frozenset(
+    """a an the and or but of in on at to from by for with are was were be
+    been am do does did have has these those it its as so
+    you he she we they my your his her our their if then than""".split()
+)
 
 _TERMINAL_CHARS: Final = ".!?"
+
+#: Characters that may precede a sentence's first letter without ending the
+#: boundary. `"hello` -> `"Hello`; `20 minutes` must NOT become `20 Minutes`.
+_OPENING_PUNCTUATION: Final = "\"'“‘([{-–—*_"
 
 #: Spoken commands, and the shape they must have to count as one. The phrase
 #: only counts at the start of the transcript or immediately after a sentence
@@ -91,8 +119,15 @@ _COMMANDS: Final[dict[str, str]] = {
     "new paragraph": "\n\n",
     "new line": "\n",
 }
+#: A command must be a **complete sentence**: preceded by the start of the
+#: transcript or a terminator, and followed by a terminator or the end of it.
+#:
+#: The trailing mark used to be optional (`[.!?]?`), which excluded the phrase
+#: mid-sentence and admitted it exactly where it is dangerous — sentence-initial
+#: is where a command lives *and* where `New line items are on order` lives.
+#: `Add a note. New line items are on order.` lost three words.
 _COMMAND_RE: Final = re.compile(
-    r"(?:^|(?<=[.!?]))\s*(" + "|".join(_COMMANDS) + r")\s*[.!?]?\s*",
+    r"(?:^|(?<=[.!?]))\s*(" + "|".join(_COMMANDS) + r")\s*(?:[.!?]\s*|$)",
     re.IGNORECASE,
 )
 
@@ -129,7 +164,16 @@ def normalise_punctuation_spacing(text: str) -> str:
     """
     text = re.sub(r"\s+([,.!?;:])", r"\1", text)
     text = re.sub(r"([,;:])(?=[A-Za-z])", r"\1 ", text)
-    return re.sub(r"([.!?])(?=[A-Z])", r"\1 ", text)
+    # The capital has to begin an ordinary word — an uppercase letter followed
+    # by a lowercase one. `U.S. economy`, `J.R.R. Tolkien` and `Report.PDF` are
+    # an acronym, initials and an extension, and the old rule split all three:
+    # `the U.S. economy` came out as `The U. S. Economy`, because the space this
+    # inserted created a boundary `capitalise_sentences` then acted on.
+    #
+    # Same defect as `file.py` -> `file.Py`, with the case inverted. The inverse
+    # of "lowercase implies an identifier" is not "uppercase implies a
+    # boundary": uppercase after a dot inside a token is an acronym.
+    return re.sub(r"([.!?])(?=[A-Z][a-z])", r"\1 ", text)
 
 
 def strip_fillers(text: str) -> str:
@@ -151,27 +195,26 @@ def collapse_immediate_repeats(text: str) -> str:
     production, not of intent. Three conditions, and **two of them were added
     here after the port destroyed a proper noun**:
 
-    1. `LEGITIMATE_DOUBLES` — a handful of English words genuinely double
-       (`he had had enough`, `the food that that restaurant serves`). Without
-       this the rule is indefensible; the experiment had it.
+    1. **The word must be in `COLLAPSIBLE_REPEATS`.** An allowlist of
+       closed-class function words, not a blocklist of exceptions — so the rule
+       structurally cannot delete a content word. `really really`, `bye bye` and
+       `extension 4 4` all survive, and all three lost a word under the
+       blocklist.
 
     2. **The earlier token must not carry trailing punctuation.** `Paste it into
        Word, word for word.` is not a stutter — a comma separates two different
-       words — and the experiment's punctuation-insensitive comparison collapsed
-       it to `Paste it into word for word.`, deleting the proper noun and
-       keeping the common one.
+       words — and a punctuation-insensitive comparison collapsed it to `Paste
+       it into word for word.`, deleting the proper noun and keeping the common
+       one.
 
     3. **The two must match in case.** A decoder repeating itself emits the same
        surface form both times, so a case difference is evidence of two
-       different words rather than one said twice. `Word`/`word`, `Mark`/`mark`,
-       `Bill`/`bill`.
+       different words rather than one said twice. `Word`/`word`, `Mark`/`mark`.
 
-    Conditions 2 and 3 put this rule in the same hazard class as the one this
-    module deliberately does *not* implement: silently rewriting a proper noun
-    into its lowercase homograph. That the risk arrived through the *repeat*
-    rule rather than the capitalisation rule is the useful part — the module
-    docstring argues at length about a rule it declines to write, and the
-    danger was already present in a rule it inherited without re-examining.
+    Three defects have now been found in this function and all three were the
+    same mistake at different depths: assuming that a shape which *looks* like an
+    artefact is one. Conditions 2 and 3 were added by patching; condition 1
+    replaced the premise.
 
     The surviving token keeps the *later* surface form, which is the one
     carrying any sentence punctuation.
@@ -184,7 +227,7 @@ def collapse_immediate_repeats(text: str) -> str:
             bool(out)
             and bool(bare)
             and bare == _bare(previous)
-            and bare not in LEGITIMATE_DOUBLES
+            and bare in COLLAPSIBLE_REPEATS
             # Condition 2: a boundary mark on the first token means these are
             # two words with punctuation between them, not one word twice.
             and not re.search(r"[^\w%]$", previous)
@@ -209,19 +252,52 @@ def capitalise_sentences(text: str) -> str:
     A terminator opens a boundary only when whitespace or end-of-string follows
     it. Without that clause `open file.py` becomes `open file.Py` — the defect
     found while porting, which the experiment's corpus could not reveal.
+
+    **A boundary is closed by the first non-space character, not by the first
+    letter.** The original cleared its flag only after uppercasing something, so
+    a leading digit kept the boundary open and the capital landed on whatever
+    word came next: `20 minutes left` became `20 Minutes left`. Opening
+    punctuation is the deliberate exception — `"hello` should still yield
+    `"Hello` — so quotes and brackets are skipped over rather than closing the
+    boundary.
     """
     if not text:
         return text
     chars = list(text)
     at_boundary = True
     for index, char in enumerate(chars):
-        if at_boundary and char.isalpha():
-            chars[index] = char.upper()
+        if at_boundary:
+            if char.isspace() or char in _OPENING_PUNCTUATION:
+                continue
+            if char.isalpha():
+                chars[index] = char.upper()
+            # Closed either way: a digit, a symbol or a letter all begin the
+            # sentence's first word, and only a letter can carry a capital.
             at_boundary = False
-        elif char in _TERMINAL_CHARS:
+            continue
+        if char in _TERMINAL_CHARS:
             following = chars[index + 1] if index + 1 < len(chars) else " "
-            at_boundary = following.isspace()
+            at_boundary = following.isspace() and not _abbreviation_dot(chars, index)
     return "".join(chars)
+
+
+def _abbreviation_dot(chars: list[str], index: int) -> bool:
+    """Is the `.` at `index` the end of an acronym rather than of a sentence?
+
+    `the U.S. economy` and `J.R.R. Tolkien` both put a dot-then-space in the
+    middle of a sentence, and treating it as a boundary capitalised the next
+    word: `The U.S. Economy is fine.` Fixing the spacing rule alone was not
+    enough, because this rule reaches the same wrong conclusion independently.
+
+    The test is a single letter immediately before the dot, itself preceded by a
+    dot or by whitespace — the shape of `U.S.`, `J.R.R.`, `e.g.`. Genuinely
+    ambiguous with a sentence ending in a single letter (`the grade was A. It
+    was good`), and that case loses a capital rather than gaining a wrong one,
+    which is the direction this module argues for everywhere else.
+    """
+    if index < 1 or not chars[index - 1].isalpha():
+        return False
+    return index < 2 or chars[index - 2] == "." or chars[index - 2].isspace()
 
 
 def ensure_terminal_punctuation(text: str) -> str:

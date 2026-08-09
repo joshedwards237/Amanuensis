@@ -264,9 +264,9 @@ class DictationController:
         #: not about the dictation — `to_history_row` should not grow a column
         #: for it.
         self._focus_by_session: dict[str, str | None] = {}
-        #: Monotonic stamp of the last retention sweep. `None` until the daemon
-        #: does the start-up one, so the first worker sweep is a full interval
-        #: after start rather than on the first dictation.
+        #: Monotonic stamp of the last retention sweep. Seeded by `start()`,
+        #: which is what makes the first worker sweep land a full interval after
+        #: the daemon's own start-up sweep rather than on the first dictation.
         self._last_sweep_at: float | None = None
 
     # -- state -------------------------------------------------------------
@@ -311,6 +311,13 @@ class DictationController:
         self.engine.load()
         self.engine.warm_up()
         self.injector.warm_up()
+
+        # Seeds the retention clock. `_maybe_sweep`'s guard treats `None` as
+        # "never swept" and runs, so without this the first dictation of every
+        # daemon ran a second full sweep on the worker — the comment on the
+        # field claimed the daemon-start sweep seeded it and nothing did
+        # (objection C8).
+        self._last_sweep_at = time.monotonic()
 
         worker = threading.Thread(
             target=self._drain, name="amanuensis-worker", daemon=True
@@ -571,6 +578,16 @@ class DictationController:
             session.timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
             session.engine = f"{self.config.engine.backend}:{self.engine.model_name}"
 
+            # **On the session the instant it exists** (objection C2). This
+            # used to be assigned after `_judge` returned — and `_judge` runs a
+            # SECOND decode for §5.7's retry, so a raise in there reached the
+            # handler below with the decoder's words in a local variable and
+            # `raw_transcript` still `None`. Nothing was persisted and nothing
+            # was injected. O1's fix guarded the chain; this is the same shape
+            # one stage earlier, and the retry runs only on the degraded path
+            # where a second failure is likeliest.
+            session.raw_transcript = decoded.text
+
             started = time.perf_counter()
             decoded = self._judge(session, decoded, trimmed, boost=boost)
             session.timings.guard_ms = (time.perf_counter() - started) * 1000.0
@@ -644,6 +661,16 @@ class DictationController:
                 session.error = result.error
         except Exception as exc:
             session.error = f"{type(exc).__name__}: {exc}"
+            # §8 is unconditional, so it applies on the failure path too. If a
+            # transcript exists it is written before this returns — anything
+            # that raised after the decode would otherwise cost the user words
+            # the product had already produced. Guarded in turn, because the
+            # write itself can fail and the state below must still be set.
+            if session.raw_transcript:
+                try:
+                    self.history.write_pending(session)
+                except Exception:
+                    pass
             self._set_state(DictationState.ERROR)
             return
 
