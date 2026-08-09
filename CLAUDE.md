@@ -13,95 +13,67 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 2b closed 2026-08-03, follow-up fix closed 2026-08-07. Phase 3 next.
+## Status: Phase 3 built 2026-08-08. **Gate not yet run — it needs the operator.**
 
-The loop is closed. `manu daemon` holds the model and the microphone, a
-listen-only `CGEventTap` watches right-option, and `DictationController` runs
-press → capture → transcribe → **persist** → inject on one serial worker. A
-menu-bar glyph reports idle / recording / transcribing / error.
+Post-processing exists. `postprocess_ms` is no longer structurally zero, the
+dictionary is live on both mechanisms, and history retains and purges. What is
+*not* done is the gate: §9 wants ten real dictations of >= 60 s judged on edit
+rate, and that is dictation the operator has to do.
 
-**G1 is met: p50 223.0 ms / p95 270.0 ms** against 400/800, over ten real
-dictations in the 7–16 s band, read from the daemon's own `history.db` rows —
-`LatencyBreakdown` already persists, so the daemon measures itself and there is
-no harness between a voice and the number. Still a floor: `postprocess_ms` is
-the one unfilled stage, and Phase 3 fills it.
+**What shipped.** `RuleBasedPostProcessor` (ported from
+`experiments/scripts/exp4_rules_only.py`, not rewritten — that code has measured
+numbers attached: p50 0.0445 ms, 0/6 INVENT, 0/6 SHRINK). `vocabulary.toml` with
+`[replace]` as one compiled alternation and `[boost]` scoped per bundle
+identifier. `manu vocab check`. `manu history` with `--pending`, `--purge`,
+`--raw`. `retain_days` reaching `history.db` at last. Two harnesses:
+`scripts/gate_phase3.py` and `scripts/measure_long_audio.py`.
 
-**The Phase 2b follow-up shipped 2026-08-07** — the collapse guard, PRD §5.7,
-record at `docs/gates/phase-2b-followup.md`. `initial_prompt` could silently
-destroy a transcript and had shipped in Phase 1 with nothing watching it; a
-30.5-second dictation returned two words and injected them. The guard measures
-**decoded coverage** — how much of the retained speech the decoder got through —
-and below `min_decoded_coverage` the text is not injected. Verified on real
-audio: 8.3% on a reproduced collapse, 82.8% floor on six genuine samples, zero
-false positives.
+**Three defects in shipped code, found by reviewing the spec rather than the
+code**, and all three were live before this phase: a raising post-processor lost
+the transcript; `end_session()` queued a session before stashing the focus, which
+silently disabled §6.3's protection against injecting into the wrong
+application; and `_why_no_retry` refused §5.7's recovery in exactly the
+configuration §5.6 recommends.
 
-Three things from it that will bite again:
+**Four things to carry into Phase 4 and the gate:**
 
-- **A guard that measures the user is measuring the wrong thing.** The first
-  design was words per second. It carries speaking rate as a confound, and it
-  cannot judge short audio at all — word count is an integer, so at two seconds
-  the rate quantises to 0.5 w/s *per word* and a genuine "Yes." is the same
-  measurement as a collapse. Short dictation is the ordinary case here, so the
-  duration exemption that fell out of it was a blind spot over the most common
-  input.
-- **A verification written against a remembered failure is written against a
-  description.** The first `verify_guard.py` used a prompt reconstructed from
-  the gate record's prose, collapsed nothing, ran the negative control twice and
-  printed PASS. Fourth instance of a check that could not fail.
-- **`mypy --strict` is not optional after a contract change.** 337 tests went
-  green with `manu transcribe` broken by the `str` → `Transcription` return
-  type. The suite mocks past those callers; the type checker names both lines.
+- **Fixing an instance is not fixing a shape.** The chain-guard fix (objection
+  O1) was recorded as restoring §8's guarantee. It closed one third of the
+  window: a raise in the guard's *retry* still discarded a transcript the decoder
+  had produced, and the code review found it. Fifth instance of this
+  specification asserting a guarantee the code did not honour.
+- **Verify a test by breaking the code.** Two regression tests written for
+  accepted dispositions could not fail — reverting the fix left 492 tests green.
+  Both were written immediately after watching the bug fail, which is what makes
+  it feel verified. It is not the same event. Ninety seconds of sabotage catches
+  it; see `AGENTS.md`.
+- **Instruments disagree with the product silently.** Two of the three problems
+  reported from measurement this phase were in the harness, not the product —
+  a pre-flight microphone check that could not fail, and a coverage figure that
+  reimplemented `guard.evaluate` and did not clamp. Call the product's own
+  function; `measure_g1.py` reusing `tier.percentile` is the precedent.
+- **The rules pass keeps hiding hazards in rules nobody questioned.** Three
+  separate defects in `collapse_immediate_repeats` alone. The first two were
+  patched with conjuncts; the third was fixed by inverting the premise, which is
+  what should have happened the first time.
 
-`docs/gates/phase-2b.md` is the gate record. Six findings, four amended the PRD.
-Three are worth carrying:
+**Still open, and the gate needs them:**
 
-- **G1's number is the best case of a linear relationship.** `transcribe_ms ≈
-  48.8 + 13.69 × seconds_of_audio`. A 60-second dictation lands at ~909 ms —
-  over G1's p95. Not a violation (§2 binds G1 at 10 s) and **Phase 3's gate is
-  ten dictations of ≥ 60 s**, so it will run straight into this. It is the
-  utterance length, not post-processing.
-- **The daemon could not be stopped.** Ctrl-C and SIGTERM both did nothing; only
-  `kill -9` worked. A Python signal handler cannot run while the main thread is
-  inside `NSApplication.run()`, and `stop_` needs a dequeued event to be
-  noticed. Both halves are fixed in `ui/indicator.py`. The indicator was correct
-  the whole time — the failure was that knowing did not help.
-- **`restore_ms` had no column in `history.db`** for the whole of Phase 2a,
-  which added the field as its headline finding. Second instance of "an
-  amendment must reach the tooling".
-
-Still contracts: post-processing, the tray, `toggle`/`status` and their IPC
-transport. `history` refuses and names Phase 3; `toggle` and `status` refuse and
-now name Phase 4.
+- **The short-utterance corpus does not exist.** `scripts/record_phase3_corpus.py
+  --set short`. §5.7's false-positive direction is untested and the blind spot is
+  at the *short* end — the ten 60-second takes measured coverage 1.0 across the
+  board and the guard never fired, which is what objection O5 predicted and is
+  not evidence about the direction that matters.
+- **§2's decode model is loose at length.** Measured over ten ~74 s takes:
+  p50 917–938 ms against a predicted 1069, and p95 1247–1345 ms against 1083, on
+  two runs of the same files. A duration-only linear model cannot predict a
+  single decode, and `_why_no_retry` spends that model as a budget.
+- **G1 is missed at 75 s on decode alone** (p50 ~930 ms against an 800 ms p95).
+  §2 binds G1 at ten seconds and recorded this prediction in advance; it is
+  utterance length, not post-processing, and per objection O4 it is **not** a
+  reject exemption.
 
 **Stop at the Phase 3 gate.** Do not begin Phase 4 until Phase 3 is approved.
-
----
-
-## Previously: Phase 2a closed 2026-08-02.
-
-Text reaches the cursor. `MacOSInjector` does clipboard paste with save/restore
-and a keystroke fallback; `HistoryStore` is the minimum §8 write. Injection
-passes in TextEdit, Terminal, VS Code and Chrome on both strategies, verified by
-Accessibility read-back rather than by eye (`scripts/gate_2a_inject.py`).
-
-One finding there is a standing hazard: **`strategy = "keystroke"` is silently
-rewritten by the target application's text substitution** — five changes in one
-sentence into TextEdit, where paste is byte-identical.
-
-## Previously: Phase 1 closed 2026-08-01.
-
-The ASR path works. `manu install` downloads the model once and records this
-machine's tier; `manu transcribe --seconds 10` records from the microphone and
-prints the transcript with per-stage timings.
-
-G1 is met: ASR p50 299.7 ms / p95 373.3 ms through the product classes, against
-400/800 ms. Tier A. G3 verified — zero sockets, zero bytes, positive control.
-Engine chosen in `docs/adr/0001-engine-selection.md`: faster-whisper `tiny.en`.
-
-`docs/gates/phase-1.md` lists ten findings, four of which amended the PRD. One
-item there still blocks Phase 4: the tier check's reference clip has unsettled
-provenance and is not committed, so `manu install` needs
-`scripts/make_tier_clip.sh` or `--clip PATH` first.
 
 ---
 

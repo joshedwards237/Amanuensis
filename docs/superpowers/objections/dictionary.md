@@ -9,12 +9,14 @@ objections:
     category: premise
     severity: high
     claim: "B9 says the raw transcript is persisted so a bad rule is recoverable. It is not: to_history_row() emits one transcript and history.db has one column."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Shipped 2026-08-08. `history.db` grew a `raw_transcript` column through all four touch points — `_SCHEMA`, `_COLUMNS`, `_MIGRATIONS` and `to_history_row` — and the row is populated always rather than only when the two differ, because a column filled sometimes cannot answer the question it exists for. §7.5's first Phase 5 constraint is now expressible in the schema. The objection's framing was right and load-bearing: this was a precondition of two features and the business of neither."
   - id: O2
     category: evidence
     severity: high
     claim: "The headline 4/10 to 9/10 proper-noun result comes from one corpus sample, and the [boost] table, slice V3 and open question O2 all rest on it."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and applied, and the disposition it asked for was carried out: the boost list was run against all six samples, and it DEGRADED two of them (+3.2 and +5.2 WER) for a net macro gain of 1.1. The objection's conclusion follows — 'if boosting degrades unrelated dictation, the two-table design is wrong and [boost] should be scoped to something narrower than a global prompt.' Shipped exactly so: `[boost.apps]` keyed on the bundle identifier `focus_identity()` already returns, a per-app list REPLACING rather than unioning with the global one, and `[boost] terms` defaulting to empty. The n=1 headline is retired; what replaced it is a measured trade, not a win."
   - id: O3
     category: premise
     severity: high
@@ -25,32 +27,38 @@ objections:
     category: alternatives
     severity: medium-high
     claim: "B4's casing preservation is the macOS text-substitution hazard from §7.3, re-committed by the one mechanism whose selling point is determinism."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Rejected as drafted, and the rejection shipped. Replacement is literal — `'csp' = 'CSV'` yields `CSV` at a sentence start and anywhere else — with tests pinning it. The objection's argument was the correct one and got stronger later: the phase's code review found the reversed chain `['vocabulary', 'rules']` producing `Csv is the format`, which is this exact heuristic reached by configuration rather than by code. `_chain` now validates order, so the behaviour B4 was rejected for is unreachable from either direction."
   - id: O5
     category: completeness
     severity: medium-high
     claim: "Nothing tells the user a rule fired, so a wrongly-firing entry presents as an ASR error and sends them to the wrong fix."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and shipped in three places, because one was not enough. `process_traced` returns which entries fired and the controller writes them to a `fired_entries` column; `manu history --last` prints the raw transcript alongside the final text when they differ, which is what makes 'did the dictionary touch this?' answerable at all; and `manu vocab check` answers it offline. The objection's disposition — 'the session records which entries fired; V4 becomes the way to read that' — is honoured, and the phase's own choice-story #10 found the gap it left: the column existed and nothing could show it."
   - id: O6
     category: measurement
     severity: medium
     claim: "The Phase 3 gate measures edit rate, which the dictionary reduces by construction, so entries written against the gate dictations produce a number that measures nothing."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and ENFORCED rather than documented. `scripts/gate_phase3.py` refuses the gate if `vocabulary.toml` was modified after the first gate dictation, and separately if it has zero `[replace]` entries or if no entry fired across the set — because a frozen EMPTY dictionary satisfies a SHA-256 and measures nothing. The gate record states the digest, the entry count and the last-edited time. The objection said the gate was trivially gamed by this feature; the answer is a check the person writing the record cannot skip."
   - id: O7
     category: alternatives
     severity: medium
     claim: "[boost] and [engine] initial_prompt are two config keys for one behaviour, with an ordering rule between them."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Decided, as the objection demanded rather than defaulted. `[boost]` is authoritative and `[engine] initial_prompt` is documented as prose framing only; `FasterWhisperEngine._prompt` concatenates prose first, terms second. The ordering rule the objection complained about still exists, but it is now one rule in one function with a stated reason, rather than two config surfaces with an implicit precedence. The deprecation is written into §5.6."
   - id: O8
     category: premise
     severity: low
     claim: "The 60-character key limit is inherited from a product with a mobile text field and has no constraint here to inherit."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and dropped. There is no key-length limit. The only cap is `MAX_BOOST_TERMS = 100`, which is not inherited from anywhere — it exists because the prompt window is finite and silently drops overflow, which would present to a user as 'my term does not work' rather than 'my list is too long', and it warns rather than truncating in silence."
   - id: O9
     category: premise
     severity: medium
     claim: "§5.6's whole justification for two mechanisms is 'they fail in different places', and neither the PRD nor the draft says where either one fails."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and written into §5.6 with measurements rather than assertion. `[boost]` fails by degrading unrelated speech (+3.2 and +5.2 WER on two of six samples) and by collapsing a transcript entirely on one; `[replace]` fails by firing on a homonym, invisibly, which is why every firing is recorded. They do fail in different places, and the sentence §5.6 rested the two-table design on is now supported by something."
   - id: O10
     category: measurement
     severity: low-medium
@@ -61,7 +69,8 @@ objections:
     category: sequencing
     severity: low
     claim: "manu vocab check arrives fourth, after users have been writing entries for two slices with no way to see how they interact."
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted, and resolved by resequencing rather than by the alternative. `manu vocab check` shipped in the same phase as the `[replace]` map rather than after it, so no user writes entries for two slices without a way to see how they interact — and the fired-entry reporting from O5 covers the same need from the other direction, which the objection offered as the second option. `--app` was added on top, because per-application keying raised the discoverability bar the objection was pointing at."
 ---
 
 # Objection record — Dictionary
