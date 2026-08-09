@@ -415,3 +415,44 @@ def test_a_decode_with_no_segments_reports_a_zero_span(fake_whisper: type) -> No
 
     assert result.text == ""
     assert result.decoded_seconds == 0.0
+
+
+def test_the_boost_segment_cannot_take_the_shape_that_collapses_a_transcript() -> None:
+    """The collapse guard's deferred O6, answered on the half this code owns.
+
+    §5.7's measured trigger is a prompt with **the form of a complete short
+    utterance the decoder can plausibly emit as the whole transcript** —
+    `initial_prompt = "And how much is this?"` produces exactly that string from
+    a 25-second clip, deterministically. A comma-separated term list carries no
+    sentence-final punctuation and is structurally not that shape.
+
+    Not a heuristic: a prose *detector* over user-authored `initial_prompt` was
+    rejected, because it false-positives on legitimate prompts and §5.7's guard
+    catches the failure directly. This constrains a string the engine writes.
+    """
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.faster_whisper import FasterWhisperEngine
+
+    engine = FasterWhisperEngine(EngineConfig(initial_prompt=""))
+    segment = engine._prompt(("Airtable", "Firestore", "XLSX"))
+
+    assert segment == "Airtable, Firestore, XLSX"
+    assert not segment.endswith((".", "?", "!"))
+
+
+def test_prose_framing_comes_before_the_terms() -> None:
+    """§5.6's O7: `[boost]` is authoritative and `initial_prompt` is prose
+    framing only. Concatenating in that order is what "framing" means."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.faster_whisper import FasterWhisperEngine
+
+    engine = FasterWhisperEngine(EngineConfig(initial_prompt="Technical dictation."))
+    assert engine._prompt(("XLSX",)) == "Technical dictation. XLSX"
+
+
+def test_no_prompt_and_no_terms_is_none_rather_than_empty() -> None:
+    """faster-whisper treats `""` as a prompt and `None` as no prompt at all."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.faster_whisper import FasterWhisperEngine
+
+    assert FasterWhisperEngine(EngineConfig(initial_prompt=""))._prompt(()) is None

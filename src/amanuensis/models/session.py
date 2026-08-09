@@ -59,6 +59,18 @@ class LatencyBreakdown:
     #: exists to shrink would make this breakdown useless for the one argument
     #: it was built to support.
     vad_ms: float = 0.0
+    #: Re-reading `vocabulary.toml` when its mtime changed, and recompiling the
+    #: replacement alternation. Inside G1 and inside `g1_ms`: the read happens at
+    #: the top of the worker, before trimming, so it is time between hotkey
+    #: release and text at the cursor. §6.3's standing rule is that a stage
+    #: inside that window needs a field — this is the FIFTH phase running in
+    #: which that rule was broken by a new stage.
+    #:
+    #: Deliberately not excluded as "the user's own cost". §2's two exclusions
+    #: (`capture_ms`, `restore_ms`) are both justified by falling *outside* the
+    #: release-to-text window, never by whose fault the time is, and admitting
+    #: the second justification would let any future stage escape the same way.
+    vocab_ms: float = 0.0
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
     #: The §8 pre-injection write. Added in Phase 2a, and *inside* G1 for the
@@ -106,6 +118,7 @@ class LatencyBreakdown:
         """
         return (
             self.asr_ms
+            + self.vocab_ms
             + self.guard_ms
             + self.postprocess_ms
             + self.persist_ms

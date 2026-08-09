@@ -26,6 +26,10 @@ from typing import Final
 from amanuensis.config import PostprocessConfig
 from amanuensis.postprocess.base import TextPostProcessor
 from amanuensis.postprocess.rules import RuleBasedPostProcessor
+from amanuensis.postprocess.vocabulary import (
+    VocabularyLoader,
+    VocabularyPostProcessor,
+)
 
 __all__ = ["build_chain", "create_processor"]
 
@@ -33,15 +37,15 @@ __all__ = ["build_chain", "create_processor"]
 #: accepted by the config validator and not yet built; removing a name from this
 #: table and adding it below is what "shipping it" means.
 _UNBUILT: Final[dict[str, str]] = {
-    # Being built in this phase, in the slice after this one. Listed rather than
-    # left to fail on an ImportError, so the branch is never shipped broken and
-    # a user who set the key early gets a sentence instead of a traceback.
-    "vocabulary": "Phase 3, in the slice after this one",
     "llm": "Phase 5",
 }
 
 
-def create_processor(name: str, config: PostprocessConfig) -> TextPostProcessor:
+def create_processor(
+    name: str,
+    config: PostprocessConfig,
+    vocabulary: VocabularyLoader | None = None,
+) -> TextPostProcessor:
     """Build one processor by its `chain` name.
 
     Raises `ValueError` with the known names on an unknown one, and with the
@@ -50,16 +54,23 @@ def create_processor(name: str, config: PostprocessConfig) -> TextPostProcessor:
     """
     if name == "rules":
         return RuleBasedPostProcessor(config)
+    if name == "vocabulary":
+        # The loader is passed in rather than constructed here: `[boost]` reads
+        # the same file before the decode, so one snapshot has to serve both
+        # halves of §5.6 or an edit lands on one and not the other.
+        return VocabularyPostProcessor(config, vocabulary)
     if name in _UNBUILT:
         raise ValueError(
             f"postprocess.chain: {name!r} is not built yet — it is built in "
             f"{_UNBUILT[name]}. Remove it from the chain to continue."
         )
-    known = ", ".join(("rules", *_UNBUILT))
+    known = ", ".join(("rules", "vocabulary", *_UNBUILT))
     raise ValueError(f"postprocess.chain: unknown processor {name!r}; known: {known}")
 
 
-def build_chain(config: PostprocessConfig) -> tuple[TextPostProcessor, ...]:
+def build_chain(
+    config: PostprocessConfig, vocabulary: VocabularyLoader | None = None
+) -> tuple[TextPostProcessor, ...]:
     """The whole chain, in `chain` order.
 
     Order is significant and this function is the only thing that preserves it:
@@ -68,4 +79,4 @@ def build_chain(config: PostprocessConfig) -> tuple[TextPostProcessor, ...]:
     daemon that will not start rather than a dictation that silently skips a
     stage.
     """
-    return tuple(create_processor(name, config) for name in config.chain)
+    return tuple(create_processor(name, config, vocabulary) for name in config.chain)

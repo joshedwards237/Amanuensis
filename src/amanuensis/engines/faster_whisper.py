@@ -50,6 +50,7 @@ up in a table as though it were an accelerator tier.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -262,7 +263,12 @@ class FasterWhisperEngine(TranscriptionEngine):
         self._decode(model, noise)
 
     def transcribe(
-        self, audio: NDArray[np.float32], sample_rate: int, *, biased: bool = True
+        self,
+        audio: NDArray[np.float32],
+        sample_rate: int,
+        *,
+        biased: bool = True,
+        boost: Sequence[str] = (),
     ) -> Transcription:
         """One utterance in, raw transcript out.
 
@@ -282,10 +288,15 @@ class FasterWhisperEngine(TranscriptionEngine):
                 f"audio must be {SUPPORTED_SAMPLE_RATE} Hz; got {sample_rate}"
             )
         model = self._require_model("transcribe")
-        return self._decode(model, audio, biased=biased)
+        return self._decode(model, audio, biased=biased, boost=boost)
 
     def _decode(
-        self, model: Any, audio: NDArray[np.float32], *, biased: bool = True
+        self,
+        model: Any,
+        audio: NDArray[np.float32],
+        *,
+        biased: bool = True,
+        boost: Sequence[str] = (),
     ) -> Transcription:
         """The one place decoding parameters are set.
 
@@ -303,7 +314,7 @@ class FasterWhisperEngine(TranscriptionEngine):
             audio,
             language=self._config.language or None,
             beam_size=BEAM_SIZE,
-            initial_prompt=(self._config.initial_prompt or None) if biased else None,
+            initial_prompt=self._prompt(boost) if biased else None,
             # Trimming is `audio/vad.py`'s job, for every engine. Explicit
             # rather than defaulted, so a library default flip cannot quietly
             # start double-trimming.
@@ -317,6 +328,33 @@ class FasterWhisperEngine(TranscriptionEngine):
             # and nothing in the API promises it is monotonic in `end`.
             decoded_seconds = max(decoded_seconds, float(segment.end))
         return Transcription("".join(text), decoded_seconds)
+
+    def _prompt(self, boost: Sequence[str]) -> str | None:
+        """`[engine] initial_prompt`, then `[boost]`'s terms. Prose first.
+
+        §5.6's O7: two config keys for one behaviour, resolved by making
+        `[boost]` authoritative and documenting `initial_prompt` as prose
+        framing only. Concatenating in that order is what "framing" means —
+        the prose sets register, the terms are the vocabulary.
+
+        **The generated segment is shaped so it cannot collapse a transcript.**
+        §5.7's measured trigger is a prompt with the form of a complete short
+        utterance the decoder can plausibly emit as the whole transcript —
+        `"And how much is this?"` produces exactly that string from a 25-second
+        clip, deterministically. A comma-separated term list with no
+        sentence-final punctuation is structurally not that shape. This is a
+        constraint on a string this method writes, not a heuristic over the
+        user's prose: a prose *detector* over `initial_prompt` was rejected,
+        because it has a false-positive population and §5.7's guard catches the
+        failure directly.
+
+        `None` rather than `""` when there is nothing: faster-whisper treats the
+        empty string as a prompt and the absence as no prompt at all.
+        """
+        parts = [
+            part for part in (self._config.initial_prompt, ", ".join(boost)) if part
+        ]
+        return " ".join(parts) or None
 
     def _require_model(self, verb: str) -> Any:
         if self._model is None:

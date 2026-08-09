@@ -57,6 +57,7 @@ from amanuensis import guard
 from amanuensis.models.results import GuardOutcome, InjectionResult, Transcription
 from amanuensis.models.session import DictationSession
 from amanuensis.postprocess.base import TracedPostProcessor
+from amanuensis.postprocess.vocabulary import VocabularyLoader
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
     from collections.abc import Callable, Sequence
@@ -224,6 +225,7 @@ class DictationController:
         capture: Any,
         detector: Any,
         on_state_change: Callable[[DictationState], None] | None = None,
+        vocabulary: VocabularyLoader | None = None,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -232,6 +234,11 @@ class DictationController:
         self.history = history
         self.capture = capture
         self.detector = detector
+        # Optional so every existing caller and test keeps working. `None` means
+        # no dictionary at all — not an empty one — and the difference shows up
+        # in `_why_no_retry`, where "no bias was applied" is a reason and "the
+        # bias was empty" is the same thing said differently.
+        self.vocabulary = vocabulary
         self._on_state_change = on_state_change
 
         self._queue: queue.Queue[DictationSession | None] = queue.Queue()
@@ -414,7 +421,12 @@ class DictationController:
                 session.completed.set()
 
     def _judge(
-        self, session: DictationSession, decoded: Transcription, trimmed: Any
+        self,
+        session: DictationSession,
+        decoded: Transcription,
+        trimmed: Any,
+        *,
+        boost: tuple[str, ...] = (),
     ) -> Transcription:
         """Run §5.7's guard, and the retry if one is both advised and payable.
 
@@ -435,11 +447,19 @@ class DictationController:
             session.guard = guard.resolve(first, None)
             return decoded
 
-        refusal = self._why_no_retry(trimmed.retained_seconds)
+        # "Was anything biasing this decode?" rather than "is one config key
+        # non-empty" (objection O3). `[boost]` supplies bias while
+        # `initial_prompt` is empty, which is the configuration §5.6 recommends —
+        # and the old check answered "nothing to drop" there, making the guard's
+        # whole recovery path unreachable exactly where the new bias lives.
+        biased = bool(self.config.engine.initial_prompt) or bool(boost)
+        refusal = self._why_no_retry(trimmed.retained_seconds, biased=biased)
         if refusal is not None:
             session.guard = replace(guard.resolve(first, None), reason=refusal)
             return decoded
 
+        # `biased=False` drops `initial_prompt`; passing no boost drops the
+        # other half. The retry has to shed all of it or it is the same decode.
         retried = self.engine.transcribe(
             trimmed.audio, session.sample_rate, biased=False
         )
@@ -455,7 +475,7 @@ class DictationController:
         session.guard = verdict
         return retried if verdict.chose_retry else decoded
 
-    def _why_no_retry(self, retained_seconds: float) -> str | None:
+    def _why_no_retry(self, retained_seconds: float, *, biased: bool) -> str | None:
         """`None` when a retry is worth running, otherwise why it is not.
 
         Two refusals, and both would otherwise be silent. Re-decoding with no
@@ -468,9 +488,9 @@ class DictationController:
         settings = self.config.guard
         if settings.retry_below_coverage <= 0.0:
             return "the retry is disabled (retry_below_coverage = 0)"
-        if not self.config.engine.initial_prompt:
+        if not biased:
             return (
-                "no initial_prompt is configured, so an unbiased retry would be "
+                "nothing biased this decode, so an unbiased retry would be "
                 "the same decode — nothing to drop"
             )
         predicted_ms = _DECODE_INTERCEPT_MS + _DECODE_MS_PER_SECOND * retained_seconds
@@ -491,17 +511,32 @@ class DictationController:
         """
         focus = self._focus_by_session.pop(session.id, None)
         try:
+            # ONE read point for `vocabulary.toml`, here, before the decode.
+            # `[boost]` needs the terms before transcription and `[replace]`
+            # does not care, so the earlier point serves both halves of §5.6
+            # from one snapshot (objection O10).
+            boost: tuple[str, ...] = ()
+            vocabulary_error: str | None = None
+            if self.vocabulary is not None:
+                started = time.perf_counter()
+                loaded = self.vocabulary.refresh()
+                boost = loaded.terms_for(focus)
+                vocabulary_error = self.vocabulary.error
+                session.timings.vocab_ms = (time.perf_counter() - started) * 1000.0
+
             started = time.perf_counter()
             trimmed = self.detector.trim(session.audio, session.sample_rate)
             session.timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
             started = time.perf_counter()
-            decoded = self.engine.transcribe(trimmed.audio, session.sample_rate)
+            decoded = self.engine.transcribe(
+                trimmed.audio, session.sample_rate, boost=boost
+            )
             session.timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
             session.engine = f"{self.config.engine.backend}:{self.engine.model_name}"
 
             started = time.perf_counter()
-            decoded = self._judge(session, decoded, trimmed)
+            decoded = self._judge(session, decoded, trimmed, boost=boost)
             session.timings.guard_ms = (time.perf_counter() - started) * 1000.0
             session.raw_transcript = decoded.text
             verdict = session.guard
@@ -557,6 +592,14 @@ class DictationController:
             session.fired_entries = tuple(fired)
             if self.processors:
                 session.final_text = text
+
+            if vocabulary_error is not None and session.error is None:
+                # The dictation succeeded; their file did not parse. Recorded on
+                # the session so it reaches history.db and the indicator, because
+                # a reload that fails silently is C3's original complaint one
+                # layer down — the user edits the file, nothing changes, and
+                # nothing says why (choice-story #5).
+                session.error = f"vocabulary.toml was not reloaded: {vocabulary_error}"
 
             result = deliver(session, self.history, self.injector, focus)
             if not result.succeeded and result.error is not None:

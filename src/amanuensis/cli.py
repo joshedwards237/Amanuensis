@@ -143,6 +143,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="paste the transcript at the cursor (Phase 2a; needs Accessibility)",
     )
 
+    vocab = subparsers.add_parser("vocab", help="inspect vocabulary.toml (PRD §5.6)")
+    vocab_sub = vocab.add_subparsers(dest="vocab_action", metavar="ACTION")
+    check = vocab_sub.add_parser(
+        "check", help="show which entries would fire on some text"
+    )
+    check.add_argument(
+        "text",
+        nargs="?",
+        help="text to run the [replace] map over; omit with --app",
+    )
+    check.add_argument(
+        "--app",
+        action="store_true",
+        # `[boost.apps]` is keyed on an identifier the product never displays,
+        # so without this the feature serves a user who edits TOML *and* can
+        # name their applications the way macOS does (choice-story #7). §6.1's
+        # argument against new verbs is that they duplicate a text editor;
+        # printing a bundle identifier duplicates nothing the user can do.
+        help="print the frontmost application's bundle id and its boost terms",
+    )
+
     install = subparsers.add_parser(
         "install",
         help="download the model once and measure this machine's tier",
@@ -191,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon(config)
     if args.verb == "history" and args.last:
         return _history_last(config)
+    if args.verb == "vocab":
+        if args.vocab_action != "check":
+            print("manu vocab: try `manu vocab check --help`.", file=sys.stderr)
+            return _EXIT_USAGE
+        return _vocab_check(text=args.text, show_app=args.app)
 
     print(
         f"manu {args.verb}: not implemented yet — it is built in "
@@ -232,6 +258,75 @@ def _history_last(config: AppConfig) -> int:
     return _EXIT_OK
 
 
+def _vocab_check(text: str | None, show_app: bool) -> int:
+    """Show what `vocabulary.toml` would do, and where it lives.
+
+    The only `manu vocab` verb. `add`, `list` and `boost` were rejected: §6.1
+    treats the verb set as the process model's public contract, and they are a
+    second way to do what a text editor already does. This is the one operation
+    the file cannot perform on itself.
+
+    **It re-reads the file directly rather than through a loader**, which is the
+    point rather than an implementation detail (choice-story #5). A user who
+    edits `vocabulary.toml` while the daemon is running never meets the startup
+    parse error — the daemon keeps its last good map and degrades rather than
+    stalling — so this is where a broken file has to become legible, with the
+    key named.
+    """
+    from amanuensis.postprocess.vocabulary import (
+        default_vocabulary_path,
+        load_vocabulary,
+    )
+
+    path = default_vocabulary_path()
+    try:
+        vocabulary = load_vocabulary(path)
+    except ConfigError as exc:
+        print(f"manu vocab check: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    print(f"{path}  ({vocabulary.entry_count} [replace] entries)")
+    for warning in vocabulary.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+    if show_app:
+        from amanuensis.injection.factory import (
+            UnsupportedPlatformError,
+            create_injector,
+        )
+
+        try:
+            injector = create_injector(InjectionConfig())
+            bundle = injector.focus_identity()
+        except UnsupportedPlatformError as exc:
+            print(f"manu vocab check: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
+        print()
+        print(f"frontmost application: {bundle or '(cannot tell)'}")
+        terms = vocabulary.terms_for(bundle)
+        scoped = bundle is not None and bundle in vocabulary.boost_by_app
+        source = "[boost.apps]" if scoped else "[boost] terms"
+        print(f"boost terms ({source}): {', '.join(terms) if terms else '(none)'}")
+
+    if text is None:
+        if not show_app:
+            print()
+            print("nothing to check — pass some text, or --app.")
+        return _EXIT_OK
+
+    replaced, fired = vocabulary.apply(text)
+    print()
+    print(replaced)
+    print()
+    if fired:
+        for entry in fired:
+            key = entry.split(":", 1)[1]
+            print(f"  {key!r} -> {vocabulary.replacements[key]!r}")
+    else:
+        print("  no entries fired.")
+    return _EXIT_OK
+
+
 def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     """Record once, transcribe once, print the transcript and the timings.
 
@@ -270,8 +365,11 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     # Both or neither, and the type says so. `history` was previously bound
     # only inside the branch below, which mypy accepts and a future edit would
     # break silently — on the one path where the §8 guarantee lives.
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    vocabulary = VocabularyLoader()
     try:
-        processors = build_chain(config.postprocess)
+        processors = build_chain(config.postprocess, vocabulary)
     except ValueError as exc:
         print(f"manu transcribe: {exc}", file=sys.stderr)
         return _EXIT_ERROR
@@ -499,11 +597,22 @@ def _daemon(config: AppConfig) -> int:
     # not built is a daemon that refuses to start with a sentence, rather than
     # a dictation that silently skips a stage — which is the failure Phase 2b
     # spent a gate note on.
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    # One loader, shared by the chain and the controller. `[boost]` reads the
+    # same snapshot before the decode that `[replace]` reads after it, so a user
+    # editing their file mid-session cannot have the edit land on one half and
+    # not the other.
+    vocabulary = VocabularyLoader()
     try:
-        processors = build_chain(config.postprocess)
+        processors = build_chain(config.postprocess, vocabulary)
     except ValueError as exc:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
+    for warning in vocabulary.refresh().warnings:
+        print(f"vocabulary.toml: {warning}", file=sys.stderr)
+    if vocabulary.error is not None:
+        print(f"vocabulary.toml: {vocabulary.error}", file=sys.stderr)
 
     try:
         engine = FasterWhisperEngine(config.engine)
@@ -526,6 +635,7 @@ def _daemon(config: AppConfig) -> int:
         capture=capture,
         detector=detector,
         on_state_change=indicator.set_state,
+        vocabulary=vocabulary,
     )
 
     def _on_release() -> None:
