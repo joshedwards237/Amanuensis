@@ -223,8 +223,7 @@ LONG_TAKES: tuple[Take, ...] = (
     Take(
         "L10-freeform",
         LONG_SPEAK_S,
-        "Anything. Talk for the full time about whatever you like. Do not plan "
-        "it.",
+        "Anything. Talk for the full time about whatever you like. Do not plan " "it.",
         "the least constrained take, deliberately last",
     ),
 )
@@ -235,16 +234,63 @@ LONG_TAKES: tuple[Take, ...] = (
 #: collapsed transcript, and coverage is supposed to. This is where that claim
 #: is checked.
 SHORT_TAKES: tuple[Take, ...] = (
-    Take("S01-yes", 1.5, 'Say just: "Yes."', "one word — the case the rate floor could not judge"),
-    Take("S02-no-thanks", 1.5, 'Say just: "No, thank you."', "three words, with a comma"),
-    Take("S03-name", 2.0, "Say your own full name and nothing else.", "proper nouns, minimum duration"),
-    Take("S04-command", SHORT_SPEAK_S, 'Say a shell command you ran recently, out loud.', "identifiers and symbols"),
-    Take("S05-question", SHORT_SPEAK_S, "Ask a short question you would actually ask a colleague.", "question intonation, terminal punctuation"),
-    Take("S06-address", SHORT_SPEAK_S, "Say a street address.", "digits and proper nouns together"),
-    Take("S07-time", 2.0, "Say what time it is and what you are doing next.", "numbers, short"),
-    Take("S08-agree", 1.5, 'Say just: "That works for me."', "the ordinary short dictation"),
-    Take("S09-acronyms", SHORT_SPEAK_S, "Say three acronyms you use at work.", "the class [boost] exists for, at short duration"),
-    Take("S10-fragment", 2.0, "Say an incomplete sentence and stop mid-thought.", "no terminal punctuation available — the R1 case"),
+    Take(
+        "S01-yes",
+        1.5,
+        'Say just: "Yes."',
+        "one word — the case the rate floor could not judge",
+    ),
+    Take(
+        "S02-no-thanks", 1.5, 'Say just: "No, thank you."', "three words, with a comma"
+    ),
+    Take(
+        "S03-name",
+        2.0,
+        "Say your own full name and nothing else.",
+        "proper nouns, minimum duration",
+    ),
+    Take(
+        "S04-command",
+        SHORT_SPEAK_S,
+        "Say a shell command you ran recently, out loud.",
+        "identifiers and symbols",
+    ),
+    Take(
+        "S05-question",
+        SHORT_SPEAK_S,
+        "Ask a short question you would actually ask a colleague.",
+        "question intonation, terminal punctuation",
+    ),
+    Take(
+        "S06-address",
+        SHORT_SPEAK_S,
+        "Say a street address.",
+        "digits and proper nouns together",
+    ),
+    Take(
+        "S07-time",
+        2.0,
+        "Say what time it is and what you are doing next.",
+        "numbers, short",
+    ),
+    Take(
+        "S08-agree",
+        1.5,
+        'Say just: "That works for me."',
+        "the ordinary short dictation",
+    ),
+    Take(
+        "S09-acronyms",
+        SHORT_SPEAK_S,
+        "Say three acronyms you use at work.",
+        "the class [boost] exists for, at short duration",
+    ),
+    Take(
+        "S10-fragment",
+        2.0,
+        "Say an incomplete sentence and stop mid-thought.",
+        "no terminal punctuation available — the R1 case",
+    ),
 )
 
 
@@ -351,13 +397,13 @@ class Check:
     reason: str = ""
 
 
-def check_take(
-    audio: NDArray[np.float32], take: Take, sample_rate: int
-) -> Check:
+def check_take(audio: NDArray[np.float32], take: Take, sample_rate: int) -> Check:
     lead = int(LEAD_SILENCE_S * sample_rate)
     tail = int(TAIL_SILENCE_S * sample_rate)
     if len(audio) < lead + tail + sample_rate:
-        return Check(False, 0.0, 0.0, "the recording is shorter than its own silence windows")
+        return Check(
+            False, 0.0, 0.0, "the recording is shorter than its own silence windows"
+        )
 
     silence = np.concatenate([audio[:lead], audio[-tail:]])
     speech = audio[lead:-tail]
@@ -368,13 +414,25 @@ def check_take(
     # A zero silence floor means digital silence, which is a device fault
     # rather than a quiet room — report it rather than dividing by it.
     if silence_rms <= 0.0:
-        return Check(False, 0.0, peak, "the silence windows are digitally zero — check the input device")
+        return Check(
+            False,
+            0.0,
+            peak,
+            "the silence windows are digitally zero — check the input device",
+        )
 
     ratio = speech_rms / silence_rms
     if peak >= CLIPPING_PEAK:
-        return Check(False, ratio, peak, f"clipped at {peak:.3f} — move back from the microphone")
+        return Check(
+            False, ratio, peak, f"clipped at {peak:.3f} — move back from the microphone"
+        )
     if ratio < MIN_SPEECH_TO_SILENCE_RATIO:
-        return Check(False, ratio, peak, f"speech/silence {ratio:.2f}x is below {MIN_SPEECH_TO_SILENCE_RATIO}x")
+        return Check(
+            False,
+            ratio,
+            peak,
+            f"speech/silence {ratio:.2f}x is below {MIN_SPEECH_TO_SILENCE_RATIO}x",
+        )
     return Check(True, ratio, peak)
 
 
@@ -417,7 +475,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SLUG",
         help="record only this slug (e.g. L03-explain-disagreement). Repeatable.",
     )
-    parser.add_argument("--list", action="store_true", help="print the prompts and exit")
+    parser.add_argument(
+        "--list", action="store_true", help="print the prompts and exit"
+    )
     parser.add_argument("--device", default=None, help="microphone name substring")
     args = parser.parse_args(argv)
 
@@ -473,7 +533,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print()
     print(RULES)
     print(f"  {len(pending)} takes to record ({skipped} already on disk).")
-    print(f"  {speaking:.0f}s of speaking + {overhead:.0f}s of silence, plus your own pauses.")
+    print(
+        f"  {speaking:.0f}s of speaking + {overhead:.0f}s of silence, plus your own pauses."
+    )
     print(f"  Microphone: {'system default' if device is None else f'index {device}'}")
     print(f"  Writing to: {args.out}")
     print()
@@ -509,7 +571,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         path = args.out / f"{take.slug}.wav"
         write_wav(path, audio, sample_rate)
         seconds = len(audio) / sample_rate
-        print(f"  kept — {seconds:.1f}s total, speech/silence {check.ratio:.2f}x, peak {check.peak:.3f}")
+        print(
+            f"  kept — {seconds:.1f}s total, speech/silence {check.ratio:.2f}x, peak {check.peak:.3f}"
+        )
         written.append(
             {
                 "slug": take.slug,
@@ -536,7 +600,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         for row in written:
             by_slug_manifest[str(row["slug"])] = row
         manifest.write_text(
-            json.dumps(sorted(by_slug_manifest.values(), key=lambda r: str(r["slug"])), indent=2)
+            json.dumps(
+                sorted(by_slug_manifest.values(), key=lambda r: str(r["slug"])),
+                indent=2,
+            )
             + "\n"
         )
         print()

@@ -239,8 +239,10 @@ def report(measurement: Measurement, *, simulated: bool = False) -> None:
             "pinned; core\n  count, memory bandwidth and thermal envelope are "
             "this machine's."
         )
-    print(f"  model {measurement.model}, cpu_threads {measurement.cpu_threads}, "
-          f"{measurement.observations} observations")
+    print(
+        f"  model {measurement.model}, cpu_threads {measurement.cpu_threads}, "
+        f"{measurement.observations} observations"
+    )
     print()
     print(f"  {'stage':<14} {'p50':>10} {'p95':>10} {'min':>10} {'max':>10}")
     print("  " + "-" * 58)
@@ -254,24 +256,36 @@ def report(measurement: Measurement, *, simulated: bool = False) -> None:
             f"{min(values):9.1f}m {max(values):9.1f}m"
         )
     print()
-    print(f"  vs Tier A thresholds ({TIER_A_P50_MS:.0f} / {TIER_A_P95_MS:.0f} ms): "
-          f"{'PASS' if p50 <= TIER_A_P50_MS and p95 <= TIER_A_P95_MS else 'MISS'}")
-    print(f"  vs G1 ({G1_P50_MS:.0f} / {G1_P95_MS:.0f} ms), as a FLOOR: "
-          f"{'PASS' if p50 <= G1_P50_MS and p95 <= G1_P95_MS else 'MISS'}")
-    print(f"  vs G1-CPU ({G1_CPU_P50_MS:.0f} ms p50): "
-          f"{'PASS' if p50 <= G1_CPU_P50_MS else 'MISS'}")
-    print(f"  headroom left for postprocess + inject at p50: "
-          f"{G1_P50_MS - p50:+.0f} ms")
+    print(
+        f"  vs Tier A thresholds ({TIER_A_P50_MS:.0f} / {TIER_A_P95_MS:.0f} ms): "
+        f"{'PASS' if p50 <= TIER_A_P50_MS and p95 <= TIER_A_P95_MS else 'MISS'}"
+    )
+    print(
+        f"  vs G1 ({G1_P50_MS:.0f} / {G1_P95_MS:.0f} ms), as a FLOOR: "
+        f"{'PASS' if p50 <= G1_P50_MS and p95 <= G1_P95_MS else 'MISS'}"
+    )
+    print(
+        f"  vs G1-CPU ({G1_CPU_P50_MS:.0f} ms p50): "
+        f"{'PASS' if p50 <= G1_CPU_P50_MS else 'MISS'}"
+    )
+    print(
+        f"  headroom left for postprocess + inject at p50: "
+        f"{G1_P50_MS - p50:+.0f} ms"
+    )
 
     trimmed_total = sum(s.duration_s - s.retained_s for s in measurement.samples)
     original_total = sum(s.duration_s for s in measurement.samples)
     print()
-    print(f"  trimming removed {trimmed_total:.1f}s of {original_total:.1f}s "
-          f"({trimmed_total / original_total * 100:.0f}%)")
+    print(
+        f"  trimming removed {trimmed_total:.1f}s of {original_total:.1f}s "
+        f"({trimmed_total / original_total * 100:.0f}%)"
+    )
     fell_back = [s.name for s in measurement.samples if s.fell_back]
     if fell_back:
-        print(f"  ⚠️  no speech detected in: {', '.join(fell_back)} "
-              f"(passed through whole — guard 1)")
+        print(
+            f"  ⚠️  no speech detected in: {', '.join(fell_back)} "
+            f"(passed through whole — guard 1)"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -304,10 +318,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("=" * 70)
     print("PHASE 1 — G1 THROUGH THE PRODUCT PATH")
     print("=" * 70)
-    print(f"  {platform.system()} {platform.release()} {platform.machine()}, "
-          f"Python {platform.python_version()}")
-    print(f"  corpus: {len(corpus)} samples, "
-          f"{sum(d for _, _, d in corpus):.1f}s, {args.runs} runs each")
+    print(
+        f"  {platform.system()} {platform.release()} {platform.machine()}, "
+        f"Python {platform.python_version()}"
+    )
+    print(
+        f"  corpus: {len(corpus)} samples, "
+        f"{sum(d for _, _, d in corpus):.1f}s, {args.runs} runs each"
+    )
     print(f"  cpu_threads 'auto' resolves to {resolve_cpu_threads('auto')}")
     print()
     print("  NOT MEASURED HERE: AudioCapture (needs a microphone; `manu")
@@ -318,8 +336,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
         print("  per sample (auto threads)")
     primary = measure(
-        corpus, label="cpu_threads = auto", cpu_threads="auto",
-        runs=args.runs, verbose=verbose,
+        corpus,
+        label="cpu_threads = auto",
+        cpu_threads="auto",
+        runs=args.runs,
+        verbose=verbose,
     )
     report(primary)
 
@@ -328,8 +349,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print()
             print("  per sample (4 threads — CTranslate2's default)")
         tier_b = measure(
-            corpus, label="cpu_threads = 4 (CTranslate2 default)", cpu_threads=4,
-            runs=args.runs, verbose=verbose,
+            corpus,
+            label="cpu_threads = 4 (CTranslate2 default)",
+            cpu_threads=4,
+            runs=args.runs,
+            verbose=verbose,
         )
         report(tier_b, simulated=True)
 
@@ -342,14 +366,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline = percentile(primary.pooled("asr_ms"), 50)
         for value in values:
             swept = measure(
-                corpus, label=f"threads={value}", cpu_threads=value,
-                runs=args.runs, verbose=False,
+                corpus,
+                label=f"threads={value}",
+                cpu_threads=value,
+                runs=args.runs,
+                verbose=False,
             )
             p50 = percentile(swept.pooled("asr_ms"), 50)
             p95 = percentile(swept.pooled("asr_ms"), 95)
             marker = " *" if value == primary.cpu_threads else "  "
-            print(f"  {value:>6}{marker} {p50:9.1f}m {p95:9.1f}m "
-                  f"{p50 / baseline:9.2f}x")
+            print(
+                f"  {value:>6}{marker} {p50:9.1f}m {p95:9.1f}m "
+                f"{p50 / baseline:9.2f}x"
+            )
         print()
         print("  * = what 'auto' resolved to on this machine.")
         print("  This sweep varies ONE parameter on ONE machine. PRD §7.2 asks")
@@ -357,9 +386,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("  rule stops being n=1; this does not provide one.")
 
     print()
-    print("mean sample duration: "
-          f"{statistics.fmean(d for _, _, d in corpus):.1f}s "
-          f"(G1 is defined against 10s — PRD §2)")
+    print(
+        "mean sample duration: "
+        f"{statistics.fmean(d for _, _, d in corpus):.1f}s "
+        f"(G1 is defined against 10s — PRD §2)"
+    )
     return 0
 
 

@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus", type=Path, default=CORPUS)
     args = parser.parse_args(argv)
 
+    from amanuensis import guard as guard_module
     from amanuensis.audio.vad import VoiceActivityDetector
     from amanuensis.config import load_config
     from amanuensis.engines.faster_whisper import FasterWhisperEngine
@@ -111,11 +112,24 @@ def main(argv: list[str] | None = None) -> int:
 
         speech = trimmed.retained_seconds - trimmed.padding_seconds
         predicted = _INTERCEPT_MS + _MS_PER_SECOND * trimmed.retained_seconds
-        coverage = (
-            decoded.decoded_seconds / speech
-            if decoded.decoded_seconds is not None and speech > 0
-            else None
+
+        # **The product's own verdict, not a second opinion.** The first version
+        # of this script recomputed `decoded_seconds / speech` itself and
+        # reported coverages above 100% as a finding — which the product never
+        # produces, because `guard._by_coverage` clamps at 1.0 and has done
+        # since the guard shipped. A harness that reimplements the quantity it
+        # is measuring reports on code the user does not run; `measure_g1.py`
+        # already reuses `tier.percentile` for exactly this reason, and this
+        # script did not follow it.
+        verdict = guard_module.evaluate(
+            decoded.text,
+            decoded_seconds=decoded.decoded_seconds,
+            retained_seconds=trimmed.retained_seconds,
+            padding_seconds=trimmed.padding_seconds,
+            fell_back=trimmed.fell_back,
+            config=config.guard,
         )
+        coverage = verdict.coverage
         rows.append(
             {
                 "slug": path.stem,
@@ -127,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                 "predicted_ms": round(predicted, 1),
                 "error_ms": round(transcribe_ms - predicted, 1),
                 "coverage": round(coverage, 4) if coverage is not None else None,
+                "outcome": str(verdict.outcome),
+                "retry_advised": verdict.retry_advised,
                 "words": len(decoded.text.split()),
                 "fell_back": trimmed.fell_back,
             }
@@ -154,12 +170,10 @@ def main(argv: list[str] | None = None) -> int:
         "predicted_ms_p95": percentile(predicted_all, 95),
         "coverage_min": min(coverages) if coverages else None,
         "coverage_p50": percentile(coverages, 50) if coverages else None,
-        "guard_would_fire": sum(
-            1 for value in coverages if value < config.guard.min_decoded_coverage
-        ),
-        "retry_would_trigger": sum(
-            1 for value in coverages if value < config.guard.retry_below_coverage
-        ),
+        # Counted from the guard's own verdicts rather than by re-applying its
+        # thresholds here — the same reason the coverage above is its.
+        "guard_would_fire": sum(1 for row in rows if row["outcome"] == "failed"),
+        "retry_would_trigger": sum(1 for row in rows if row["retry_advised"]),
     }
 
     if args.json:

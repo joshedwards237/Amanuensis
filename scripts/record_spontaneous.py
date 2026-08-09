@@ -153,8 +153,7 @@ TAKES: tuple[Take, ...] = (
     Take(
         "02-room",
         10,
-        "Describe the room you are in. Close your eyes first and do it from "
-        "memory.",
+        "Describe the room you are in. Close your eyes first and do it from " "memory.",
         "recall from a visual memory, which stalls in a different way",
     ),
     Take(
@@ -167,8 +166,7 @@ TAKES: tuple[Take, ...] = (
     Take(
         "04-explain-gate",
         10,
-        "Explain what a phase gate is to someone who has never written "
-        "software.",
+        "Explain what a phase gate is to someone who has never written " "software.",
         "translating a known idea for an unknown audience, live",
     ),
     Take(
@@ -246,7 +244,7 @@ TAKES: tuple[Take, ...] = (
         30,
         "Same voicemail, different meeting. Four corrections again — but with "
         "NO marker word. Say the wrong thing then immediately the right thing, "
-        "nothing in between: 'meet Tuesday Wednesday at four five o\'clock'. "
+        "nothing in between: 'meet Tuesday Wednesday at four five o'clock'. "
         "It will feel unnatural. Bare repairs sound like that.",
         "unmarked repairs — only recoverable from context, if at all",
         expected_corrections=4,
@@ -419,7 +417,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument(
-        "--take", type=int, action="append", default=None, metavar="N",
+        "--take",
+        type=int,
+        action="append",
+        default=None,
+        metavar="N",
         help="record only take N (1-based). Repeatable. Use to redo one.",
     )
     parser.add_argument(
@@ -464,10 +466,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("=" * 70)
     print()
     print(RULES)
-    print(f"  {len(selected)} takes — {speaking:.0f}s of speaking, "
-          f"{overhead:.0f}s of silence, plus however long you take between them.")
-    print(f"  Microphone: {'system default' if device is None else f'index {device}'}"
-          f"   Writing to: {args.out}")
+    print(
+        f"  {len(selected)} takes — {speaking:.0f}s of speaking, "
+        f"{overhead:.0f}s of silence, plus however long you take between them."
+    )
+    print(
+        f"  Microphone: {'system default' if device is None else f'index {device}'}"
+        f"   Writing to: {args.out}"
+    )
     print()
     input("  Press Enter when the room is quiet and you are ready. ")
 
@@ -486,18 +492,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             print()
-            print(f"  {len(audio) / audio_config.sample_rate:.1f}s   "
-                  f"speech RMS {verdict.speech_rms:.4f}   "
-                  f"silence RMS {verdict.silence_rms:.4f}   "
-                  f"peak {verdict.peak:.3f}")
+            print(
+                f"  {len(audio) / audio_config.sample_rate:.1f}s   "
+                f"speech RMS {verdict.speech_rms:.4f}   "
+                f"silence RMS {verdict.silence_rms:.4f}   "
+                f"peak {verdict.peak:.3f}"
+            )
             for problem in verdict.problems:
                 print(f"  ⚠️  {problem}")
 
             if verdict.ok:
                 print("  Looks good.")
-            choice = input(
-                "  [Enter] keep   [r] redo   [s] skip this take: "
-            ).strip().lower()
+            choice = (
+                input("  [Enter] keep   [r] redo   [s] skip this take: ")
+                .strip()
+                .lower()
+            )
             if choice == "r":
                 continue
             if choice == "s":

@@ -241,9 +241,7 @@ class Outcome:
     detail: str
 
 
-def _run_one(
-    target: Target, strategy: str, page: bool, keep_open: bool
-) -> Outcome:
+def _run_one(target: Target, strategy: str, page: bool, keep_open: bool) -> Outcome:
     marker = f"amanuensis-2a-{uuid.uuid4().hex[:8]}"
 
     if target.key == "chrome" and page:
@@ -310,7 +308,9 @@ def _run_one(
         )
 
     if marker in after:
-        return Outcome(target, "PASS", f"marker found in the focused field ({strategy})")
+        return Outcome(
+            target, "PASS", f"marker found in the focused field ({strategy})"
+        )
 
     # "Landed but was rewritten" and "did not land" are different findings with
     # different remedies, and a bare `marker not in after` collapses them. The
