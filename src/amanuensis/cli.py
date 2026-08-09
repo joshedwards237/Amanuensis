@@ -56,6 +56,8 @@ from typing import TYPE_CHECKING
 from amanuensis import __version__
 from amanuensis.config import AppConfig, ConfigError, InjectionConfig, load_config
 from amanuensis.models.results import ClipboardExposure
+from amanuensis.postprocess.base import TracedPostProcessor
+from amanuensis.postprocess.registry import build_chain
 
 if TYPE_CHECKING:  # pragma: no cover — these imports are heavy at runtime
     from amanuensis.audio.vad import TrimResult
@@ -268,6 +270,12 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     # Both or neither, and the type says so. `history` was previously bound
     # only inside the branch below, which mypy accepts and a future edit would
     # break silently — on the one path where the §8 guarantee lives.
+    try:
+        processors = build_chain(config.postprocess)
+    except ValueError as exc:
+        print(f"manu transcribe: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
     injector: TextInjector | None = None
     history: HistoryStore | None = None
     if inject:
@@ -344,24 +352,46 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
     started = time.perf_counter()
-    text = engine.transcribe(trimmed.audio, config.audio.sample_rate).text
+    raw_text = engine.transcribe(trimmed.audio, config.audio.sample_rate).text
     timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
+
+    # This verb exists to measure the whole path, so it runs the configured
+    # chain rather than printing the decoder's output and calling it the
+    # product. Before Phase 3 it printed a `g1_ms` with a stage missing and said
+    # so in a footnote; a number that needs a footnote to be read correctly is
+    # the shape this project has already been misled by twice.
+    session = DictationSession(
+        id=uuid.uuid4().hex,
+        started_at=datetime.now(UTC),
+        audio=None,  # §5.5: audio is stored only behind `store_audio`
+        sample_rate=config.audio.sample_rate,
+        raw_transcript=raw_text,
+        engine=f"{config.engine.backend}:{engine.model_name}",
+        timings=timings,
+    )
+    text = raw_text
+    started = time.perf_counter()
+    for processor in processors:
+        if isinstance(processor, TracedPostProcessor):
+            text, acted = processor.process_traced(text, session)
+            session.fired_entries += acted
+        else:
+            text = processor.process(text, session)
+    timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
+    if processors:
+        session.final_text = text
 
     print()
     print(text.strip() or "(nothing was transcribed)")
+    if session.fired_entries:
+        # Which rules acted, not just that the text changed. A user comparing
+        # this against what they said needs to know whether the product edited
+        # it or the decoder heard it that way (dictionary objection O5).
+        print(f"  [{', '.join(session.fired_entries)}]")
     print()
 
     exit_code = _EXIT_OK
     if injector is not None and history is not None:
-        session = DictationSession(
-            id=uuid.uuid4().hex,
-            started_at=datetime.now(UTC),
-            audio=None,  # §5.5: audio is stored only behind `store_audio`
-            sample_rate=config.audio.sample_rate,
-            raw_transcript=text,
-            engine=f"{config.engine.backend}:{engine.model_name}",
-            timings=timings,
-        )
         result = deliver(session, history, injector)
         if result.succeeded:
             print(f"injected via {result.strategy}.")
@@ -465,16 +495,15 @@ def _daemon(config: AppConfig) -> int:
             flush=True,
         )
 
-    if config.postprocess.chain:
-        # Named rather than silently ignored. §9's Phase 2b gate asks for
-        # `chain = ["rules"]`, which Phase 3 builds; measuring with an empty
-        # chain is the resolution, and a `g1_ms` that omits a stage without
-        # saying so is the second thing this project has been misled by.
-        print(
-            "post-processing is not built yet (Phase 3), so "
-            f"[postprocess] chain = {list(config.postprocess.chain)} is skipped "
-            "and every g1_ms below is a floor."
-        )
+    # Built eagerly, before the model loads. A chain naming something that is
+    # not built is a daemon that refuses to start with a sentence, rather than
+    # a dictation that silently skips a stage — which is the failure Phase 2b
+    # spent a gate note on.
+    try:
+        processors = build_chain(config.postprocess)
+    except ValueError as exc:
+        print(f"manu daemon: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
 
     try:
         engine = FasterWhisperEngine(config.engine)
@@ -492,7 +521,7 @@ def _daemon(config: AppConfig) -> int:
         config=config,
         engine=engine,
         injector=injector,
-        processors=[],
+        processors=processors,
         history=history,
         capture=capture,
         detector=detector,
@@ -646,8 +675,7 @@ def _print_timings(
         f"  {'g1_ms':<16} {timings.g1_ms:8.1f}   " "<- G1: 400 ms p50 / 800 ms p95 (§2)"
     )
     if injected:
-        print("  post-processing is not built yet (Phase 3), so g1_ms here is")
-        print("  still a floor. Injection and the §8 write are in it.")
+        pass
     else:
         print("  postprocess and inject are not in this run, so g1_ms here is a")
         print("  floor and will grow. `--inject` adds the two Phase 2a stages.")

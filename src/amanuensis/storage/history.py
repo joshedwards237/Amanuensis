@@ -142,6 +142,7 @@ _COLUMNS: Final = (
     "guard_outcome",
     "guard_coverage",
     "guard_retained_seconds",
+    "fired_entries",
     "capture_ms",
     "vad_ms",
     "transcribe_ms",
@@ -164,6 +165,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
     guard_outcome    TEXT,
     guard_coverage   REAL,
     guard_retained_seconds REAL,
+    fired_entries   TEXT,
     capture_ms       REAL    NOT NULL DEFAULT 0,
     vad_ms           REAL    NOT NULL DEFAULT 0,
     transcribe_ms    REAL    NOT NULL DEFAULT 0,
@@ -218,6 +220,10 @@ _MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
     (
         "raw_transcript",
         "ALTER TABLE transcripts ADD COLUMN raw_transcript TEXT",
+    ),
+    (
+        "fired_entries",
+        "ALTER TABLE transcripts ADD COLUMN fired_entries TEXT",
     ),
 )
 

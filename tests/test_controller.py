@@ -1088,3 +1088,90 @@ def test_the_focus_is_stashed_before_the_session_is_queued() -> None:
         "the session was queued before its focus was stashed; a worker "
         "dequeuing in between reads None and skips the focus check"
     )
+
+
+class _TracedUpper:
+    """A processor with the optional trace capability."""
+
+    name = "traced-upper"
+
+    def process(self, text: str, _session: DictationSession) -> str:
+        return text.upper()
+
+    def process_traced(
+        self, text: str, _session: DictationSession
+    ) -> tuple[str, tuple[str, ...]]:
+        return text.upper(), ("shouted",)
+
+
+def test_the_chain_runner_collects_a_trace_when_one_is_offered() -> None:
+    """The processor returns it; the CONTROLLER writes it to the session.
+
+    That split is the whole reason the trace is a Protocol return value rather
+    than an attribute read after the call (objection O8) — session writes stay
+    where session writes already live, and there is no shared slot to go stale
+    across `_process`'s early returns.
+    """
+    made = _controller(processors=[_TracedUpper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.final_text == "HELLO THERE"
+    assert session.fired_entries == ("shouted",)
+
+
+def test_a_processor_without_the_capability_still_runs() -> None:
+    """`_Upper` has `process` and nothing else. Feature detection must not make
+    the trace mandatory by accident."""
+    made = _controller(processors=[_Upper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.final_text == "HELLO THERE"
+    assert session.fired_entries == ()
+
+
+def test_a_trace_does_not_survive_into_the_next_session() -> None:
+    """The failure resolution 2 would have had (objection O8): a shared unkeyed
+    slot read as the next session's entries. A return value cannot do this, and
+    the test exists so a future edit cannot reintroduce it."""
+
+    class _Once:
+        name = "once"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def process(self, text: str, _session: DictationSession) -> str:
+            return text
+
+        def process_traced(
+            self, text: str, _session: DictationSession
+        ) -> tuple[str, tuple[str, ...]]:
+            self.calls += 1
+            return text, ("fired",) if self.calls == 1 else ()
+
+    made = _controller(processors=[_Once()])
+    made.start()
+    try:
+        made.start_session()
+        first = made.end_session()
+        assert first.wait(5.0)
+        made.start_session()
+        second = made.end_session()
+        assert second.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert first.fired_entries == ("fired",)
+    assert second.fired_entries == ()

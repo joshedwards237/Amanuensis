@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from amanuensis import guard
 from amanuensis.models.results import GuardOutcome, InjectionResult, Transcription
 from amanuensis.models.session import DictationSession
+from amanuensis.postprocess.base import TracedPostProcessor
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
     from collections.abc import Callable, Sequence
@@ -518,9 +519,20 @@ class DictationController:
 
             started = time.perf_counter()
             text = session.raw_transcript
+            fired: list[str] = []
             for processor in self.processors:
                 try:
-                    text = processor.process(text, session)
+                    # Feature detection, not a required method (§6.3's
+                    # `TracedPostProcessor`). A processor that can say which of
+                    # its rules acted returns that alongside the text, and the
+                    # controller writes it to the session — `process` stays pure
+                    # with respect to the session and there is no shared slot to
+                    # go stale across the early returns above (objection O8).
+                    if isinstance(processor, TracedPostProcessor):
+                        text, acted = processor.process_traced(text, session)
+                        fired.extend(acted)
+                    else:
+                        text = processor.process(text, session)
                 except Exception as exc:
                     # §6.3 and `postprocess/base.py` both promise this, and
                     # neither was true until Phase 3 (objection O1): the chain
@@ -542,6 +554,7 @@ class DictationController:
                     )
                     break
             session.timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
+            session.fired_entries = tuple(fired)
             if self.processors:
                 session.final_text = text
 

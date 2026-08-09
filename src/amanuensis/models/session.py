@@ -144,6 +144,14 @@ class DictationSession:
     #: is different from the check declining to judge, and that difference is
     #: why `GuardOutcome.SKIPPED` exists rather than being spelled `None`.
     guard: GuardVerdict | None = None
+    #: Which post-processing rules and dictionary entries actually acted on this
+    #: transcript. Written by the chain runner from `process_traced`'s return
+    #: value, never by a processor — `process` is pure with respect to the
+    #: session and the trace is deliberately not an exception to that
+    #: (objection O8). Empty when no processor offered the capability, which is
+    #: a different statement from "nothing fired" and is why the gate reports
+    #: the chain alongside it.
+    fired_entries: tuple[str, ...] = ()
     error: str | None = None
     #: Set by the worker, *last*, after every field above is written. A thread
     #: that sees this set is guaranteed a fully populated session; that ordering
@@ -208,5 +216,11 @@ class DictationSession:
             "guard_retained_seconds": (
                 self.guard.retained_seconds if self.guard else None
             ),
+            # Comma-joined rather than JSON: the only consumer is a person
+            # reading a history row or a gate record, and `rules, vocabulary`
+            # is legible where `["rules", "vocabulary"]` is a format to decode.
+            # NULL when nothing fired, so "no rule acted" and "the empty list
+            # was stored" are not the same value.
+            "fired_entries": ", ".join(self.fired_entries) or None,
             **asdict(self.timings),
         }
