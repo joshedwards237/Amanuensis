@@ -150,3 +150,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# The repository root on `sys.path`, so `from tests.conftest import read_wav`
+# resolves. Without it the suite passes under `python -m pytest` (which puts
+# the CWD on the path) and fails one test under plain `pytest` — the same
+# command, two answers, depending on how it was spelled. Found 2026-08-08 while
+# establishing a Phase 3 baseline; the Phase 2b gate reported "337 tests" from
+# the spelling that works.
+pythonpath = ["."]

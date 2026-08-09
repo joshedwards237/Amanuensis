@@ -143,7 +143,12 @@ class _FakeEngine:
         pass
 
     def transcribe(
-        self, audio: NDArray[np.float32], _rate: int, *, biased: bool = True
+        self,
+        audio: NDArray[np.float32],
+        _rate: int,
+        *,
+        biased: bool = True,
+        boost: Any = (),
     ) -> Transcription:
         self.calls += 1
         self.bias_flags.append(biased)
@@ -378,10 +383,10 @@ def test_sessions_are_processed_serially() -> None:
             return super().inject(text)
 
     class _Counting(_FakeEngine):
-        def transcribe(self, audio: Any, rate: int) -> str:
+        def transcribe(self, audio: Any, rate: int, **kwargs: Any) -> Any:
             with lock:
                 order.append(f"transcribe:{self.calls}")
-            return super().transcribe(audio, rate)
+            return super().transcribe(audio, rate, **kwargs)
 
     made = _controller(engine=_Counting(), injector=_Recording())
     made.start()
@@ -514,7 +519,7 @@ def test_the_mic_state_is_never_ambiguous_on_failure(controller: Any) -> None:
     """
 
     class _Exploding(_FakeEngine):
-        def transcribe(self, _audio: Any, _rate: int) -> str:
+        def transcribe(self, _audio: Any, _rate: int, **_kwargs: Any) -> Any:
             raise RuntimeError("ct2 fell over")
 
     seen: list[DictationState] = []
@@ -894,7 +899,12 @@ def test_there_is_no_retry_when_no_bias_was_configured() -> None:
     assert session.guard.outcome is GuardOutcome.FAILED
     assert session.guard.retried is False
     assert session.guard.reason is not None
-    assert "initial_prompt" in session.guard.reason
+    # Reworded 2026-08-08 (objection O3). The reason used to name
+    # `initial_prompt`, because the refusal was keyed on that one config value —
+    # which made the guard's recovery path unreachable once `[boost]` became a
+    # second bias source with `initial_prompt` empty. The question is now "was
+    # anything biasing this decode", and the wording follows the question.
+    assert "nothing biased this decode" in session.guard.reason
 
 
 def test_the_retry_can_be_turned_off() -> None:
@@ -986,3 +996,446 @@ def test_the_guard_is_timed(controller: DictationController) -> None:
 
     assert session.timings.guard_ms > 0.0
     assert session.timings.g1_ms >= session.timings.guard_ms
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — defects the phase's own review found in shipped code
+# ---------------------------------------------------------------------------
+
+
+class _Exploding:
+    """A processor that always raises. The ABC says this must not cost words."""
+
+    name = "exploding"
+
+    def process(self, _text: str, _session: DictationSession) -> str:
+        raise RuntimeError("the chain is on fire")
+
+
+def test_a_raising_processor_does_not_cost_the_transcript() -> None:
+    """PRD §6.3 and postprocess/base.py both promise this and neither was true.
+
+    The chain runs *before* `deliver`, which is the only caller of
+    `write_pending` on that path, and the only handler returned before it. So a
+    processor raising meant nothing persisted and nothing injected — on the one
+    constraint CLAUDE.md lists first. Unreachable for three phases because
+    `cli.py` passed `processors=[]` (objection O1).
+    """
+    made = _controller(processors=[_Exploding()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0), "the worker never completed the session"
+    finally:
+        made.shutdown()
+
+    assert (
+        "write_pending" in made.history.calls
+    ), "the transcript was never persisted — §8's guarantee is unconditional"
+    assert made.injector.injected == [
+        "hello there"
+    ], "the last good text should still reach the cursor"
+    assert (
+        session.error is not None and "exploding" in session.error
+    ), "the failing processor must be named, not swallowed (§6.3)"
+
+
+def test_a_later_processor_survives_an_earlier_one_raising() -> None:
+    """The chain is abandoned at the raise; it does not skip and continue.
+
+    `base.py` says the *last good text* proceeds, not the text a later
+    processor would have produced from a value the failed one never returned.
+    """
+    made = _controller(processors=[_Exploding(), _Upper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == [
+        "hello there"
+    ], "the chain must stop at the raise rather than run the rest"
+
+
+def test_the_focus_is_stashed_before_the_session_is_queued() -> None:
+    """Otherwise the worker can dequeue a session whose focus is not there yet.
+
+    `deliver` skips the focus check entirely when `focus_at_capture` is None, so
+    losing that race does not degrade the check — it *disables* it, and §6.3's
+    protection against injecting into an application the user switched away
+    from stops applying, non-deterministically (objection O2).
+
+    Asserted structurally rather than by racing: the moment the session becomes
+    visible to the worker, its focus must already be recorded.
+    """
+    made = _controller()
+    seen: list[bool] = []
+    real_queue = made._queue
+
+    class _WatchingQueue:
+        def put(self, item: Any) -> None:
+            if item is not None:
+                seen.append(item.id in made._focus_by_session)
+            real_queue.put(item)
+
+        def get(self) -> Any:
+            return real_queue.get()
+
+    made._queue = _WatchingQueue()  # type: ignore[assignment]
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert seen == [True], (
+        "the session was queued before its focus was stashed; a worker "
+        "dequeuing in between reads None and skips the focus check"
+    )
+
+
+class _TracedUpper:
+    """A processor with the optional trace capability."""
+
+    name = "traced-upper"
+
+    def process(self, text: str, _session: DictationSession) -> str:
+        return text.upper()
+
+    def process_traced(
+        self, text: str, _session: DictationSession
+    ) -> tuple[str, tuple[str, ...]]:
+        return text.upper(), ("shouted",)
+
+
+def test_the_chain_runner_collects_a_trace_when_one_is_offered() -> None:
+    """The processor returns it; the CONTROLLER writes it to the session.
+
+    That split is the whole reason the trace is a Protocol return value rather
+    than an attribute read after the call (objection O8) — session writes stay
+    where session writes already live, and there is no shared slot to go stale
+    across `_process`'s early returns.
+    """
+    made = _controller(processors=[_TracedUpper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.final_text == "HELLO THERE"
+    assert session.fired_entries == ("shouted",)
+
+
+def test_a_processor_without_the_capability_still_runs() -> None:
+    """`_Upper` has `process` and nothing else. Feature detection must not make
+    the trace mandatory by accident."""
+    made = _controller(processors=[_Upper()])
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert session.final_text == "HELLO THERE"
+    assert session.fired_entries == ()
+
+
+def test_a_trace_does_not_survive_into_the_next_session() -> None:
+    """The failure resolution 2 would have had (objection O8): a shared unkeyed
+    slot read as the next session's entries. A return value cannot do this, and
+    the test exists so a future edit cannot reintroduce it."""
+
+    class _Once:
+        name = "once"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def process(self, text: str, _session: DictationSession) -> str:
+            return text
+
+        def process_traced(
+            self, text: str, _session: DictationSession
+        ) -> tuple[str, tuple[str, ...]]:
+            self.calls += 1
+            return text, ("fired",) if self.calls == 1 else ()
+
+    made = _controller(processors=[_Once()])
+    made.start()
+    try:
+        made.start_session()
+        first = made.end_session()
+        assert first.wait(5.0)
+        made.start_session()
+        second = made.end_session()
+        assert second.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert first.fired_entries == ("fired",)
+    assert second.fired_entries == ()
+
+
+# ---------------------------------------------------------------------------
+# The vocabulary: one read point, [boost] to the decoder, and the retry
+# ---------------------------------------------------------------------------
+
+
+def test_the_vocabulary_is_refreshed_before_the_decode(tmp_path: Any) -> None:
+    """One read point, at the top of `_process` (objection O10).
+
+    `[boost]` needs its terms *before* the decode and `[replace]` does not care,
+    so the earlier point serves both. A draft that refreshed "before the chain
+    runs" would have refreshed *after* the decode, leaving the two halves of
+    §5.6 reading different snapshots of one edit.
+    """
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    order: list[str] = []
+
+    class _Watching(VocabularyLoader):
+        def refresh(self) -> Any:
+            order.append("refresh")
+            return super().refresh()
+
+    class _Noting(_FakeEngine):
+        def transcribe(self, *args: Any, **kwargs: Any) -> Any:
+            order.append("transcribe")
+            return super().transcribe(*args, **kwargs)
+
+    made = _controller(
+        engine=_Noting(), vocabulary=_Watching(tmp_path / "vocabulary.toml")
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert order[:2] == ["refresh", "transcribe"]
+
+
+def test_the_reload_is_timed_into_its_own_stage(tmp_path: Any) -> None:
+    """A stage inside G1's window needs a field (§6.3's standing rule, broken
+    for the fifth phase running). `vocab_ms` is in `g1_ms`."""
+    from amanuensis.models.session import LatencyBreakdown
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    made = _controller(vocabulary=VocabularyLoader(tmp_path / "vocabulary.toml"))
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    # `>= 0.0` was a tautology on a perf_counter delta that defaults to 0.0,
+    # and the arithmetic assertion below it constructed a LatencyBreakdown by
+    # hand and never touched the controller. Deleting the assignment in
+    # `_process` left both green (objection C7).
+    assert session.timings.vocab_ms > 0.0, "the reload was never timed"
+    assert session.timings.g1_ms >= session.timings.vocab_ms
+    breakdown = LatencyBreakdown(vocab_ms=3.0, transcribe_ms=100.0)
+    assert breakdown.g1_ms == pytest.approx(103.0)
+
+
+def test_boost_terms_reach_the_decoder_scoped_to_the_focused_app(
+    tmp_path: Any,
+) -> None:
+    """`focus_identity()` already runs on every dictation; this is what makes it
+    reach the engine. The terms are per-application because boosting is measured
+    to DEGRADE unrelated speech."""
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    path = tmp_path / "vocabulary.toml"
+    path.write_text(
+        '[boost]\nterms = ["Airtable"]\n\n'
+        '[boost.apps]\n"com.apple.Terminal" = ["ripgrep"]\n',
+        encoding="utf-8",
+    )
+
+    seen: list[tuple[str, ...]] = []
+
+    class _Recording(_FakeEngine):
+        def transcribe(self, *args: Any, **kwargs: Any) -> Any:
+            seen.append(tuple(kwargs.get("boost", ())))
+            return super().transcribe(*args, **kwargs)
+
+    made = _controller(
+        engine=_Recording(),
+        injector=_FakeInjector(focus="com.apple.Terminal"),
+        vocabulary=VocabularyLoader(path),
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert seen == [("ripgrep",)]
+
+
+def test_a_broken_vocabulary_does_not_cost_the_dictation(tmp_path: Any) -> None:
+    """§5.3's degrade-rather-than-stall rule. The words still reach the cursor;
+    the user is told their file is broken rather than left wondering why their
+    entry did nothing (choice-story #5)."""
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    path = tmp_path / "vocabulary.toml"
+    path.write_text('[replace]\n"csp" = \n', encoding="utf-8")
+
+    made = _controller(vocabulary=VocabularyLoader(path))
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert made.injector.injected == ["hello there"]
+    assert session.error is not None and "vocabulary" in session.error.lower()
+
+
+def test_the_retry_is_available_when_boost_supplies_the_bias(tmp_path: Any) -> None:
+    """Objection O3, and the configuration §5.6 recommends.
+
+    `_why_no_retry` used to ask whether `[engine] initial_prompt` was non-empty
+    and answer "nothing to drop" when it was not. `[boost]` supplies bias while
+    `initial_prompt` is empty — so the guard could fire, the reason would be
+    false, and `RECOVERED` would be unreachable.
+    """
+    from amanuensis.config import AppConfig, EngineConfig
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    path = tmp_path / "vocabulary.toml"
+    path.write_text(
+        '[boost]\n[boost.apps]\n"com.apple.Terminal" = ["Airtable"]\n',
+        encoding="utf-8",
+    )
+
+    # Through a full dictation, asserting on what the ENGINE was asked for.
+    # The first version of this test called `_why_no_retry(10.0, biased=True)`
+    # directly — supplying the value under test as a literal, so reverting
+    # `_judge`'s `biased = ... or bool(boost)` left it green. Verified: the
+    # sabotage passes the whole suite (objection C6).
+    config = AppConfig(engine=EngineConfig(initial_prompt=""))
+    engine = _FakeEngine(
+        coverage=0.05, unbiased_text="recovered words", unbiased_coverage=0.99
+    )
+    made = _controller(
+        config=config,
+        engine=engine,
+        injector=_FakeInjector(focus="com.apple.Terminal"),
+        vocabulary=VocabularyLoader(path),
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert (
+        engine.calls == 2
+    ), "no second decode — [boost] supplied the bias and the retry was refused"
+    assert engine.bias_flags == [True, False], "the retry must drop the bias"
+    assert session.guard is not None and session.guard.retried is True
+
+
+def test_the_retry_still_declines_when_nothing_biased_the_decode() -> None:
+    """The half of C4 that stays true: re-decoding with no bias configured is
+    mechanically the same call, and reporting it as a recovery attempt would be
+    an instrument describing work it did not do."""
+    made = _controller()
+    reason = made._why_no_retry(10.0, biased=False)
+    assert reason is not None and "nothing to drop" in reason
+
+
+class _RetryExplodes(_FakeEngine):
+    """Decodes once, then raises on the §5.7 retry."""
+
+    def transcribe(self, audio: Any, rate: int, **kwargs: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            # Coverage low enough that §5.7 advises the retry — otherwise the
+            # second decode never runs and this test passes by not testing.
+            return Transcription(
+                "the words the user actually said", decoded_seconds=0.05
+            )
+        raise RuntimeError("ct2 fell over on the retry")
+
+
+def test_a_raising_retry_does_not_cost_the_transcript() -> None:
+    """§8 is unconditional and the chain guard only covered the chain.
+
+    Objection C2: `_process` sets `session.raw_transcript` *after* `_judge`
+    returns, and `_judge` runs a second decode. A raise there reached the outer
+    handler with the first decode's words in a local variable and nothing
+    persisted — the decoder had produced a transcript and the product threw it
+    away. The retry runs only when the guard has already fired, which is the
+    degraded path and the one where a second failure is most likely.
+    """
+    from amanuensis.config import AppConfig, EngineConfig
+
+    made = _controller(
+        config=AppConfig(engine=EngineConfig(initial_prompt="Airtable, Firestore")),
+        engine=_RetryExplodes(),
+    )
+    made.start()
+    try:
+        made.start_session()
+        session = made.end_session()
+        assert session.wait(5.0)
+    finally:
+        made.shutdown()
+
+    assert (
+        session.raw_transcript == "the words the user actually said"
+    ), "the decoder's output must be on the session before anything can raise"
+    assert (
+        "write_pending" in made.history.calls
+    ), "§8: the words existed and were not written"
+    assert made.engine.calls == 2, "the retry never ran, so nothing was tested"
+    assert session.error is not None
+
+
+def test_the_guard_itself_raising_does_not_cost_the_transcript() -> None:
+    """Same shape, one stage earlier — the evaluation rather than the decode."""
+    made = _controller(engine=_FakeEngine())
+    made.start()
+    try:
+        import amanuensis.guard as guard_module
+
+        original = guard_module.evaluate
+        guard_module.evaluate = lambda *a, **k: (_ for _ in ()).throw(  # type: ignore[assignment]
+            RuntimeError("guard exploded")
+        )
+        try:
+            made.start_session()
+            session = made.end_session()
+            assert session.wait(5.0)
+        finally:
+            guard_module.evaluate = original  # type: ignore[assignment]
+    finally:
+        made.shutdown()
+
+    assert session.raw_transcript == "hello there"
+    assert "write_pending" in made.history.calls

@@ -158,3 +158,62 @@ def test_factories_default_to_detecting_the_running_platform() -> None:
     for factory in (create_injector, create_hotkey_listener):
         default = inspect.signature(factory).parameters["platform"].default
         assert default is None
+
+
+# ---------------------------------------------------------------------------
+# The traced-processor Protocol (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_the_traced_protocol_is_not_an_abc_member() -> None:
+    """The trace is an optional capability, not a fourth thing every processor
+    owes. `test_abc_declares_exactly_its_contract` above is the guard that
+    stopped it becoming one (objection O8)."""
+    from amanuensis.postprocess.base import TextPostProcessor
+
+    assert not hasattr(TextPostProcessor, "process_traced")
+
+
+def test_a_traced_processor_takes_the_session_too() -> None:
+    """`runtime_checkable` verifies method PRESENCE only, so a processor
+    declaring `process_traced(self, text)` satisfies `isinstance` and then
+    fails at the call site. The ABC has a signature guard; without this one the
+    second contract would ship with none.
+    """
+    import inspect
+
+    from amanuensis.config import PostprocessConfig
+    from amanuensis.postprocess.base import TracedPostProcessor
+    from amanuensis.postprocess.rules import RuleBasedPostProcessor
+
+    processor = RuleBasedPostProcessor(PostprocessConfig())
+    assert isinstance(processor, TracedPostProcessor)
+
+    expected = list(inspect.signature(TracedPostProcessor.process_traced).parameters)
+    actual = list(inspect.signature(type(processor).process_traced).parameters)
+    assert actual == expected, (
+        f"process_traced takes {actual}, the Protocol declares {expected} — "
+        "isinstance would still pass and the call would still fail"
+    )
+
+
+def test_a_traced_processor_returns_text_and_a_tuple_of_names() -> None:
+    from datetime import UTC, datetime
+
+    from amanuensis.config import PostprocessConfig
+    from amanuensis.models.session import DictationSession
+    from amanuensis.postprocess.rules import RuleBasedPostProcessor
+
+    session = DictationSession(
+        id="c-1",
+        started_at=datetime(2026, 8, 8, tzinfo=UTC),
+        audio=None,
+        sample_rate=16000,
+    )
+    result = RuleBasedPostProcessor(PostprocessConfig()).process_traced("hi", session)
+
+    assert isinstance(result, tuple) and len(result) == 2
+    text, fired = result
+    assert isinstance(text, str)
+    assert isinstance(fired, tuple)
+    assert all(isinstance(entry, str) for entry in fired)

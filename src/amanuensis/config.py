@@ -182,8 +182,25 @@ class PostprocessConfig:
     #: Ordered. Each processor transforms the same value, so reordering
     #: changes the output (§6.3, composition contract).
     chain: tuple[str, ...] = ("rules",)
-    #: Off by default because it is lossy.
+    #: Off by default because it is lossy. Also measured to fire **zero times**
+    #: on Whisper output — the decoder removes filled pauses during decoding —
+    #: so on this engine the key operates on nothing. Kept because a future
+    #: engine may be verbatim (§7.5).
     strip_fillers: bool = False
+    #: Append "." when the transcript ends on a word character. Fires on 7 of 10
+    #: real transcripts, which is why it needs a key rather than being assumed:
+    #: it also appends into a URL bar, a shell prompt and a filename field.
+    #: Default `true` on measurement — it is the only rule that produced any
+    #: movement (strict WER 24.66 -> 24.32), it adds one character, it never
+    #: adds a content word, and undoing it costs one keystroke against the 70%
+    #: of dictations that otherwise need one added.
+    terminal_punctuation: bool = True
+    #: "new paragraph" -> a blank line. Off by default because the rule
+    #: **deletes content words** and nothing measures it — no take in either
+    #: corpus contains one. The processor counts what it *would* have done even
+    #: while disabled, so the Phase 3 gate reports a real firing rate rather
+    #: than the structural zero a disabled rule would otherwise produce.
+    spoken_commands: bool = False
     llm: LLMConfig = LLMConfig()
 
 
@@ -290,11 +307,36 @@ _PROCESSORS: Final = ("rules", "vocabulary", "llm")
 
 
 def _chain(value: Any) -> str | None:
+    """Membership, uniqueness, and **order**.
+
+    Order was unchecked, and `postprocess/vocabulary.py` states its position as
+    a contract: the map must run *after* the rules, because the rules pass
+    changes capitalisation and punctuation and would otherwise rewrite the
+    replacement. `chain = ["vocabulary", "rules"]` validated, built and ran, and
+    turned `csp is the format` into `Csv is the format` — the casing heuristic
+    dictionary objection O4 rejected, reached by configuration (objection C10).
+
+    Preserving the user's order is not the same as validating it, and a user who
+    lists their processors alphabetically cannot trace the symptom back to this
+    line.
+    """
+    seen: list[str] = []
     for item in value:
         if not isinstance(item, str):
             return f"entries must be strings; found {type(item).__name__}"
         if item not in _PROCESSORS:
             return f"unknown processor {item!r}; known: {', '.join(_PROCESSORS)}"
+        if item in seen:
+            return f"{item!r} appears twice; each processor runs once"
+        seen.append(item)
+    ordered = [name for name in _PROCESSORS if name in seen]
+    if seen != ordered:
+        return (
+            f"must be in this order: {', '.join(ordered)}. Post-processing is "
+            "ordered and the stages are not interchangeable — the rules pass "
+            "rewrites capitalisation and punctuation, so running it after the "
+            "vocabulary would rewrite the replacement the dictionary guarantees"
+        )
     return None
 
 
@@ -331,6 +373,8 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     "postprocess": {
         "chain": _Rule((list,), _chain),
         "strip_fillers": _Rule((bool,)),
+        "terminal_punctuation": _Rule((bool,)),
+        "spoken_commands": _Rule((bool,)),
     },
     "postprocess.llm": {
         "enabled": _Rule((bool,)),

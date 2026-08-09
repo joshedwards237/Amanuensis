@@ -56,6 +56,8 @@ from typing import TYPE_CHECKING
 from amanuensis import __version__
 from amanuensis.config import AppConfig, ConfigError, InjectionConfig, load_config
 from amanuensis.models.results import ClipboardExposure
+from amanuensis.postprocess.base import TracedPostProcessor
+from amanuensis.postprocess.registry import build_chain
 
 if TYPE_CHECKING:  # pragma: no cover — these imports are heavy at runtime
     from amanuensis.audio.vad import TrimResult
@@ -82,7 +84,6 @@ _EXIT_OK = 0
 _VERB_PHASES = {
     "toggle": "Phase 4",
     "status": "Phase 4",
-    "history": "Phase 3",
 }
 
 
@@ -120,6 +121,29 @@ def build_parser() -> argparse.ArgumentParser:
             "guard declined to inject"
         ),
     )
+    history_parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="show the decoder's own words, before post-processing",
+    )
+    history_parser.add_argument(
+        "--pending",
+        action="store_true",
+        help="list transcripts written before a failed injection (§5.5)",
+    )
+    history_parser.add_argument(
+        "--limit", type=int, default=20, metavar="N", help="how many to list"
+    )
+    history_parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="delete every stored transcript, pending file and audio recording",
+    )
+    history_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip --purge's confirmation prompt (for scripts)",
+    )
 
     transcribe = subparsers.add_parser(
         "transcribe", help="record from the microphone once and print the transcript"
@@ -139,6 +163,27 @@ def build_parser() -> argparse.ArgumentParser:
         # Opt-in, because the alternative is a diagnostic command that types
         # into whatever window the user happened to leave focused.
         help="paste the transcript at the cursor (Phase 2a; needs Accessibility)",
+    )
+
+    vocab = subparsers.add_parser("vocab", help="inspect vocabulary.toml (PRD §5.6)")
+    vocab_sub = vocab.add_subparsers(dest="vocab_action", metavar="ACTION")
+    check = vocab_sub.add_parser(
+        "check", help="show which entries would fire on some text"
+    )
+    check.add_argument(
+        "text",
+        nargs="?",
+        help="text to run the [replace] map over; omit with --app",
+    )
+    check.add_argument(
+        "--app",
+        action="store_true",
+        # `[boost.apps]` is keyed on an identifier the product never displays,
+        # so without this the feature serves a user who edits TOML *and* can
+        # name their applications the way macOS does (choice-story #7). §6.1's
+        # argument against new verbs is that they duplicate a text editor;
+        # printing a bundle identifier duplicates nothing the user can do.
+        help="print the frontmost application's bundle id and its boost terms",
     )
 
     install = subparsers.add_parser(
@@ -187,8 +232,13 @@ def main(argv: list[str] | None = None) -> int:
         return _install(config, skip_download=args.skip_download, clip=args.clip)
     if args.verb == "daemon":
         return _daemon(config)
-    if args.verb == "history" and args.last:
-        return _history_last(config)
+    if args.verb == "history":
+        return _history(config, args)
+    if args.verb == "vocab":
+        if args.vocab_action != "check":
+            print("manu vocab: try `manu vocab check --help`.", file=sys.stderr)
+            return _EXIT_USAGE
+        return _vocab_check(text=args.text, show_app=args.app)
 
     print(
         f"manu {args.verb}: not implemented yet — it is built in "
@@ -198,7 +248,89 @@ def main(argv: list[str] | None = None) -> int:
     return _EXIT_ERROR
 
 
-def _history_last(config: AppConfig) -> int:
+def _history(config: AppConfig, args: argparse.Namespace) -> int:
+    """`manu history` and its flags. §5.5's retention half, read side.
+
+    The default listing exists because §5.5 gap 3's complaint was that the
+    `pending/` orphans were "a file the user was never told about and no command
+    surfaced" — so a pending count is a **footer on the default output**, not
+    something behind a flag the user would have to know to ask for.
+    """
+    from amanuensis.storage.history import HistoryStore
+
+    store = HistoryStore(config.history)
+
+    if args.purge:
+        return _history_purge(store, assume_yes=args.yes)
+    if args.last:
+        return _history_last(config, raw=args.raw)
+    if args.pending:
+        found = store.pending()
+        if not found:
+            print("no pending transcripts.")
+            return _EXIT_OK
+        print(f"{len(found)} transcript(s) written before a failed injection:")
+        for item in found:
+            print(f"  {item.started_at}  {store.pending_dir / (item.id + '.json')}")
+            print(f"    {item.transcript.strip()[:100]}")
+        return _EXIT_OK
+
+    rows = store.recent(limit=args.limit)
+    if not rows:
+        print("no transcripts yet.")
+    for item in rows:
+        mark = " " if item.injected else "!"
+        text = (item.raw_transcript if args.raw else item.transcript) or ""
+        first = text.strip().splitlines()[0] if text.strip() else "(empty)"
+        print(f"{mark} {item.started_at}  {first[:90]}")
+
+    orphans = store.pending()
+    if orphans:
+        # The footer, not a flag. See the docstring.
+        print()
+        print(
+            f"{len(orphans)} transcript(s) are waiting from failed injections — "
+            "`manu history --pending`"
+        )
+    return _EXIT_OK
+
+
+def _history_purge(store: HistoryStore, assume_yes: bool) -> int:
+    """Delete everything, after asking.
+
+    §5.5 says `--purge` wipes it and does not say it asks. Asking is added here
+    because the artefact it wipes is the one §8 exists to preserve, and because
+    the flag is one character away from `--pending`.
+    """
+    if not assume_yes:
+        print(
+            f"This deletes every transcript and recording under {store.db_path.parent}."
+        )
+        print("It cannot be undone.")
+        try:
+            answer = input("Type 'purge' to confirm: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            answer = ""
+        if answer.strip() != "purge":
+            print("nothing was deleted.")
+            return _EXIT_OK
+
+    result = store.purge()
+    print(
+        f"purged {result.rows_removed} transcript(s) and "
+        f"{result.files_removed} file(s)."
+    )
+    # §5.5 already declines to claim secure erasure, and repeating the honest
+    # version here is cheaper than a user inferring the stronger one.
+    print(
+        "Amanuensis does not claim secure erasure — full-disk encryption is "
+        "what makes residue unreadable."
+    )
+    return _EXIT_OK
+
+
+def _history_last(config: AppConfig, raw: bool = False) -> int:
     """Print the most recent transcript. The whole of `history` that exists.
 
     Pulled forward from Phase 3 by objection O2, and no further. §5.7 refuses
@@ -226,7 +358,88 @@ def _history_last(config: AppConfig) -> int:
     else:
         print(found.started_at)
     print()
+    if raw:
+        print(found.raw_transcript or found.transcript)
+        return _EXIT_OK
+
     print(found.transcript)
+    if found.raw_transcript is not None and found.raw_transcript != found.transcript:
+        # Both, when they differ (choice-story #10). B0 made "did the processors
+        # change my words?" answerable for the first time, and the only viewer
+        # of that data was about to ship with no way to ask it — which is
+        # dictionary objection O5's complaint surviving its own fix.
+        print()
+        print("raw (before post-processing):")
+        print(found.raw_transcript)
+    return _EXIT_OK
+
+
+def _vocab_check(text: str | None, show_app: bool) -> int:
+    """Show what `vocabulary.toml` would do, and where it lives.
+
+    The only `manu vocab` verb. `add`, `list` and `boost` were rejected: §6.1
+    treats the verb set as the process model's public contract, and they are a
+    second way to do what a text editor already does. This is the one operation
+    the file cannot perform on itself.
+
+    **It re-reads the file directly rather than through a loader**, which is the
+    point rather than an implementation detail (choice-story #5). A user who
+    edits `vocabulary.toml` while the daemon is running never meets the startup
+    parse error — the daemon keeps its last good map and degrades rather than
+    stalling — so this is where a broken file has to become legible, with the
+    key named.
+    """
+    from amanuensis.postprocess.vocabulary import (
+        default_vocabulary_path,
+        load_vocabulary,
+    )
+
+    path = default_vocabulary_path()
+    try:
+        vocabulary = load_vocabulary(path)
+    except ConfigError as exc:
+        print(f"manu vocab check: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    print(f"{path}  ({vocabulary.entry_count} [replace] entries)")
+    for warning in vocabulary.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+    if show_app:
+        from amanuensis.injection.factory import (
+            UnsupportedPlatformError,
+            create_injector,
+        )
+
+        try:
+            injector = create_injector(InjectionConfig())
+            bundle = injector.focus_identity()
+        except UnsupportedPlatformError as exc:
+            print(f"manu vocab check: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
+        print()
+        print(f"frontmost application: {bundle or '(cannot tell)'}")
+        terms = vocabulary.terms_for(bundle)
+        scoped = bundle is not None and bundle in vocabulary.boost_by_app
+        source = "[boost.apps]" if scoped else "[boost] terms"
+        print(f"boost terms ({source}): {', '.join(terms) if terms else '(none)'}")
+
+    if text is None:
+        if not show_app:
+            print()
+            print("nothing to check — pass some text, or --app.")
+        return _EXIT_OK
+
+    replaced, fired = vocabulary.apply(text)
+    print()
+    print(replaced)
+    print()
+    if fired:
+        for entry in fired:
+            key = entry.split(":", 1)[1]
+            print(f"  {key!r} -> {vocabulary.replacements[key]!r}")
+    else:
+        print("  no entries fired.")
     return _EXIT_OK
 
 
@@ -268,6 +481,15 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     # Both or neither, and the type says so. `history` was previously bound
     # only inside the branch below, which mypy accepts and a future edit would
     # break silently — on the one path where the §8 guarantee lives.
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    vocabulary = VocabularyLoader()
+    try:
+        processors = build_chain(config.postprocess, vocabulary)
+    except ValueError as exc:
+        print(f"manu transcribe: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
     injector: TextInjector | None = None
     history: HistoryStore | None = None
     if inject:
@@ -344,24 +566,46 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
     timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
     started = time.perf_counter()
-    text = engine.transcribe(trimmed.audio, config.audio.sample_rate).text
+    raw_text = engine.transcribe(trimmed.audio, config.audio.sample_rate).text
     timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
+
+    # This verb exists to measure the whole path, so it runs the configured
+    # chain rather than printing the decoder's output and calling it the
+    # product. Before Phase 3 it printed a `g1_ms` with a stage missing and said
+    # so in a footnote; a number that needs a footnote to be read correctly is
+    # the shape this project has already been misled by twice.
+    session = DictationSession(
+        id=uuid.uuid4().hex,
+        started_at=datetime.now(UTC),
+        audio=None,  # §5.5: audio is stored only behind `store_audio`
+        sample_rate=config.audio.sample_rate,
+        raw_transcript=raw_text,
+        engine=f"{config.engine.backend}:{engine.model_name}",
+        timings=timings,
+    )
+    text = raw_text
+    started = time.perf_counter()
+    for processor in processors:
+        if isinstance(processor, TracedPostProcessor):
+            text, acted = processor.process_traced(text, session)
+            session.fired_entries += acted
+        else:
+            text = processor.process(text, session)
+    timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
+    if processors:
+        session.final_text = text
 
     print()
     print(text.strip() or "(nothing was transcribed)")
+    if session.fired_entries:
+        # Which rules acted, not just that the text changed. A user comparing
+        # this against what they said needs to know whether the product edited
+        # it or the decoder heard it that way (dictionary objection O5).
+        print(f"  [{', '.join(session.fired_entries)}]")
     print()
 
     exit_code = _EXIT_OK
     if injector is not None and history is not None:
-        session = DictationSession(
-            id=uuid.uuid4().hex,
-            started_at=datetime.now(UTC),
-            audio=None,  # §5.5: audio is stored only behind `store_audio`
-            sample_rate=config.audio.sample_rate,
-            raw_transcript=text,
-            engine=f"{config.engine.backend}:{engine.model_name}",
-            timings=timings,
-        )
         result = deliver(session, history, injector)
         if result.succeeded:
             print(f"injected via {result.strategy}.")
@@ -457,7 +701,7 @@ def _daemon(config: AppConfig) -> int:
             print(file=sys.stderr)
 
     history = HistoryStore(config.history)
-    swept = history.sweep_pending()
+    swept = history.sweep()
     if swept.removed or swept.remaining:
         print(
             f"pending transcripts: {swept.removed} expired, "
@@ -465,16 +709,26 @@ def _daemon(config: AppConfig) -> int:
             flush=True,
         )
 
-    if config.postprocess.chain:
-        # Named rather than silently ignored. §9's Phase 2b gate asks for
-        # `chain = ["rules"]`, which Phase 3 builds; measuring with an empty
-        # chain is the resolution, and a `g1_ms` that omits a stage without
-        # saying so is the second thing this project has been misled by.
-        print(
-            "post-processing is not built yet (Phase 3), so "
-            f"[postprocess] chain = {list(config.postprocess.chain)} is skipped "
-            "and every g1_ms below is a floor."
-        )
+    # Built eagerly, before the model loads. A chain naming something that is
+    # not built is a daemon that refuses to start with a sentence, rather than
+    # a dictation that silently skips a stage — which is the failure Phase 2b
+    # spent a gate note on.
+    from amanuensis.postprocess.vocabulary import VocabularyLoader
+
+    # One loader, shared by the chain and the controller. `[boost]` reads the
+    # same snapshot before the decode that `[replace]` reads after it, so a user
+    # editing their file mid-session cannot have the edit land on one half and
+    # not the other.
+    vocabulary = VocabularyLoader()
+    try:
+        processors = build_chain(config.postprocess, vocabulary)
+    except ValueError as exc:
+        print(f"manu daemon: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+    for warning in vocabulary.refresh().warnings:
+        print(f"vocabulary.toml: {warning}", file=sys.stderr)
+    if vocabulary.error is not None:
+        print(f"vocabulary.toml: {vocabulary.error}", file=sys.stderr)
 
     try:
         engine = FasterWhisperEngine(config.engine)
@@ -492,11 +746,12 @@ def _daemon(config: AppConfig) -> int:
         config=config,
         engine=engine,
         injector=injector,
-        processors=[],
+        processors=processors,
         history=history,
         capture=capture,
         detector=detector,
         on_state_change=indicator.set_state,
+        vocabulary=vocabulary,
     )
 
     def _on_release() -> None:
@@ -646,8 +901,7 @@ def _print_timings(
         f"  {'g1_ms':<16} {timings.g1_ms:8.1f}   " "<- G1: 400 ms p50 / 800 ms p95 (§2)"
     )
     if injected:
-        print("  post-processing is not built yet (Phase 3), so g1_ms here is")
-        print("  still a floor. Injection and the §8 write are in it.")
+        pass
     else:
         print("  postprocess and inject are not in this run, so g1_ms here is a")
         print("  floor and will grow. `--inject` adds the two Phase 2a stages.")

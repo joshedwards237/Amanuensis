@@ -341,7 +341,7 @@ def test_the_sweep_does_not_delete_a_recoverable_transcript(tmp_path: Path) -> N
     store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
     fresh = _orphan(store, "recent", age_days=1)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert fresh.exists()
     assert result.removed == 0
@@ -355,7 +355,7 @@ def test_the_sweep_applies_retain_days(tmp_path: Path) -> None:
     stale = _orphan(store, "old", age_days=31)
     fresh = _orphan(store, "new", age_days=29)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert not stale.exists()
     assert fresh.exists()
@@ -370,7 +370,7 @@ def test_retain_days_zero_sweeps_everything(tmp_path: Path) -> None:
     _orphan(store, "old", age_days=31)
     _orphan(store, "new", age_days=0)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert result.removed == 2
     assert result.remaining == 0
@@ -381,7 +381,7 @@ def test_a_missing_pending_directory_is_not_an_error(tmp_path: Path) -> None:
     never had an injection fail. Daemon start must not care."""
     store = HistoryStore(HistoryConfig(), data_dir=tmp_path)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert result.removed == 0
     assert result.remaining == 0
@@ -395,7 +395,7 @@ def test_the_sweep_ignores_files_it_did_not_write(tmp_path: Path) -> None:
     stranger = store.pending_dir / "notes.txt"
     stranger.write_text("not ours")
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert stranger.exists()
     assert result.removed == 1
@@ -610,7 +610,7 @@ def test_the_sweep_applies_retain_days_to_audio(tmp_path: Path) -> None:
     old = time.time() - 3 * 86400
     os.utime(stale, (old, old))
 
-    store.sweep_pending()
+    store.sweep()
 
     assert not stale.exists()
 
@@ -622,7 +622,7 @@ def test_the_sweep_keeps_audio_inside_the_window(tmp_path: Path) -> None:
     store.write_pending(_session(audio=_audible()))
     fresh = next(iter(tmp_path.glob("audio/*.wav")))
 
-    store.sweep_pending()
+    store.sweep()
 
     assert fresh.exists()
 
@@ -691,3 +691,325 @@ def test_the_latest_transcript_is_found_on_the_non_retaining_path(
 
 def test_there_is_no_latest_when_nothing_was_ever_written(tmp_path: Path) -> None:
     assert _store(tmp_path).latest() is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 V0 — the raw transcript gets a column of its own
+# ---------------------------------------------------------------------------
+
+
+def _session_with_both(session_id: str = "raw-1") -> Any:
+    """A session that has been through post-processing, so the two differ."""
+    from datetime import UTC, datetime
+
+    import numpy as np
+
+    from amanuensis.models.session import DictationSession
+
+    session = DictationSession(
+        id=session_id,
+        started_at=datetime(2026, 8, 8, 12, 0, tzinfo=UTC),
+        audio=np.zeros(16000, dtype=np.float32),
+        sample_rate=16000,
+    )
+    session.raw_transcript = "the breadshoe is open"
+    session.final_text = "The spreadsheet is open."
+    return session
+
+
+def test_the_row_carries_both_transcripts() -> None:
+    """`to_history_row()` emitted `final_text or raw_transcript` into one slot.
+
+    So the engine's own words were lost the moment any processor ran — which
+    made §7.5's first Phase 5 constraint ("raw transcript persisted")
+    unimplementable in the schema, and made a mis-firing `[replace]` entry
+    indistinguishable from an ASR error (dictionary objections O1 and O5).
+    """
+    row = _session_with_both().to_history_row()
+
+    assert row["transcript"] == "The spreadsheet is open."
+    assert (
+        row["raw_transcript"] == "the breadshoe is open"
+    ), "the decoder's own output has to survive post-processing"
+
+
+def test_a_session_with_no_post_processing_reports_a_raw_transcript() -> None:
+    """`raw_transcript` is what the decoder said, whether or not anything ran.
+
+    Not "the raw text when it differs" — a column that is populated only
+    sometimes cannot answer "did the processors change my words?", which is the
+    question the column exists for.
+    """
+    session = _session_with_both("raw-2")
+    session.final_text = None
+    row = session.to_history_row()
+
+    assert row["transcript"] == "the breadshoe is open"
+    assert row["raw_transcript"] == "the breadshoe is open"
+
+
+def test_the_raw_transcript_reaches_the_database(tmp_path: Path) -> None:
+    """All four touch points, not one.
+
+    `_MIGRATIONS` only widens an existing table. Without `_SCHEMA` a new install
+    lacks the column; without `_COLUMNS` the INSERT silently drops the value.
+    `restore_ms` was missed exactly this way in Phase 2a and the miss was that
+    phase's headline finding (objection O12).
+    """
+    import sqlite3
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.storage.history import HistoryStore
+
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    assert store.write_pending(_session_with_both("raw-3"))
+
+    connection = sqlite3.connect(store.db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT transcript, raw_transcript FROM transcripts WHERE id = ?",
+            ("raw-3",),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row["transcript"] == "The spreadsheet is open."
+    assert row["raw_transcript"] == "the breadshoe is open"
+
+
+def test_an_existing_database_is_widened_rather_than_left_behind(
+    tmp_path: Path,
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` cannot widen a table that already exists.
+
+    Which is every table belonging to anyone who has already used the product —
+    so a column that lands only in `_SCHEMA` reaches new installs and nobody
+    else.
+    """
+    import sqlite3
+
+    from amanuensis.config import HistoryConfig
+    from amanuensis.storage.history import HistoryStore
+
+    data_dir = tmp_path
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "history.db"
+    # A pre-Phase-3 table: everything except the new column.
+    # The real Phase 2b schema, enumerated rather than derived from `_SCHEMA` —
+    # deriving it would make the test pass by construction the moment the new
+    # column is added to that constant, which is the half of the bug that
+    # `_MIGRATIONS` exists to catch.
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE transcripts ("
+            "id TEXT PRIMARY KEY, started_at TEXT NOT NULL, "
+            "transcript TEXT NOT NULL, duration_seconds REAL NOT NULL, "
+            "engine TEXT NOT NULL DEFAULT '', error TEXT, "
+            "guard_outcome TEXT, guard_coverage REAL, "
+            "guard_retained_seconds REAL, "
+            "capture_ms REAL NOT NULL DEFAULT 0, vad_ms REAL NOT NULL DEFAULT 0, "
+            "transcribe_ms REAL NOT NULL DEFAULT 0, "
+            "guard_ms REAL NOT NULL DEFAULT 0, "
+            "postprocess_ms REAL NOT NULL DEFAULT 0, "
+            "persist_ms REAL NOT NULL DEFAULT 0, "
+            "inject_ms REAL NOT NULL DEFAULT 0, "
+            "restore_ms REAL NOT NULL DEFAULT 0, "
+            "injected INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=data_dir)
+    assert store.write_pending(_session_with_both("raw-4"))
+
+    connection = sqlite3.connect(db_path)
+    try:
+        present = {
+            row[1] for row in connection.execute("PRAGMA table_info(transcripts)")
+        }
+    finally:
+        connection.close()
+
+    assert "raw_transcript" in present
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C1 — retention reaches history.db
+# ---------------------------------------------------------------------------
+
+
+def _aged_row(store: HistoryStore, session_id: str, days_ago: float) -> None:
+    """Write a row and back-date it. `started_at` is the retention clock."""
+    from datetime import timedelta
+
+    when = datetime.now(UTC) - timedelta(days=days_ago)
+    store.write_pending(_session(id=session_id, started_at=when))
+
+
+def test_rows_older_than_retain_days_are_swept(tmp_path: Path) -> None:
+    """`retain_days` had never reached `history.db`. It expired `pending/` files
+    and stored audio and left the database growing without bound."""
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=30), data_dir=tmp_path)
+    _aged_row(store, "old", days_ago=40)
+    _aged_row(store, "new", days_ago=1)
+
+    result = store.sweep()
+
+    assert result.rows_removed == 1
+    remaining = {row["id"] for row in _rows(store.db_path)}
+    assert remaining == {"new"}
+
+
+def test_the_sweep_actually_deletes_something(tmp_path: Path) -> None:
+    """The positive control for the test above, and it is not ceremony.
+
+    `started_at` is an ISO-8601 *string* and the pending sweep compares
+    `st_mtime` floats. `DELETE ... WHERE started_at < <float>` does not error —
+    SQLite applies the TEXT column's affinity to the operand and the comparison
+    silently matches **nothing** (objection O12). A retention sweep that appears
+    to work and never deletes a row would pass any test that only checked the
+    survivors.
+    """
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=1), data_dir=tmp_path)
+    for index in range(3):
+        _aged_row(store, f"old-{index}", days_ago=10)
+
+    assert len(_rows(store.db_path)) == 3
+    result = store.sweep()
+    assert result.rows_removed == 3, "the cutoff matched nothing — see the docstring"
+    assert _rows(store.db_path) == []
+
+
+def test_retain_days_zero_keeps_nothing(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=0), data_dir=tmp_path)
+    _aged_row(store, "today", days_ago=0)
+
+    store.sweep()
+
+    assert _rows(store.db_path) == []
+
+
+def test_a_row_inside_the_window_survives_a_sweep(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=30), data_dir=tmp_path)
+    _aged_row(store, "recent", days_ago=29)
+
+    store.sweep()
+
+    assert len(_rows(store.db_path)) == 1
+
+
+def test_the_database_is_in_wal_mode(tmp_path: Path) -> None:
+    """`manu history` opens the database the daemon is holding, and IPC is Phase
+    4 (objection O11). WAL lets a reader run against a writer, which is the
+    `manu history`-during-dictation case exactly."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(_session())
+
+    connection = sqlite3.connect(store.db_path)
+    try:
+        mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        connection.close()
+    assert mode.lower() == "wal"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C2/C3 — purge
+# ---------------------------------------------------------------------------
+
+
+def test_purge_removes_every_artefact(tmp_path: Path) -> None:
+    """§5.5 says `--purge` wipes it. "It" is three things on two paths, plus the
+    sidecar files WAL introduces (choice-story #9)."""
+    store = HistoryStore(
+        HistoryConfig(retain=True, store_audio=True), data_dir=tmp_path
+    )
+    import numpy as np
+
+    session = _session(audio=np.zeros(16000, dtype=np.float32))
+    store.write_pending(session)
+    # And an orphan from the other path.
+    other = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    other.write_pending(_session(id="orphan"))
+
+    assert list(store.audio_dir.glob("*.wav"))
+    assert list(store.pending_dir.glob("*.json"))
+
+    result = store.purge()
+
+    assert result.rows_removed == 1
+    assert result.files_removed >= 2
+    assert _rows(store.db_path) == []
+    assert list(store.audio_dir.glob("*.wav")) == []
+    assert list(store.pending_dir.glob("*.json")) == []
+
+
+def test_purge_leaves_no_wal_sidecar_behind(tmp_path: Path) -> None:
+    """WAL adds `history.db-wal` and `-shm`. A purge that deletes rows and
+    leaves a write-ahead log holding them has not wiped anything — §5.5 already
+    declines to claim secure erasure, but the inventory has to be honest."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(_session())
+
+    store.purge()
+
+    assert not (tmp_path / "history.db-wal").exists()
+    assert not (tmp_path / "history.db-shm").exists()
+
+
+def test_purge_on_an_empty_store_is_not_an_error(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    result = store.purge()
+    assert result.rows_removed == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C2 — reading it back
+# ---------------------------------------------------------------------------
+
+
+def test_recent_returns_newest_first(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    _aged_row(store, "older", days_ago=2)
+    _aged_row(store, "newer", days_ago=1)
+
+    found = store.recent(limit=10)
+
+    assert [item.id for item in found] == ["newer", "older"]
+
+
+def test_recent_respects_its_limit(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    for index in range(5):
+        _aged_row(store, f"row-{index}", days_ago=index)
+
+    assert len(store.recent(limit=2)) == 2
+
+
+def test_pending_lists_the_orphans(tmp_path: Path) -> None:
+    """§5.5 gap 3: before this they were a file the user was never told about
+    and no command surfaced."""
+    store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    store.write_pending(_session(id="orphan-1"))
+
+    found = store.pending()
+
+    assert [item.id for item in found] == ["orphan-1"]
+    assert found[0].injected is False
+
+
+def test_the_raw_transcript_is_readable_back(tmp_path: Path) -> None:
+    """The column existed and nothing could show it (choice-story #10)."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(
+        _session(raw_transcript="the breadshoe", final_text="the spreadsheet")
+    )
+
+    found = store.latest()
+
+    assert found is not None
+    assert found.transcript == "the spreadsheet"
+    assert found.raw_transcript == "the breadshoe"

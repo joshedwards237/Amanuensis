@@ -59,6 +59,18 @@ class LatencyBreakdown:
     #: exists to shrink would make this breakdown useless for the one argument
     #: it was built to support.
     vad_ms: float = 0.0
+    #: Re-reading `vocabulary.toml` when its mtime changed, and recompiling the
+    #: replacement alternation. Inside G1 and inside `g1_ms`: the read happens at
+    #: the top of the worker, before trimming, so it is time between hotkey
+    #: release and text at the cursor. §6.3's standing rule is that a stage
+    #: inside that window needs a field — this is the FIFTH phase running in
+    #: which that rule was broken by a new stage.
+    #:
+    #: Deliberately not excluded as "the user's own cost". §2's two exclusions
+    #: (`capture_ms`, `restore_ms`) are both justified by falling *outside* the
+    #: release-to-text window, never by whose fault the time is, and admitting
+    #: the second justification would let any future stage escape the same way.
+    vocab_ms: float = 0.0
     transcribe_ms: float = 0.0
     postprocess_ms: float = 0.0
     #: The §8 pre-injection write. Added in Phase 2a, and *inside* G1 for the
@@ -106,6 +118,7 @@ class LatencyBreakdown:
         """
         return (
             self.asr_ms
+            + self.vocab_ms
             + self.guard_ms
             + self.postprocess_ms
             + self.persist_ms
@@ -144,6 +157,14 @@ class DictationSession:
     #: is different from the check declining to judge, and that difference is
     #: why `GuardOutcome.SKIPPED` exists rather than being spelled `None`.
     guard: GuardVerdict | None = None
+    #: Which post-processing rules and dictionary entries actually acted on this
+    #: transcript. Written by the chain runner from `process_traced`'s return
+    #: value, never by a processor — `process` is pure with respect to the
+    #: session and the trace is deliberately not an exception to that
+    #: (objection O8). Empty when no processor offered the capability, which is
+    #: a different statement from "nothing fired" and is why the gate reports
+    #: the chain alongside it.
+    fired_entries: tuple[str, ...] = ()
     error: str | None = None
     #: Set by the worker, *last*, after every field above is written. A thread
     #: that sees this set is guaranteed a fully populated session; that ordering
@@ -188,6 +209,14 @@ class DictationSession:
             "id": self.id,
             "started_at": self.started_at.isoformat(),
             "transcript": self.final_text or self.raw_transcript,
+            # The decoder's own words, always — not "when they differ". A
+            # column populated only sometimes cannot answer "did the processors
+            # change what I said?", which is the question it exists for. Before
+            # Phase 3 this shared the slot above, so the raw output was lost the
+            # moment any processor ran: §7.5's first Phase 5 constraint is "raw
+            # transcript persisted", and the schema could not express it
+            # (dictionary objection O1).
+            "raw_transcript": self.raw_transcript,
             "duration_seconds": self.duration_seconds(),
             "engine": self.engine,
             "error": self.error,
@@ -200,5 +229,11 @@ class DictationSession:
             "guard_retained_seconds": (
                 self.guard.retained_seconds if self.guard else None
             ),
+            # Comma-joined rather than JSON: the only consumer is a person
+            # reading a history row or a gate record, and `rules, vocabulary`
+            # is legible where `["rules", "vocabulary"]` is a format to decode.
+            # NULL when nothing fired, so "no rule acted" and "the empty list
+            # was stored" are not the same value.
+            "fired_entries": ", ".join(self.fired_entries) or None,
             **asdict(self.timings),
         }

@@ -250,10 +250,17 @@ def describe_machine() -> dict[str, str]:
         "logical_cpus": str(os.cpu_count() or "unknown"),
     }
     if sys.platform == "darwin":
-        for label, key in (("cpu", "machdep.cpu.brand_string"), ("memory_bytes", "hw.memsize")):
+        for label, key in (
+            ("cpu", "machdep.cpu.brand_string"),
+            ("memory_bytes", "hw.memsize"),
+        ):
             try:
                 out = subprocess.run(
-                    ["sysctl", "-n", key], capture_output=True, text=True, check=True, timeout=5
+                    ["sysctl", "-n", key],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=5,
                 )
                 info[label] = out.stdout.strip()
             except (subprocess.SubprocessError, OSError):
@@ -446,7 +453,10 @@ def normalise(text: str) -> list[str]:
     for char in text:
         if char in _APOSTROPHES:
             continue
-        if unicodedata.category(char).startswith("P") or unicodedata.category(char) == "Sm":
+        if (
+            unicodedata.category(char).startswith("P")
+            or unicodedata.category(char) == "Sm"
+        ):
             out_chars.append(" ")
         else:
             out_chars.append(char)
@@ -519,7 +529,9 @@ def word_errors(reference: Sequence[str], hypothesis: Sequence[str]) -> EditCoun
     return EditCounts(subs, dels, inss, n)
 
 
-def wilson_interval(errors: int, trials: int, z: float = Z_95) -> tuple[float, float] | None:
+def wilson_interval(
+    errors: int, trials: int, z: float = Z_95
+) -> tuple[float, float] | None:
     """95% Wilson score interval for an error rate.
 
     Present so the report can say "these two models are not distinguishable by
@@ -654,7 +666,9 @@ def load_audio(samples: Iterable[Sample]) -> dict[str, object]:
     decoded: dict[str, object] = {}
     for sample in samples:
         try:
-            decoded[sample.name] = decode_audio(str(sample.wav), sampling_rate=EXPECTED_SAMPLE_RATE)
+            decoded[sample.name] = decode_audio(
+                str(sample.wav), sampling_rate=EXPECTED_SAMPLE_RATE
+            )
         except Exception as exc:  # noqa: BLE001 — decode backends raise many types
             raise CorpusError(f"{sample.wav}: could not decode audio ({exc})") from exc
     return decoded
@@ -776,7 +790,10 @@ def run_model(
 
     try:
         if verbose:
-            print(f"  loading {model_name} (cpu, cpu_threads={cpu_threads})...", flush=True)
+            print(
+                f"  loading {model_name} (cpu, cpu_threads={cpu_threads})...",
+                flush=True,
+            )
         transcribe = (
             _moonshine_transcriber(model_name)
             if is_moonshine(model_name)
@@ -791,7 +808,11 @@ def run_model(
         # One unavailable model must not cost the whole run. A missing
         # `distil-large-v3` download should still leave `base.en` measured.
         result.error = f"{type(exc).__name__}: {exc}"
-        print(f"  !! {model_name} unavailable — {result.error}", file=sys.stderr, flush=True)
+        print(
+            f"  !! {model_name} unavailable — {result.error}",
+            file=sys.stderr,
+            flush=True,
+        )
         return result
 
     for sample in samples:
@@ -845,7 +866,9 @@ def verdict(p50: float, p95: float) -> tuple[str, str]:
     return g1, g1_cpu
 
 
-def corpus_caveats(samples: Sequence[Sample], results: Sequence[ModelResult]) -> list[str]:
+def corpus_caveats(
+    samples: Sequence[Sample], results: Sequence[ModelResult]
+) -> list[str]:
     """Everything that makes this corpus a weak instrument, computed not asserted.
 
     PRD §2: the WER figure "is for relative comparison only... it is not a G2
@@ -989,7 +1012,9 @@ def print_console_report(
 
     print("Latency — TRANSCRIPTION ONLY. This is a floor, not G1.")
     print("  G1 (PRD §2) is g1_ms = transcribe + postprocess + inject. What is left")
-    print(f"  of the {G1_P50_MS:.0f} ms p50 budget after transcription is shown as headroom.")
+    print(
+        f"  of the {G1_P50_MS:.0f} ms p50 budget after transcription is shown as headroom."
+    )
     print()
     header = (
         f"  {'model':<20} {'p50':>10} {'p95':>10} {'min':>10} {'max':>10} "
@@ -1011,17 +1036,22 @@ def print_console_report(
             f"{G1_P50_MS - p50:+.1f}ms",
         ]
         print(
-            f"  {result.model:<20} " + " ".join(f"{c:>10}" for c in cells)
+            f"  {result.model:<20} "
+            + " ".join(f"{c:>10}" for c in cells)
             + f" {g1:>5} {g1_cpu:>7} {tier_for(p50):>5}"
         )
     if ok:
         n_obs = len(ok[0].all_latencies)
         print()
-        print(f"  p50/p95 pooled over {n_obs} observations per model "
-              f"({len(samples)} samples × {runs} runs), nearest-rank.")
+        print(
+            f"  p50/p95 pooled over {n_obs} observations per model "
+            f"({len(samples)} samples × {runs} runs), nearest-rank."
+        )
         if n_obs < 20:
-            print(f"  ⚠️ A p95 from {n_obs} observations is the "
-                  f"{math.ceil(0.95 * n_obs)}th value — barely a percentile.")
+            print(
+                f"  ⚠️ A p95 from {n_obs} observations is the "
+                f"{math.ceil(0.95 * n_obs)}th value — barely a percentile."
+            )
     print()
 
     print("Accuracy (WER) — RELATIVE COMPARISON ONLY, NOT A G2 MEASUREMENT")
@@ -1030,8 +1060,10 @@ def print_console_report(
     print("  shown only because the Wilson interval is computed from it; a 2026-07-31")
     print("  amendment withdrew a micro figure that had been in circulation.")
     print()
-    print(f"  {'model':<20} {'macro':>8} {'range':>16} {'micro':>8} "
-          f"{'95% CI':>16} {'sub':>5} {'del':>5} {'ins':>5}")
+    print(
+        f"  {'model':<20} {'macro':>8} {'range':>16} {'micro':>8} "
+        f"{'95% CI':>16} {'sub':>5} {'del':>5} {'ins':>5}"
+    )
     print("  " + "-" * 90)
     for result in results:
         if result.error:
@@ -1056,24 +1088,36 @@ def print_console_report(
     if inside:
         best = min(inside, key=lambda r: r.p50_ms)
         names = ", ".join(r.model for r in inside)
-        print(f"  Tier A (transcribe only). {len(inside)} of {len(ok)} candidates land inside")
+        print(
+            f"  Tier A (transcribe only). {len(inside)} of {len(ok)} candidates land inside"
+        )
         print(f"  the {G1_P50_MS:.0f} ms p50 budget: {names}.")
         print(f"  Fastest is {best.model} at {best.p50_ms:.0f} ms.")
         print()
-        print("  A tier is decided by the model the ADR SELECTS, not by the fastest one")
-        print("  measured — so this is Tier A only if the selected model is in that list,")
-        print(f"  and only if postprocess + inject fit in the "
-              f"{G1_P50_MS - best.p50_ms:.0f} ms that remain.")
+        print(
+            "  A tier is decided by the model the ADR SELECTS, not by the fastest one"
+        )
+        print(
+            "  measured — so this is Tier A only if the selected model is in that list,"
+        )
+        print(
+            f"  and only if postprocess + inject fit in the "
+            f"{G1_P50_MS - best.p50_ms:.0f} ms that remain."
+        )
     elif ok:
         best = min(ok, key=lambda r: r.p50_ms)
         g1_cpu = "inside" if best.p50_ms <= G1_CPU_P50_MS else "OUTSIDE"
-        print(f"  Tier B (transcribe only). No candidate lands inside {G1_P50_MS:.0f} ms.")
-        print(f"  Fastest is {best.model} at {best.p50_ms:.0f} ms — {g1_cpu} the "
-              f"{G1_CPU_P50_MS:.0f} ms G1-CPU floor.")
+        print(
+            f"  Tier B (transcribe only). No candidate lands inside {G1_P50_MS:.0f} ms."
+        )
+        print(
+            f"  Fastest is {best.model} at {best.p50_ms:.0f} ms — {g1_cpu} the "
+            f"{G1_CPU_P50_MS:.0f} ms G1-CPU floor."
+        )
         print()
-        print( "  PRD §9: a Tier B miss does not reject the gate; it is recorded and")
-        print( "  published. Missing G1-CPU is a different matter — PRD §2 drops that")
-        print( "  machine class in §3 rather than shipping it.")
+        print("  PRD §9: a Tier B miss does not reject the gate; it is recorded and")
+        print("  published. Missing G1-CPU is a different matter — PRD §2 drops that")
+        print("  machine class in §3 rather than shipping it.")
     else:
         print("  No model completed. Nothing to report.")
     print()
@@ -1105,7 +1149,9 @@ def build_markdown(
     lines: list[str] = []
     add = lines.append
 
-    add("<!-- Generated by scripts/bench_engines.py — Phase 1 tooling, not product code. -->")
+    add(
+        "<!-- Generated by scripts/bench_engines.py — Phase 1 tooling, not product code. -->"
+    )
     add("")
     add("## Measurement")
     add("")
@@ -1120,28 +1166,36 @@ def build_markdown(
     add(f"| `beam_size` | {beam_size} |")
     add(f"| `vad_filter` | `{vad_filter}` |")
     add(f"| Runs | {runs} timed per sample, one warm-up discarded, median reported |")
-    add(f"| Corpus | {len(samples)} samples, "
+    add(
+        f"| Corpus | {len(samples)} samples, "
         f"{sum(s.duration_s for s in samples):.1f} s, "
-        f"{sum(len(s.reference_words) for s in samples)} reference words |")
+        f"{sum(len(s.reference_words) for s in samples)} reference words |"
+    )
     add("")
 
     add("## Latency")
     add("")
-    add("> **Transcription only — this is a floor, not G1.** G1 is "
+    add(
+        "> **Transcription only — this is a floor, not G1.** G1 is "
         "`LatencyBreakdown.g1_ms` = transcribe + postprocess + inject (PRD §2, §6.3). "
         "The headroom column is what remains of the 400 ms p50 budget for the other "
-        "two stages.")
+        "two stages."
+    )
     add("")
     note = duration_note(samples)
     if note:
         add(f"> ⚠️ {note}")
         add("")
-    add("| Model | p50 | p95 | min | max | Headroom vs G1 p50 | G1 (400/800 ms) | "
-        "G1-CPU (2000 ms p50) | Tier |")
+    add(
+        "| Model | p50 | p95 | min | max | Headroom vs G1 p50 | G1 (400/800 ms) | "
+        "G1-CPU (2000 ms p50) | Tier |"
+    )
     add("|---|---|---|---|---|---|---|---|---|")
     for result in results:
         if result.error:
-            add(f"| `{result.model}` | — | — | — | — | — | unavailable | unavailable | — |")
+            add(
+                f"| `{result.model}` | — | — | — | — | — | unavailable | unavailable | — |"
+            )
             continue
         p50, p95 = result.p50_ms, result.p95_ms
         g1, g1_cpu = verdict(p50, p95)
@@ -1155,11 +1209,15 @@ def build_markdown(
     ok = [r for r in results if not r.error and r.samples]
     if ok:
         n_obs = len(ok[0].all_latencies)
-        add(f"Percentiles are nearest-rank over {n_obs} observations per model "
-            f"({len(samples)} samples × {runs} runs).")
+        add(
+            f"Percentiles are nearest-rank over {n_obs} observations per model "
+            f"({len(samples)} samples × {runs} runs)."
+        )
         if n_obs < 20:
-            add(f"⚠️ A p95 drawn from {n_obs} observations is the "
-                f"{math.ceil(0.95 * n_obs)}th value; treat it as indicative.")
+            add(
+                f"⚠️ A p95 drawn from {n_obs} observations is the "
+                f"{math.ceil(0.95 * n_obs)}th value; treat it as indicative."
+            )
         add("")
 
     add("### Per sample")
@@ -1174,7 +1232,11 @@ def build_markdown(
             else:
                 sr = result.samples[i]
                 cells.append(f"{sr.median_ms:.0f} ms ({sr.min_ms:.0f}–{sr.max_ms:.0f})")
-        add(f"| `{sample.name}` | {sample.duration_s:.1f} s | " + " | ".join(cells) + " |")
+        add(
+            f"| `{sample.name}` | {sample.duration_s:.1f} s | "
+            + " | ".join(cells)
+            + " |"
+        )
     add("")
     add("Cells are median (min–max) in milliseconds.")
     add("")
@@ -1183,14 +1245,18 @@ def build_markdown(
     add("")
     add("\n>\n".join(f"> {caveat}" for caveat in corpus_caveats(samples, results)))
     add("")
-    add("> **The macro column is the PRD's figure** (§7.2, amended 2026-07-31 under "
-        "objection A3: \"WER in this document is macro-average... The 14.8% figure is "
-        "withdrawn\"). Micro is reported beside it only because the Wilson interval is "
+    add(
+        "> **The macro column is the PRD's figure** (§7.2, amended 2026-07-31 under "
+        'objection A3: "WER in this document is macro-average... The 14.8% figure is '
+        'withdrawn"). Micro is reported beside it only because the Wilson interval is '
         "a binomial over pooled errors and cannot be computed from a mean of rates. "
-        "The two differ by roughly a third relative; do not quote the micro column.")
+        "The two differ by roughly a third relative; do not quote the micro column."
+    )
     add("")
-    add("| Model | WER (macro) | Per-sample range | WER (micro) | 95% CI (micro) | "
-        "Substitutions | Deletions | Insertions |")
+    add(
+        "| Model | WER (macro) | Per-sample range | WER (micro) | 95% CI (micro) | "
+        "Substitutions | Deletions | Insertions |"
+    )
     add("|---|---|---|---|---|---|---|---|")
     for result in results:
         if result.error:
@@ -1218,42 +1284,60 @@ def build_markdown(
                 cells.append("—")
             else:
                 cells.append(f"{result.samples[i].counts.wer * 100:.1f}%")
-        add(f"| `{sample.name}` | {len(sample.reference_words)} | " + " | ".join(cells) + " |")
+        add(
+            f"| `{sample.name}` | {len(sample.reference_words)} | "
+            + " | ".join(cells)
+            + " |"
+        )
     add("")
 
     if sweep:
         add("## `cpu_threads` sweep")
         add("")
-        add("> PRD §7.2: CTranslate2 defaults to 4 threads; the probe measured a **1.8× "
+        add(
+            "> PRD §7.2: CTranslate2 defaults to 4 threads; the probe measured a **1.8× "
             "penalty** from that default and the chosen value was never tuned beyond "
-            "\"match the performance cores\". This sweep is the tuning.")
+            '"match the performance cores". This sweep is the tuning.'
+        )
         add("")
         add("| `cpu_threads` | Model | p50 | p95 | vs. resolved default |")
         add("|---|---|---|---|---|")
-        baseline = next((r for r in sweep if r.cpu_threads == threads and not r.error), None)
+        baseline = next(
+            (r for r in sweep if r.cpu_threads == threads and not r.error), None
+        )
         for result in sweep:
             if result.error:
-                add(f"| {result.cpu_threads} | `{result.model}` | — | — | unavailable |")
+                add(
+                    f"| {result.cpu_threads} | `{result.model}` | — | — | unavailable |"
+                )
                 continue
             if baseline and baseline.p50_ms > 0:
                 ratio = f"{result.p50_ms / baseline.p50_ms:.2f}×"
             else:
                 ratio = "—"
             marker = " *(resolved default)*" if result.cpu_threads == threads else ""
-            add(f"| {result.cpu_threads}{marker} | `{result.model}` | "
-                f"{result.p50_ms:.0f} ms | {result.p95_ms:.0f} ms | {ratio} |")
+            add(
+                f"| {result.cpu_threads}{marker} | `{result.model}` | "
+                f"{result.p50_ms:.0f} ms | {result.p95_ms:.0f} ms | {ratio} |"
+            )
         add("")
 
     add("## What this does not measure")
     add("")
-    add("- Audio capture, model residency / cold start (PRD §8's < 15 s NFR), "
-        "post-processing, and text injection. All excluded, all real.")
+    add(
+        "- Audio capture, model residency / cold start (PRD §8's < 15 s NFR), "
+        "post-processing, and text injection. All excluded, all real."
+    )
     add("- Edit rate — the actual G2 product goal (PRD §2). That is Phase 3.")
-    add("- Moonshine, which PRD §7.2 requires be benchmarked against `base.en` in "
-        "Phase 1. Not installed in this environment; add it before the ADR closes.")
-    add("- `beam_size` beyond the single value above. The probe flagged sweeping it "
+    add(
+        "- Moonshine, which PRD §7.2 requires be benchmarked against `base.en` in "
+        "Phase 1. Not installed in this environment; add it before the ADR closes."
+    )
+    add(
+        "- `beam_size` beyond the single value above. The probe flagged sweeping it "
         "as an open item, since it trades latency against the accuracy this corpus "
-        "measures weakly.")
+        "measures weakly."
+    )
     add("")
     return "\n".join(lines)
 
@@ -1273,7 +1357,9 @@ def parse_thread_list(raw: str, default_threads: int) -> list[int]:
         try:
             values = sorted({int(v) for v in raw.replace(",", " ").split()})
         except ValueError as exc:
-            raise ValueError(f"--sweep-threads: expected integers, got {raw!r}") from exc
+            raise ValueError(
+                f"--sweep-threads: expected integers, got {raw!r}"
+            ) from exc
         if not values or any(v < 1 for v in values):
             raise ValueError("--sweep-threads: values must be integers >= 1")
         return values
@@ -1461,17 +1547,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.trim:
         audio, fell_back = trim_corpus(samples, audio)
         if verbose:
-            print("trimmed every sample once with the product's VAD, outside the "
-                  "timed region", flush=True)
+            print(
+                "trimmed every sample once with the product's VAD, outside the "
+                "timed region",
+                flush=True,
+            )
         if fell_back:
-            print(f"  ⚠️  no speech detected in {', '.join(fell_back)} — passed "
-                  f"through whole (guard 1)", flush=True)
+            print(
+                f"  ⚠️  no speech detected in {', '.join(fell_back)} — passed "
+                f"through whole (guard 1)",
+                flush=True,
+            )
 
     if verbose:
-        print(f"benchmarking {len(models)} models over {len(samples)} samples, "
-              f"{args.runs} timed runs each (cpu_threads={threads})", flush=True)
-        print("first use of a model downloads its weights — that is benchmark-time "
-              "network traffic, not runtime (G3 concerns the shipped daemon).", flush=True)
+        print(
+            f"benchmarking {len(models)} models over {len(samples)} samples, "
+            f"{args.runs} timed runs each (cpu_threads={threads})",
+            flush=True,
+        )
+        print(
+            "first use of a model downloads its weights — that is benchmark-time "
+            "network traffic, not runtime (G3 concerns the shipped daemon).",
+            flush=True,
+        )
 
     results = [
         run_model(
@@ -1490,7 +1588,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sweep_results: list[ModelResult] = []
     if thread_values:
         if verbose:
-            print(f"\nsweeping cpu_threads {thread_values} on {sweep_model}", flush=True)
+            print(
+                f"\nsweeping cpu_threads {thread_values} on {sweep_model}", flush=True
+            )
         for value in thread_values:
             sweep_results.append(
                 run_model(
@@ -1506,13 +1606,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     print_console_report(
-        results, samples, env, threads, threads_basis,
-        args.runs, args.beam_size, args.vad_filter,
+        results,
+        samples,
+        env,
+        threads,
+        threads_basis,
+        args.runs,
+        args.beam_size,
+        args.vad_filter,
     )
 
     markdown = build_markdown(
-        results, samples, env, threads, threads_basis,
-        args.runs, args.beam_size, args.vad_filter,
+        results,
+        samples,
+        env,
+        threads,
+        threads_basis,
+        args.runs,
+        args.beam_size,
+        args.vad_filter,
         sweep_results or None,
     )
     if args.out:

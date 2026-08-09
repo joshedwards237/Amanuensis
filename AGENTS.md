@@ -25,6 +25,25 @@
 
 ## GOTCHAS
 
+- **Verify a new test by breaking the code, not by reading it.** Phase 3 shipped
+  two regression tests that could not fail — one passed the value under test as
+  a literal argument, one asserted `>= 0.0` on a float defaulting to `0.0` — and
+  both were written *immediately after* observing the bugs they were meant to
+  pin. That is the trap: the failure was witnessed seconds earlier, so the test
+  feels verified, and the test having failed is a different event. The check is
+  ninety seconds: revert the fix, run the suite, confirm red, restore. Do it for
+  any test whose whole job is to stop a specific regression.
+
+- **A sentinel dispatched read-only will hand-trace and say so.** The Phase 3
+  code review was offered `pytest` and an interpreter and had neither; it
+  disclosed that in its first line, marked two objections as inferred, and named
+  what to check before accepting. Ten of twelve reproduced exactly and two were
+  worse than predicted. **Read the tool boundary in the dispatch**, and treat a
+  reviewer that discloses its limits as more trustworthy rather than less — a
+  reviewer that had guessed quietly would have been indistinguishable until
+  something shipped.
+
+
 <!-- Traps, surprises, and non-obvious constraints. Initially empty — entries
      accumulate as the pipeline discovers them.
      Each entry: what the trap is, and how to avoid it. -->

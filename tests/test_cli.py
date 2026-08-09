@@ -71,7 +71,6 @@ def test_no_subcommand_prints_usage_and_fails() -> None:
         # ones that return before anything is opened.
         ("toggle", "Phase 4"),
         ("status", "Phase 4"),
-        ("history", "Phase 3"),
     ],
 )
 def test_each_verb_names_the_phase_that_builds_it(
@@ -338,12 +337,17 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
 # ---------------------------------------------------------------------------
 
 
-def test_history_without_last_still_names_phase_three(capsys: Any) -> None:
-    """Only the one flag is pulled forward. Search, filtering and purge stay
-    where §9 puts them, and the refusal has to keep saying so."""
-    assert main(["history"]) == 1
+def test_bare_history_lists_rather_than_refusing(capsys: Any) -> None:
+    """Phase 3 built the rest of the verb, so the refusal is gone.
 
-    assert "Phase 3" in capsys.readouterr().err
+    Rewritten 2026-08-08. It previously asserted `main(["history"]) == 1` and
+    "Phase 3" on stderr, which was correct while only `--last` had been pulled
+    forward by objection O2. Left as it was, it would have been a test asserting
+    a feature does not work.
+    """
+    assert main(["history"]) == 0
+
+    assert "no transcripts yet" in capsys.readouterr().out
 
 
 def test_history_last_prints_the_transcript(

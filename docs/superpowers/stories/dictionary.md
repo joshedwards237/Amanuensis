@@ -7,7 +7,8 @@ stories:
   - id: C1
     title: "initial_prompt was inherited as the biasing mechanism, never chosen"
     stated: false
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted, and the decision is now made rather than inherited. `[boost]` is the authoritative biasing mechanism and `initial_prompt` is demoted to prose framing; the engine concatenates them in that order. The story's point — that the mechanism was never chosen — was answered twice over by the collapse guard, which established that `initial_prompt` can destroy a transcript, and by this phase, which constrains the segment the product generates so it cannot take the shape that collapses one."
   - id: C2
     title: "The dictionary is global, and per-application was rejected before it got cheap"
     stated: partially
@@ -26,19 +27,23 @@ stories:
   - id: C5
     title: "'The user's words' silently became final_text"
     stated: false
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and half-closed, which is the honest state. `raw_transcript` has a column and `manu history --last` shows both transcripts when they differ, so the question 'did the processors change my words?' is answerable for the first time. **Which column is §8's artefact is still open** — naming `raw` canonical would make the crash guarantee independent of the processor chain, which §7.5's Phase 5 constraint assumes, and would also make `--last` show text the user never received. That trade needs Phase 5's evidence. Phase 3's choice-story #10 records the same finding from the other side."
   - id: C6
     title: "The user is assumed to be someone who edits TOML by hand"
     stated: partially
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted and NOT closed, and the phase made it harder rather than easier. Per-application `[boost]` keys on a macOS bundle identifier the product never displays, so the feature now assumes a user who edits TOML *and* can name their applications the way the operating system does. `manu vocab check --app` is the mitigation — it prints the frontmost bundle identifier and its resolved terms — and it is a mitigation, not an answer. Phase 3's choice-story #7 says this should be dispositioned against the harder version, and this is that disposition: the assumption stands, it is now larger, and it is recorded rather than designed away."
   - id: C7
     title: "Two tables was chosen before the mechanisms were known to differ"
     stated: true
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted, and the premise the story doubted turned out to hold. Two tables were chosen before anyone knew the mechanisms differed; they are now measured to differ, and in exactly the way that justifies separating them — one is probabilistic, global and degrades unrelated speech, the other is deterministic, local and fails invisibly on a homonym. A user does need to know which one they are reaching for."
   - id: C8
     title: "[boost] was assumed free"
     stated: false
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Accepted, and it is not free. Measured: +3.2 and +5.2 WER on two of six samples for a net macro gain of 1.1 point. The story's suspicion was correct and it reshaped the feature — the global term list defaults to EMPTY, per-application lists replace rather than union, and §5.6 states the cost rather than advertising the mean."
 ---
 
 # Choice-story record — Dictionary

@@ -20,6 +20,7 @@ identical to a user and mean opposite things.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -41,13 +42,27 @@ class TranscriptionEngine(ABC):
 
     @abstractmethod
     def transcribe(
-        self, audio: NDArray[np.float32], sample_rate: int, *, biased: bool = True
+        self,
+        audio: NDArray[np.float32],
+        sample_rate: int,
+        *,
+        biased: bool = True,
+        boost: Sequence[str] = (),
     ) -> Transcription:
         """Transcribe one utterance. Returns the raw transcript, unprocessed.
 
         Formatting, filler removal and vocabulary correction belong to the
         post-processing chain. An engine that tidies its own output makes the
         chain's behaviour depend on which engine ran.
+
+        `boost` is the user's vocabulary for **this** dictation, resolved per
+        focused application from §5.6's `[boost]` table. It is a term list
+        rather than a prompt string on the same reasoning that gave `biased` a
+        boolean: an engine says locally what boosting means, and a caller that
+        passed a prompt would be responsible for a mechanism it is not supposed
+        to know about. §7.2's Moonshine and Parakeet do not necessarily share
+        faster-whisper's, and an empty prompt string is a question that does not
+        parse for an engine with no prompt concept.
 
         `biased=False` suppresses every vocabulary bias this engine applies —
         for faster-whisper, `initial_prompt`. §5.7's collapse guard needs a

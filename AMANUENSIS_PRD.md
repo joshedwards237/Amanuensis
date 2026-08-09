@@ -357,8 +357,26 @@ min_words_per_second = 0.5
 min_audio_seconds = 5.0
 
 [postprocess]
-chain = ["rules"]           # ordered: rules | llm
+chain = ["rules"]           # ordered: rules | vocabulary | llm. Comment corrected
+                            # 2026-08-08 — the validator has accepted
+                            # "vocabulary" since Phase 2b and this line had
+                            # already diverged from it (objection O9).
+                            # The default stays ["rules"]: §2 defines G1 against
+                            # it, so changing it moves the configuration every
+                            # recorded G1 figure was measured under.
 strip_fillers = false       # "um", "uh" — off by default, it is lossy
+terminal_punctuation = true # added 2026-08-08, Phase 3. Appends "." when the
+                            # transcript ends on a word character. Fires on
+                            # 7 of 10 real transcripts, so it needs a key: it
+                            # also appends into a URL bar, a shell prompt and a
+                            # filename field. §7.3's own standard — "a tool that
+                            # rewrites your punctuation has moved the problem" —
+                            # is the argument for the key, not against the rule.
+spoken_commands = false     # added 2026-08-08, Phase 3. "new paragraph" -> \n\n.
+                            # Off by default because it DELETES content words and
+                            # nothing measures it: no take in either corpus
+                            # contains one. The Phase 3 gate reports its firing
+                            # rate; if it changes nothing, the code goes.
 
 [postprocess.llm]
 enabled = false
@@ -549,6 +567,31 @@ Three gaps follow from the mechanism and are closed here:
    §7.3 documents it failing in Electron and Java apps. Every failed injection and
    every crash between write and unlink leaves a plaintext transcript behind, and
    the user who set `retain = false` is the one accumulating them.
+**All three gaps closed 2026-08-08, in Phase 3.** `retain_days` now expires
+`history.db` rows as well as `pending/` files and stored audio, on one call at
+daemon start **and** once a day from the worker — a start-only sweep contradicted
+the long-lived-daemon argument that justifies re-reading `vocabulary.toml`, and a
+daemon running for a fortnight would never have expired a row (objection O11).
+
+Two things about the mechanism are worth recording because both were nearly
+silent failures:
+
+- **The cutoff is an ISO-8601 string, not an epoch float.** `started_at` is TEXT
+  and the other two sweeps compare `st_mtime`. `DELETE ... WHERE started_at <
+  <float>` does not error — SQLite applies the column's TEXT affinity to the
+  operand and matches **nothing** — so the sweep would have appeared to work and
+  never deleted a row.
+- **The database is opened in WAL mode with a 15 s busy timeout.** `manu history`
+  is a second process on the file the daemon holds, and IPC is Phase 4. Under the
+  default rollback journal a `--purge` taking an exclusive lock while the worker
+  calls `write_pending` raises `OperationalError` into the §8 write — the user
+  runs a *history* command and loses a transcript. WAL adds `-wal` and `-shm`
+  sidecars, and `--purge`'s inventory covers them.
+
+`--purge` asks before deleting. §5.5 says it "wipes it" and does not say it asks;
+asking is added because the artefact it wipes is the one §8 exists to preserve,
+and because the flag is one character from `--pending`. `--yes` skips it.
+
 3. **`manu history` surfaces pending transcripts and `--purge` covers them.**
    §8 promises the user can recover their words when injection fails. With
    `retain = true` that promise is discharged by `manu history`. Without this, the
@@ -575,6 +618,38 @@ Users have proper nouns the model will never get right. Two mechanisms:
    case-insensitive whole-word substitutions.
 
 Both. They fail in different places.
+
+**Specified and built in Phase 3** (2026-08-08). Full specification in
+`docs/superpowers/specs/dictionary.md` rev 2 and
+`docs/superpowers/specs/phase-3-postprocessing.md` rev 3. Five things above are
+now measured rather than asserted, and four of them change what this section
+said:
+
+- **"Whole-word substitutions" is wrong and was the likelier error all along.**
+  `spread sheet → spreadsheet` is two tokens becoming one, and it is what the
+  model produces when it half-hears the word. A whole-word map catches
+  `breadshoe` and misses the common case. **The map matches phrases.**
+- **"They fail in different places" is now answered** (dictionary O9), and the
+  answer is not flattering to the two-table design. `[boost]` fails by
+  *degrading unrelated speech* — measured at +3.2 and +5.2 WER on two of six
+  samples, for a net macro gain of 1.1 — and by collapsing a transcript entirely
+  on one (§5.7). `[replace]` fails by firing on a homonym, invisibly.
+- **`[boost]` is scoped per application** (operator decision 2026-08-04), keyed
+  on the bundle identifier `TextInjector.focus_identity()` already returns on
+  every dictation. A global always-on prompt is a trade, not a win, so
+  `[boost] terms` defaults to empty and `[boost.apps]` is the intended surface.
+  `[boost]` is authoritative and `initial_prompt` is **prose framing only**
+  (dictionary O7).
+- **There is no model-size fix inside G1**, which this section asserted in one
+  line and is now measured: `base.en` doubles the parameters, buys one proper
+  noun in five, and misses G1's p95 by 248 ms. `beam_size = 5` costs 2.5× the
+  latency for 1.6 WER points. A dictionary is not a patch over a fixable
+  deficiency — it is the only mechanism that addresses this class of word at all.
+- **`vocabulary.toml` is re-read when its mtime changes**, not only at startup
+  (operator decision 2026-08-04) — and it therefore has a *different lifecycle
+  contract from `config.toml`*: strict at startup, permissive at reload, because
+  at reload the daemon is holding a transcript and losing it to a half-saved file
+  is the wrong failure. §5.3 states the split.
 
 ### 5.7 The collapse guard
 
@@ -987,9 +1062,17 @@ It is not:
   and does not mutate `DictationSession`, so a chain is replayable against a stored
   transcript and a processor cannot reach the audio.
 - **A raising processor must not cost the transcript.** If `process` raises mid-chain,
-  the chain is abandoned and the **last good text** proceeds to injection. §8's
-  persist-before-inject ordering already ran, so the words survive regardless; the
-  error is surfaced in the tray (§5.4) and recorded, not swallowed silently.
+  the chain is abandoned and the **last good text** proceeds to the §8 write and then
+  to injection; the error is surfaced in the tray (§5.4) and recorded, not swallowed
+  silently.
+
+  **Corrected 2026-08-08** (Phase 3, objection O1). This previously read "§8's
+  persist-before-inject ordering already ran, so the words survive regardless."
+  The chain runs **before** the write, and `_process` had no per-processor guard,
+  so a raising processor persisted nothing and injected nothing. Unreachable for
+  three phases because `cli.py` passed `processors=[]` — a sentence asserting a
+  guarantee above code that could not honour it, and the fourth instance of that
+  shape in this project.
 
 `TranscriptionEngine` got `load` / `warm_up` / `is_loaded` because someone thought about
 its lifecycle. This is that thinking for the boundary that will actually grow — rules,
@@ -2403,17 +2486,66 @@ is **untested**, which is different from tested and clean.
 > place above rather than rewritten, because the phase has not been opened and
 > its scope is the operator's to approve, not this document's to quietly revise.
 
+**Scope opened 2026-08-08**, in the terms the blockquote left for the operator:
+`RuleBasedPostProcessor`, the dictionary (`vocabulary.toml` — §5.6), history's
+retention half, and three defects in shipped code that the phase's own review
+found (`docs/superpowers/objections/phase-3-postprocessing.md`, O1/O2/O3). Full
+specification in `docs/superpowers/specs/phase-3-postprocessing.md`.
+
 **Gate:** Ten real dictations of ≥ 60 seconds. Report edit rate — what fraction of output
-needed manual correction, and what kind.
+needed manual correction, and what kind. This is also the phase that takes **the
+real G1 number** — every stage populated, nothing labelled a floor — which Phase
+2b explicitly deferred here.
 
 **Rejects if:** edit rate exceeds the G2 threshold **and** the corrections are
 dominated by classes the rules chain should have caught (punctuation, capitalisation,
-spoken commands). An edit rate driven by proper nouns points at §5.6's vocabulary
-mechanisms, not at a phase failure.
+spoken commands) **or by proper nouns for terms present in the frozen
+`vocabulary.toml`**; or `postprocess_ms` p95 exceeds 5 ms; or `vocab_ms` p95
+exceeds 10 ms.
+
+**The proper-noun clause was amended 2026-08-08** (objection O4, choice-story
+#8). It previously read: *"an edit rate driven by proper nouns points at §5.6's
+vocabulary mechanisms, not at a phase failure."* That was written when §5.6 was
+unbuilt. **Phase 3 builds §5.6**, so the clause pre-excused the exact error class
+this phase ships the fix for, and — with G2's threshold movable and §2's 909 ms
+prediction covering G1 — left a gate with no reachable failing state. The PRD had
+already recorded this species once, about Phase 5: *"the gate also cannot fail
+the budget by construction."*
+
+The amendment is **narrowed to terms the frozen vocabulary covers**, and the
+narrowing is the load-bearing part. Un-excusing proper nouns wholesale would make
+the gate fail on the *corpus's scope* rather than the *dictionary's misses* —
+entry count is not coverage, and a failure would have two causes the instruments
+cannot separate. For proper nouns the vocabulary does not cover, §9's original
+reasoning still holds and they stay excused. This also matters two phases out:
+`04-rules-only.md` §5 measured **87.2% of corpus errors as ASR mistranscription**
+that no downstream pass can recover, and a wholesale un-excusing would hand Phase
+5 a reject clause counting a class it structurally cannot address.
+
+**Two latency ceilings, both derived rather than picked.** `postprocess_ms` p95
+≤ 5 ms: the measured rules floor is 0.0505 ms p95 and 5 ms sits *below* the
+12.01 ms p50 that a loop of `re.sub` costs at 1000 entries, so the ceiling
+catches the specific regression §5.6's 70× measurement warns about. `vocab_ms`
+p95 ≤ 10 ms: this is the one stage whose cost scales with an artefact the *user*
+authors, and without a bar a large enough `vocabulary.toml` moves a published
+guarantee with no code change.
+
+**The gate must be able to measure something.** It runs `chain = ["rules",
+"vocabulary"]` with `vocabulary.toml` **frozen before the first dictation** and
+recorded by SHA-256 *and entry count*, and at least one `[replace]` entry must
+fire across the set — a frozen empty file satisfies a digest and measures
+nothing. `store_audio = true`, so a collapse in the wild is reproducible; the
+last one was not. Every dictation records `coverage` and `retained_seconds`
+whether the guard fired or not, plus a **second set of ten dictations under five
+seconds**: §5.7's untested false-positive direction is a *short*-utterance blind
+spot, and ten sixty-second dictations sit where coverage is near 100% and margin
+is largest, so the long corpus cannot reach it.
 
 This is also where G2's provisional 5% threshold is confirmed or moved (§2). Moving it
 is a legitimate outcome; moving it without stating the reason in the gate record is
-not.
+not. **Note the pairing** (choice-story #8): the amendment above closes the
+qualitative escape and leaves the numeric one, and both are exercised by the same
+person at the same sitting.
 
 ### Phase 4 — Tray, modes, polish
 `TrayApp`, `toggle` and `vad_auto` modes, error surfacing, README with the clipboard caveat
@@ -2677,13 +2809,16 @@ same day.
 | Record | Path | State |
 |---|---|---|
 | Slicing — `amanuensis-prd` | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
-| Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 1 merged, 4 pending |
+| Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 4 accepted, 1 merged |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Objections — `collapse-guard` | `docs/superpowers/objections/collapse-guard.md` | 8 objections — 7 accepted, 1 deferred |
-| Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — 2 accepted, 9 pending |
+| Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — **all accepted** |
+| Objections — `phase-3-postprocessing-code` | `docs/superpowers/objections/phase-3-postprocessing-code.md` | 12 objections — **all accepted** |
+| Objections — `phase-3-postprocessing` | `docs/superpowers/objections/phase-3-postprocessing.md` | 12 objections — **all accepted** |
 | Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
-| Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — 3 accepted, 5 pending |
+| Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — **all accepted** |
+| Choice stories — `phase-3-postprocessing` | `docs/superpowers/stories/phase-3-postprocessing.md` | 10 stories — 9 accepted, 1 revisit |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 
@@ -2722,6 +2857,16 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-08 | **A code-mode review found §8 losing a transcript, and the fix for the same hazard three weeks earlier had closed one third of the window.** `_process` assigned `session.raw_transcript` *after* `_judge` returned, and `_judge` runs a second decode for §5.7's retry — so a raise there reached the handler with the decoder's words in a local variable and nothing persisted. Reproduced. The earlier disposition (objection O1) had guarded the post-processing chain and been recorded as restoring the guarantee; the window between "the words exist" and "the words are safe" still spanned a second decode and a guard evaluation. **Fixing an instance is not fixing a shape**, and this is the fifth time this project has recorded the specification asserting a guarantee the code did not honour. The transcript is now on the session the moment it exists, and the failure path writes it. |
+| 2026-08-08 | **Four rules in `RuleBasedPostProcessor` corrupted ordinary English, and the tests written for two earlier defects in the same file could not see them.** `it was really really good` lost a word; `20 minutes left` became `20 Minutes left`; `the U.S. economy is fine` became `The U.S. Economy is fine.` — two rules compounding, because the space one inserted created a boundary the other acted on; and `Add a note. New line items are on order.` lost three words to the spoken-command rule. All four verified at a REPL. The repeat rule's guard was **inverted from a blocklist to an allowlist** of closed-class function words, which makes the no-deleted-content-word property structural instead of a thing a test has to remember to probe — the third defect in that one function, and the first fix to revisit its premise rather than add a conjunct to it. |
+| 2026-08-08 | **Two regression tests written for accepted dispositions could not fail, and were verified by sabotage rather than by review.** Reverting the objection-O3 fix and deleting the `vocab_ms` assignment left all 492 tests green: one test supplied the value under test as a literal argument, the other asserted `>= 0.0` on a field whose default is `0.0`. Both were written immediately after observing the bugs they were meant to pin, which is the trap — **a test written just after a fix feels verified because the failure was just witnessed, and that is a different event from the test having failed.** Both rewritten to run a full dictation; the same sabotage now fails against both. Sixth and seventh instances of a check that could not fail in this repository, and the first two written *after* the pattern was named in a gate record. |
+| 2026-08-08 | **A test suite that could read — and was one flag from deleting — the operator's real transcripts.** `manu history` began working in Phase 3, and a pre-existing test that called `main(["history"])` to assert the verb *refused* started listing live rows out of the real data directory; the suite printed them. The read was the visible half. The unacceptable half is that the same phase ships `manu history --purge`, so a test one flag away would have destroyed the artefact §8 exists to preserve, with nothing asserting anything about it. `tests/conftest.py` now points `$AMANUENSIS_CONFIG_DIR` and `$AMANUENSIS_DATA_DIR` at a temporary directory for **every** test, `autouse` rather than opt-in — a fixture each test must remember is a fixture one test forgets, and this failure is silent until it is catastrophic. It uses the product's own documented override rather than patching a path resolver. |
+| 2026-08-08 | **§5.5's three retention gaps closed, and two of them were silent-failure shapes** (objection O11, objection O12). `retain_days` reaches `history.db` at last, on an **ISO-8601 string cutoff** — comparing the TEXT `started_at` against an epoch float does not error, it silently matches nothing, which is a retention sweep that appears to work forever. The sweep runs at daemon start **and daily from the worker**, because a start-only sweep contradicted the long-lived-daemon argument that justifies hot-reloading `vocabulary.toml`. The database moves to **WAL with a 15 s busy timeout**: `manu history` is a second process on the file the daemon holds, IPC is Phase 4, and under the default journal a `--purge` racing `write_pending` raises into the §8 write — losing a transcript to a *history* command. `--purge` covers rows, `pending/`, stored audio and the new `-wal`/`-shm` sidecars, asks before deleting, and repeats §5.5's refusal to claim secure erasure rather than letting the user infer the stronger promise. |
+| 2026-08-08 | **Phase 3's gate could not fail, and the clause that made it so was written before the thing it excused existed** (§9, objection O4, choice-story #8). The reject clause excused an edit rate driven by proper nouns because it "points at §5.6's vocabulary mechanisms, not at a phase failure" — and Phase 3 *builds* §5.6. With G2's 5% movable and §2's 909 ms prediction covering G1, every failure mode was pre-authorised. Amended, and **narrowed to terms present in the frozen `vocabulary.toml`**: un-excusing the class wholesale would fail the gate on the *corpus's scope* rather than the *dictionary's misses*, and would hand Phase 5 a reject clause counting the **87.2% of errors measured as unrecoverable ASR mistranscription**. Two derived latency ceilings added (`postprocess_ms` p95 ≤ 5 ms, `vocab_ms` p95 ≤ 10 ms), plus a minimum instrument — a frozen *empty* dictionary satisfies a SHA-256 and measures nothing, so entry count is recorded and one entry must fire. Second instance in this PRD of a gate that could not fail by construction; the first is §7.5's, about Phase 5. |
+| 2026-08-08 | **A raising post-processor loses the transcript, and two documents say it cannot** (§6.3, objection O1). `postprocess/base.py` and §6.3 both state that when `process` raises, "§8's persist-before-inject ordering already ran, so the words survive regardless." In `DictationController._process` the chain runs **before** the write, and the only handler returns before `deliver` — so nothing is persisted, nothing is injected, and the words exist in a local variable. Invisible for three phases because `cli.py` passed `processors=[]`; reachable the day Phase 3 ships one. The loop gets a per-processor guard **and both documents are corrected**, because guarding the loop while leaving a false statement in place is how the next reader inherits it. Fourth instance of the PRD stating a constraint the code cannot honour, after `restore_ms`, `store_audio`, and the missing `raw_transcript` column. |
+| 2026-08-08 | **§6.3's `TranscriptionEngine.transcribe` gains `boost: Sequence[str] = ()`** (objection O2). §5.6's per-application boosting needs terms chosen per dictation, and the contract had no channel: `initial_prompt` is read from a frozen `EngineConfig` at decode time and `biased` is all-or-nothing. Exactly the 2026-08-05 `biased` precedent — a term list is backend-neutral domain vocabulary and each engine says locally what boosting means, where passing a prompt string would make the caller responsible for a mechanism it is not supposed to know about. Also **`vocab_ms` joins `LatencyBreakdown`**, inside `g1_ms`: the vocabulary reload runs before the decode, and a stage inside G1's window needs a field. **Fifth phase in a row.** |
+| 2026-08-08 | **`[boost]` would have disabled §5.7's recovery in the configuration it recommends** (§5.7, objection O3). `_why_no_retry` refuses the unbiased retry when `[engine] initial_prompt` is empty, reporting "nothing to drop" — and `[boost]` supplies bias *while `initial_prompt` is empty*, which is what §5.6's O7 resolution recommends. The guard could fire, the reason would be false, `DictationState.RECOVERED` would be unreachable, and the user would get a withheld transcript where they previously got their words back. The refusal now asks whether **any** bias was applied to *this dictation*. This is the half of the collapse guard's deferred objection O6 that mattered; the half about the prompt's prose register is rejected, because a prose detector is a heuristic with a false-positive population and the guard catches the failure directly. |
+| 2026-08-08 | **§5.3 gains two policies it had been applying without writing down** (choice-stories #2 and #4). (1) **"Off by default" means quarantine pending measurement, and quarantine carries an obligation to measure.** Three mechanisms have now been admitted that way — `strip_fillers`, the LLM pass, `spoken_commands` — and none carried the obligation; `spoken_commands = false` would have produced a gate firing rate of *structurally zero*, which reads as "harmless" to an author and "delete the code" to `04-rules-only.md`'s fifth constraint. Resolved by having the rule count candidate matches while disabled. (2) **A guarantee measured against a reference configuration is qualified by it, not protected by withholding the key.** G1 is defined against `chain = ["rules"]`, so enabling the dictionary leaves the configuration every recorded G1 figure was measured under. §5.3's bounded exception would say remove the key, which is absurd here. §5.3 warned that a fourth *exception* would be the wrong answer to the next collision; what arrived was a fourth *technique*, and the warning did not cover it. G2 is next in line — the gate's freeze-and-digest is the same move. |
 | 2026-08-05 | **`initial_prompt` can silently destroy a transcript, and it shipped in Phase 1 with nothing watching it. New §5.7, the collapse guard**, plus a `[guard]` block in §5.3 and `GuardVerdict` in §6.3. A 30.5-second dictation on the operator's machine returned two words — `" For Tenants."` — with no error raised and the text injected as though it were what was said. On a fired verdict the audio is decoded once more with the bias dropped; **the retry must be unbiased or it is worthless**, because `beam_size = 1` is greedy and re-running identical inputs returns identical words — and where no `initial_prompt` is configured there is nothing to retry, so the guard reports the loud failure rather than a recovery attempt it never made. When recovery also fails the text is **not injected**, which overrides choice-story C4's fail-open decision and is recorded as an override rather than cited as support. Built as a **Phase 2b follow-up defect fix**, not as dictionary slice V1: the slicing record's own case for it — *"first, and not because of the dictionary"* — is a case for it not being part of the dictionary at all. |
 | 2026-08-05 | **The guard measures the decoder, not the speaker — the first design was wrong and the wrong one is the intuitive one** (§5.7, objection O1). Words per second divides *how the user talks* by *how long they talked*; the failure is *where the decoder stopped*. `faster_whisper` returns segments carrying `start`, `end`, `avg_logprob`, `no_speech_prob` and `compression_ratio`, and `_decode` was discarding every one of them — the signal was already crossing the boundary. **Decoded coverage** — last segment `end` over retained seconds — reads 6.5% on the live failure and ~95% on a genuine two-second utterance. It is duration-independent, which the rate floor could not be: word count is an integer, so at two seconds the rate quantises to 0.5 w/s *per word* and a genuine one-word "Yes." is **the same measurement** as a transcript collapsed to one word. `min_audio_seconds` was therefore never a policy choice — it was the floor conceding it cannot work on short audio, over the input the product's first user produces most often. Coverage also has **no false-positive population**: a slow or quiet speaker still produces segments spanning their audio, which retires the hazard aimed at §4's secondary user rather than mitigating it with a config key. The rate floor survives as a fallback for engines that cannot report a span, with its blind spot labelled. |
 | 2026-08-05 | **One threshold was doing two jobs with costs differing by orders of magnitude** (§5.7, objection O4). Spending a decode and withholding the user's words are split: `retry_below_coverage = 0.8` triggers an unbiased re-decode, `min_decoded_coverage = 0.5` gates the refusal. The middle band is where the evidence comes from — biased and unbiased output over the same audio, both recorded, which the guard otherwise had no way to generate. **`manu history --last` ships with the refusal** (objection O2), pulled forward from Phase 3: §8's write is unconditional, but *written* is not *recoverable*, and before this a refused transcript went somewhere no shipped command could show it. The refusal is defensible only because the words are reachable. |

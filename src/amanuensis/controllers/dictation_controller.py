@@ -56,6 +56,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 from amanuensis import guard
 from amanuensis.models.results import GuardOutcome, InjectionResult, Transcription
 from amanuensis.models.session import DictationSession
+from amanuensis.postprocess.base import TracedPostProcessor
+from amanuensis.postprocess.vocabulary import VocabularyLoader
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
     from collections.abc import Callable, Sequence
@@ -85,6 +87,15 @@ _SHUTDOWN_TIMEOUT_S = 30.0
 #: and never costs a transcript. That is the right direction for the error.
 _DECODE_INTERCEPT_MS = 48.8
 _DECODE_MS_PER_SECOND = 13.69
+
+#: How long between retention sweeps on the worker thread.
+#:
+#: `retain_days` used to be enforced only at daemon start, while the whole
+#: argument for re-reading `vocabulary.toml` on mtime is that this daemon is
+#: **long-lived** (objection O11). Both cannot be true: a daemon running for a
+#: fortnight would never have expired a row. This is a clock comparison on a
+#: thread that already exists rather than a second timer thread.
+_SWEEP_INTERVAL_S = 24 * 60 * 60.0
 
 
 class DictationState(StrEnum):
@@ -223,6 +234,7 @@ class DictationController:
         capture: Any,
         detector: Any,
         on_state_change: Callable[[DictationState], None] | None = None,
+        vocabulary: VocabularyLoader | None = None,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -231,6 +243,11 @@ class DictationController:
         self.history = history
         self.capture = capture
         self.detector = detector
+        # Optional so every existing caller and test keeps working. `None` means
+        # no dictionary at all — not an empty one — and the difference shows up
+        # in `_why_no_retry`, where "no bias was applied" is a reason and "the
+        # bias was empty" is the same thing said differently.
+        self.vocabulary = vocabulary
         self._on_state_change = on_state_change
 
         self._queue: queue.Queue[DictationSession | None] = queue.Queue()
@@ -247,6 +264,10 @@ class DictationController:
         #: not about the dictation — `to_history_row` should not grow a column
         #: for it.
         self._focus_by_session: dict[str, str | None] = {}
+        #: Monotonic stamp of the last retention sweep. Seeded by `start()`,
+        #: which is what makes the first worker sweep land a full interval after
+        #: the daemon's own start-up sweep rather than on the first dictation.
+        self._last_sweep_at: float | None = None
 
     # -- state -------------------------------------------------------------
 
@@ -290,6 +311,13 @@ class DictationController:
         self.engine.load()
         self.engine.warm_up()
         self.injector.warm_up()
+
+        # Seeds the retention clock. `_maybe_sweep`'s guard treats `None` as
+        # "never swept" and runs, so without this the first dictation of every
+        # daemon ran a second full sweep on the worker — the comment on the
+        # field claimed the daemon-start sweep seeded it and nothing did
+        # (objection C8).
+        self._last_sweep_at = time.monotonic()
 
         worker = threading.Thread(
             target=self._drain, name="amanuensis-worker", daemon=True
@@ -365,12 +393,22 @@ class DictationController:
         # worker reaches the session it may not be (§6.3, objection A6).
         focus = self.injector.focus_identity()
 
-        self._set_state(DictationState.TRANSCRIBING)
-        self._queue.put(session)
         # Stashed alongside rather than on the session: it is a fact about the
         # delivery, not about the dictation, and `to_history_row` should not
         # grow a column for it.
+        #
+        # **Before the queue put, and the order is the point** (Phase 3,
+        # objection O2). Queueing first makes the session visible to the worker
+        # while its focus is not yet recorded, and `deliver` skips the focus
+        # check entirely on a `None` — so losing that race does not degrade the
+        # check, it *disables* it, and §6.3's protection against injecting into
+        # an application the user has switched away from silently stops
+        # applying. A safety check turned off by timing rather than by
+        # configuration is the kind nobody notices.
         self._focus_by_session[session.id] = focus
+
+        self._set_state(DictationState.TRANSCRIBING)
+        self._queue.put(session)
         return session
 
     def abort_session(self) -> None:
@@ -390,6 +428,29 @@ class DictationController:
 
     # -- the worker thread -------------------------------------------------
 
+    def _maybe_sweep(self) -> None:
+        """Expire old transcripts, at most once a day, on the worker.
+
+        Runs *after* a session rather than before: the sweep takes a write lock
+        and the one call that must not wait on it is the §8 pre-injection write.
+        Failures are swallowed — a retention sweep that cannot run is a disk
+        that fills, and raising here would take the microphone down with it.
+        """
+        sweep = getattr(self.history, "sweep", None)
+        if sweep is None:
+            return
+        now = time.monotonic()
+        if (
+            self._last_sweep_at is not None
+            and now - self._last_sweep_at < _SWEEP_INTERVAL_S
+        ):
+            return
+        self._last_sweep_at = now
+        try:
+            sweep()
+        except Exception:
+            pass
+
     def _drain(self) -> None:
         while True:
             session = self._queue.get()
@@ -403,7 +464,12 @@ class DictationController:
                 session.completed.set()
 
     def _judge(
-        self, session: DictationSession, decoded: Transcription, trimmed: Any
+        self,
+        session: DictationSession,
+        decoded: Transcription,
+        trimmed: Any,
+        *,
+        boost: tuple[str, ...] = (),
     ) -> Transcription:
         """Run §5.7's guard, and the retry if one is both advised and payable.
 
@@ -424,11 +490,19 @@ class DictationController:
             session.guard = guard.resolve(first, None)
             return decoded
 
-        refusal = self._why_no_retry(trimmed.retained_seconds)
+        # "Was anything biasing this decode?" rather than "is one config key
+        # non-empty" (objection O3). `[boost]` supplies bias while
+        # `initial_prompt` is empty, which is the configuration §5.6 recommends —
+        # and the old check answered "nothing to drop" there, making the guard's
+        # whole recovery path unreachable exactly where the new bias lives.
+        biased = bool(self.config.engine.initial_prompt) or bool(boost)
+        refusal = self._why_no_retry(trimmed.retained_seconds, biased=biased)
         if refusal is not None:
             session.guard = replace(guard.resolve(first, None), reason=refusal)
             return decoded
 
+        # `biased=False` drops `initial_prompt`; passing no boost drops the
+        # other half. The retry has to shed all of it or it is the same decode.
         retried = self.engine.transcribe(
             trimmed.audio, session.sample_rate, biased=False
         )
@@ -444,7 +518,7 @@ class DictationController:
         session.guard = verdict
         return retried if verdict.chose_retry else decoded
 
-    def _why_no_retry(self, retained_seconds: float) -> str | None:
+    def _why_no_retry(self, retained_seconds: float, *, biased: bool) -> str | None:
         """`None` when a retry is worth running, otherwise why it is not.
 
         Two refusals, and both would otherwise be silent. Re-decoding with no
@@ -457,9 +531,9 @@ class DictationController:
         settings = self.config.guard
         if settings.retry_below_coverage <= 0.0:
             return "the retry is disabled (retry_below_coverage = 0)"
-        if not self.config.engine.initial_prompt:
+        if not biased:
             return (
-                "no initial_prompt is configured, so an unbiased retry would be "
+                "nothing biased this decode, so an unbiased retry would be "
                 "the same decode — nothing to drop"
             )
         predicted_ms = _DECODE_INTERCEPT_MS + _DECODE_MS_PER_SECOND * retained_seconds
@@ -480,17 +554,42 @@ class DictationController:
         """
         focus = self._focus_by_session.pop(session.id, None)
         try:
+            # ONE read point for `vocabulary.toml`, here, before the decode.
+            # `[boost]` needs the terms before transcription and `[replace]`
+            # does not care, so the earlier point serves both halves of §5.6
+            # from one snapshot (objection O10).
+            boost: tuple[str, ...] = ()
+            vocabulary_error: str | None = None
+            if self.vocabulary is not None:
+                started = time.perf_counter()
+                loaded = self.vocabulary.refresh()
+                boost = loaded.terms_for(focus)
+                vocabulary_error = self.vocabulary.error
+                session.timings.vocab_ms = (time.perf_counter() - started) * 1000.0
+
             started = time.perf_counter()
             trimmed = self.detector.trim(session.audio, session.sample_rate)
             session.timings.vad_ms = (time.perf_counter() - started) * 1000.0
 
             started = time.perf_counter()
-            decoded = self.engine.transcribe(trimmed.audio, session.sample_rate)
+            decoded = self.engine.transcribe(
+                trimmed.audio, session.sample_rate, boost=boost
+            )
             session.timings.transcribe_ms = (time.perf_counter() - started) * 1000.0
             session.engine = f"{self.config.engine.backend}:{self.engine.model_name}"
 
+            # **On the session the instant it exists** (objection C2). This
+            # used to be assigned after `_judge` returned — and `_judge` runs a
+            # SECOND decode for §5.7's retry, so a raise in there reached the
+            # handler below with the decoder's words in a local variable and
+            # `raw_transcript` still `None`. Nothing was persisted and nothing
+            # was injected. O1's fix guarded the chain; this is the same shape
+            # one stage earlier, and the retry runs only on the degraded path
+            # where a second failure is likeliest.
+            session.raw_transcript = decoded.text
+
             started = time.perf_counter()
-            decoded = self._judge(session, decoded, trimmed)
+            decoded = self._judge(session, decoded, trimmed, boost=boost)
             session.timings.guard_ms = (time.perf_counter() - started) * 1000.0
             session.raw_transcript = decoded.text
             verdict = session.guard
@@ -508,11 +607,52 @@ class DictationController:
 
             started = time.perf_counter()
             text = session.raw_transcript
+            fired: list[str] = []
             for processor in self.processors:
-                text = processor.process(text, session)
+                try:
+                    # Feature detection, not a required method (§6.3's
+                    # `TracedPostProcessor`). A processor that can say which of
+                    # its rules acted returns that alongside the text, and the
+                    # controller writes it to the session — `process` stays pure
+                    # with respect to the session and there is no shared slot to
+                    # go stale across the early returns above (objection O8).
+                    if isinstance(processor, TracedPostProcessor):
+                        text, acted = processor.process_traced(text, session)
+                        fired.extend(acted)
+                    else:
+                        text = processor.process(text, session)
+                except Exception as exc:
+                    # §6.3 and `postprocess/base.py` both promise this, and
+                    # neither was true until Phase 3 (objection O1): the chain
+                    # runs *before* the §8 write, and the outer handler below
+                    # returns before `deliver` — which is the only caller of
+                    # `write_pending` on this path. So a raising processor used
+                    # to persist nothing and inject nothing.
+                    #
+                    # Abandon the chain, keep the last good text, name the
+                    # processor, and fall through to `deliver` so the words are
+                    # written and delivered anyway. The error is recorded rather
+                    # than swallowed, because a chain that silently stops is a
+                    # transcript the user cannot explain.
+                    name = getattr(processor, "name", type(processor).__name__)
+                    session.error = (
+                        f"the {name!r} post-processor raised "
+                        f"({type(exc).__name__}: {exc}); the chain was "
+                        "abandoned and the text before it was used"
+                    )
+                    break
             session.timings.postprocess_ms = (time.perf_counter() - started) * 1000.0
+            session.fired_entries = tuple(fired)
             if self.processors:
                 session.final_text = text
+
+            if vocabulary_error is not None and session.error is None:
+                # The dictation succeeded; their file did not parse. Recorded on
+                # the session so it reaches history.db and the indicator, because
+                # a reload that fails silently is C3's original complaint one
+                # layer down — the user edits the file, nothing changes, and
+                # nothing says why (choice-story #5).
+                session.error = f"vocabulary.toml was not reloaded: {vocabulary_error}"
 
             result = deliver(session, self.history, self.injector, focus)
             if not result.succeeded and result.error is not None:
@@ -521,8 +661,20 @@ class DictationController:
                 session.error = result.error
         except Exception as exc:
             session.error = f"{type(exc).__name__}: {exc}"
+            # §8 is unconditional, so it applies on the failure path too. If a
+            # transcript exists it is written before this returns — anything
+            # that raised after the decode would otherwise cost the user words
+            # the product had already produced. Guarded in turn, because the
+            # write itself can fail and the state below must still be set.
+            if session.raw_transcript:
+                try:
+                    self.history.write_pending(session)
+                except Exception:
+                    pass
             self._set_state(DictationState.ERROR)
             return
+
+        self._maybe_sweep()
 
         if session.error:
             self._set_state(DictationState.ERROR)

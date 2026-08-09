@@ -11,7 +11,8 @@ slices:
     title: "raw_transcript column and migration"
     scope: "history.db grows a second transcript column so the pre-post-processing text survives. Migration through the existing _MIGRATIONS path."
     lens_used: safety-floor
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Shipped 2026-08-08, first, exactly as sequenced. All four touch points, and the objection record's warning about naming one of four was heeded — `restore_ms` was missed that way in Phase 2a."
   - id: V1
     title: "The collapse guard"
     scope: "A deterministic check that a transcript is not implausibly short for the speech that produced it, applied to every transcription regardless of whether any dictionary exists."
@@ -23,17 +24,20 @@ slices:
     title: "[replace] map, B3–B8, B10"
     scope: "vocabulary.toml with a [replace] table only. Load, validate, apply as VocabularyPostProcessor in the §5.3 chain."
     lens_used: decision-boundary
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Shipped 2026-08-08. One compiled alternation with keys sorted longest-first, case-insensitive, phrase-aware, literal replacement, no cascading. The slice's own constraint on the implementation rather than the entry count is what got built."
   - id: V3
     title: "[boost] list"
     scope: "The [boost] table, scoped per application, appended to the engine prompt."
     lens_used: decision-boundary
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Shipped 2026-08-08, scoped per application. The slice recorded this as 'doubtful and the review's most consequential finding', and that doubt was correct: the trade is real, so `[boost] terms` defaults to empty and `[boost.apps]` is the intended surface. It required a §6.3 ABC amendment the slice did not anticipate — `transcribe(boost=...)` — because the decoder had no channel for per-dictation terms."
   - id: V4
     title: "manu vocab check"
     scope: "One verb. Takes text, prints which entries would fire and what the result would be. No file writes."
     lens_used: acceptance-criterion
-    disposition: pending
+    disposition: accepted
+    disposition_rationale: "Shipped 2026-08-08, alongside V2 rather than after it (objection O11), with `--app` added because `[boost.apps]` is keyed on an identifier the product never displays."
 ---
 
 # Slicing record — Dictionary

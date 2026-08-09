@@ -52,7 +52,14 @@ RECORD_DIRS = [
 ESTIMATE = ("Cost estimate", "cost-estimates/2026-07-30-amanuensis-prd-estimate.md")
 
 # Order matters only for display; unknown values are appended as found.
-KNOWN_DISPOSITIONS = ["accepted", "merged", "deferred", "revised", "rejected", "pending"]
+KNOWN_DISPOSITIONS = [
+    "accepted",
+    "merged",
+    "deferred",
+    "revised",
+    "rejected",
+    "pending",
+]
 
 
 def frontmatter(path: Path) -> list[str]:

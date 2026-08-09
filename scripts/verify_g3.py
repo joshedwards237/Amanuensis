@@ -304,12 +304,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print("G3: PASS")
-    print(f"  {len(subject.sockets)} sockets and "
-          f"{subject.bytes_in + subject.bytes_out} bytes for a full transcribe "
-          f"cycle,")
-    print(f"  against {len(control.sockets)} sockets and "
-          f"{control.bytes_in + control.bytes_out} bytes for a control that "
-          f"deliberately")
+    print(
+        f"  {len(subject.sockets)} sockets and "
+        f"{subject.bytes_in + subject.bytes_out} bytes for a full transcribe "
+        f"cycle,"
+    )
+    print(
+        f"  against {len(control.sockets)} sockets and "
+        f"{control.bytes_in + control.bytes_out} bytes for a control that "
+        f"deliberately"
+    )
     print("  opened one. The instrument works and the runtime is silent.")
     return 0
 

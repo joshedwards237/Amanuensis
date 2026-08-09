@@ -76,6 +76,7 @@ import wave
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -87,6 +88,16 @@ from amanuensis.models.session import DictationSession
 __all__ = ["HistoryStore", "StoredTranscript", "SweepResult"]
 
 _SECONDS_PER_DAY: Final = 86400.0
+
+#: How long a connection waits for a lock before raising. The default is 5 s;
+#: this is longer because the thing it waits on is a purge of a large table, and
+#: the caller that must not fail is the §8 pre-injection write.
+_BUSY_TIMEOUT_S: Final = 15.0
+
+#: Rows deleted per statement in `purge()`. Batched so the exclusive lock is
+#: held in short bursts rather than for one long statement the §8 write could
+#: collide with.
+_PURGE_BATCH: Final = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +113,12 @@ class SweepResult:
     removed: int
     remaining: int
     failed: int = 0
+    #: Rows expired from `history.db`. Separate from `removed`, which counts
+    #: files: the two live on different paths and a user asking "what happened
+    #: to my transcripts" is asking about whichever one they use.
+    rows_removed: int = 0
+    #: Files removed by `purge()`. Zero for an expiry sweep.
+    files_removed: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +135,10 @@ class StoredTranscript:
     started_at: str
     transcript: str
     injected: bool
+    #: What the decoder produced, before any processor ran. `None` for a row
+    #: written before Phase 3, which is why it is not simply compared against
+    #: `transcript` to decide whether the chain changed anything.
+    raw_transcript: str | None = None
     guard_outcome: str | None = None
     guard_reason: str | None = None
 
@@ -135,14 +156,17 @@ _COLUMNS: Final = (
     "id",
     "started_at",
     "transcript",
+    "raw_transcript",
     "duration_seconds",
     "engine",
     "error",
     "guard_outcome",
     "guard_coverage",
     "guard_retained_seconds",
+    "fired_entries",
     "capture_ms",
     "vad_ms",
+    "vocab_ms",
     "transcribe_ms",
     "guard_ms",
     "postprocess_ms",
@@ -156,14 +180,17 @@ CREATE TABLE IF NOT EXISTS transcripts (
     id               TEXT PRIMARY KEY,
     started_at       TEXT    NOT NULL,
     transcript       TEXT    NOT NULL,
+    raw_transcript   TEXT,
     duration_seconds REAL    NOT NULL,
     engine           TEXT    NOT NULL DEFAULT '',
     error            TEXT,
     guard_outcome    TEXT,
     guard_coverage   REAL,
     guard_retained_seconds REAL,
+    fired_entries   TEXT,
     capture_ms       REAL    NOT NULL DEFAULT 0,
     vad_ms           REAL    NOT NULL DEFAULT 0,
+    vocab_ms         REAL    NOT NULL DEFAULT 0,
     transcribe_ms    REAL    NOT NULL DEFAULT 0,
     guard_ms         REAL    NOT NULL DEFAULT 0,
     postprocess_ms   REAL    NOT NULL DEFAULT 0,
@@ -209,6 +236,21 @@ _MIGRATIONS: Final[tuple[tuple[str, str], ...]] = (
     (
         "guard_retained_seconds",
         "ALTER TABLE transcripts ADD COLUMN guard_retained_seconds REAL",
+    ),
+    # Nullable with no default, like the guard columns and for the same reason:
+    # a row written before Phase 3 has no separate raw text, and `NULL` says so
+    # where `''` would claim the decoder produced nothing.
+    (
+        "raw_transcript",
+        "ALTER TABLE transcripts ADD COLUMN raw_transcript TEXT",
+    ),
+    (
+        "fired_entries",
+        "ALTER TABLE transcripts ADD COLUMN fired_entries TEXT",
+    ),
+    (
+        "vocab_ms",
+        "ALTER TABLE transcripts ADD COLUMN vocab_ms REAL NOT NULL DEFAULT 0",
     ),
 )
 
@@ -301,8 +343,8 @@ class HistoryStore:
         with self._transaction() as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
-                "SELECT id, started_at, transcript, injected, guard_outcome "
-                "FROM transcripts ORDER BY started_at DESC LIMIT 1"
+                "SELECT id, started_at, transcript, raw_transcript, injected, "
+                "guard_outcome FROM transcripts ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
         if row is None:
             return None
@@ -310,6 +352,7 @@ class HistoryStore:
             id=row["id"],
             started_at=row["started_at"],
             transcript=row["transcript"],
+            raw_transcript=row["raw_transcript"],
             injected=bool(row["injected"]),
             guard_outcome=row["guard_outcome"],
         )
@@ -335,6 +378,7 @@ class HistoryStore:
                 id=str(row.get("id", path.stem)),
                 started_at=str(row.get("started_at", "")),
                 transcript=str(row.get("transcript", "")),
+                raw_transcript=row.get("raw_transcript"),
                 injected=False,
                 guard_outcome=row.get("guard_outcome"),
             )
@@ -354,7 +398,7 @@ class HistoryStore:
         else:
             self._pending_path(session.id).unlink(missing_ok=True)
 
-    def sweep_pending(self) -> SweepResult:
+    def sweep(self) -> SweepResult:
         """Expire orphaned pending files. Call at daemon start (§5.5 gap 2).
 
         An orphan is a transcript that was written before injection and never
@@ -372,13 +416,19 @@ class HistoryStore:
         another process holds open must not stop the microphone coming up.
         """
         cutoff = time.time() - self._config.retain_days * _SECONDS_PER_DAY
+        rows_removed = self._expire_rows(cutoff)
         # Audio seeds the totals so the two artefacts expire on one clock and
         # are reported as one number. They are swept together because a caller
         # who has to remember a second sweep will eventually not.
         removed, remaining, failed = self._sweep_audio(cutoff)
 
         if not self.pending_dir.exists():
-            return SweepResult(removed=removed, remaining=remaining, failed=failed)
+            return SweepResult(
+                removed=removed,
+                remaining=remaining,
+                failed=failed,
+                rows_removed=rows_removed,
+            )
 
         # Globbed by the pattern this module writes, never by directory. A
         # sweep that unlinked everything under `pending/` would delete whatever
@@ -392,7 +442,173 @@ class HistoryStore:
                 removed += 1
             except OSError:
                 failed += 1
-        return SweepResult(removed=removed, remaining=remaining, failed=failed)
+        return SweepResult(
+            removed=removed,
+            remaining=remaining,
+            failed=failed,
+            rows_removed=rows_removed,
+        )
+
+    def _expire_rows(self, cutoff: float) -> int:
+        """Expire `history.db` rows on `retain_days`. Returns how many went.
+
+        **The cutoff is formatted as an ISO-8601 string, and that is the whole
+        trap** (objection O12). `sweep()`'s other two paths compare `st_mtime`
+        floats; `started_at` is TEXT. `DELETE ... WHERE started_at < <float>`
+        does **not** error — SQLite applies the column's TEXT affinity to the
+        operand, compares `"1754..."` against `"2026-08-08..."` lexicographically,
+        and matches nothing. A retention sweep that appears to work and never
+        deletes a row is the third silent-failure shape this project has
+        recorded, and it would have been invisible to any test that only checked
+        which rows survived.
+        """
+        if not self.db_path.exists():
+            return 0
+        boundary = datetime.fromtimestamp(cutoff, tz=UTC).isoformat()
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM transcripts WHERE started_at < ?", (boundary,)
+            )
+            return int(cursor.rowcount or 0)
+
+    def purge(self) -> SweepResult:
+        """Delete everything, on every path. §5.5's `manu history --purge`.
+
+        Four artefacts, and missing any one of them makes the verb a lie: rows
+        in `history.db`, orphaned `pending/*.json`, stored `audio/*.wav`, and
+        the `-wal` / `-shm` sidecars WAL introduces (choice-story #9).
+
+        Rows go in batches so the exclusive lock is held in short bursts rather
+        than one long statement the §8 pre-injection write could collide with.
+
+        **This does not claim erasure.** §5.5 is explicit that Amanuensis does
+        not claim secure erasure of a transcript, and moving the non-retaining
+        path out of SQLite was done precisely to avoid resting a privacy promise
+        on `secure_delete`, `VACUUM` and WAL checkpoint behaviour. What this
+        promises is narrower and true: nothing is left in a file Amanuensis
+        keeps open or reads back.
+        """
+        rows_removed = 0
+        if self.db_path.exists():
+            while True:
+                with self._transaction() as connection:
+                    cursor = connection.execute(
+                        "DELETE FROM transcripts WHERE id IN "
+                        "(SELECT id FROM transcripts LIMIT ?)",
+                        (_PURGE_BATCH,),
+                    )
+                    removed = int(cursor.rowcount or 0)
+                rows_removed += removed
+                if removed < _PURGE_BATCH:
+                    break
+            # Fold the write-ahead log back into the database. Outside the
+            # transaction above, deliberately: a checkpoint inside an open write
+            # transaction raises "database table is locked", which is the
+            # database telling you it cannot do this yet rather than a bug in
+            # the checkpoint. The rows just deleted are still sitting in `-wal`
+            # until this runs, and the file is unlinked below.
+            # Unconditional. It used to be `if rows_removed`, so a purge
+            # against a table that was already empty skipped the checkpoint and
+            # then unlinked the WAL anyway (objection C5).
+            connection = self._connect()
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                connection.close()
+
+        files_removed = 0
+        for directory, pattern in (
+            (self.pending_dir, "*.json"),
+            (self.audio_dir, "*.wav"),
+        ):
+            if not directory.exists():
+                continue
+            # Globbed by the pattern this module writes, never by directory: a
+            # purge that unlinked everything would delete whatever a user or
+            # another tool had put there.
+            for path in directory.glob(pattern):
+                try:
+                    path.unlink()
+                    files_removed += 1
+                except OSError:
+                    pass
+
+        for suffix in ("-wal", "-shm"):
+            sidecar = self.db_path.with_name(self.db_path.name + suffix)
+            try:
+                if not sidecar.exists():
+                    continue
+                # **Only when it is empty.** A non-zero WAL after a TRUNCATE
+                # checkpoint means another connection is holding frames — the
+                # daemon, mid-dictation — and unlinking it would discard the §8
+                # pre-injection write that WAL was adopted to protect. That is
+                # objection O11's own failure, re-entered through the cleanup
+                # added alongside its fix (objection C5).
+                if sidecar.stat().st_size > 0:
+                    continue
+                sidecar.unlink()
+                files_removed += 1
+            except OSError:
+                pass
+
+        return SweepResult(
+            removed=files_removed,
+            remaining=0,
+            rows_removed=rows_removed,
+            files_removed=files_removed,
+        )
+
+    def recent(self, limit: int = 20) -> tuple[StoredTranscript, ...]:
+        """The most recent transcripts, newest first. `manu history`."""
+        if not self.db_path.exists():
+            return ()
+        with self._transaction() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT id, started_at, transcript, raw_transcript, injected, "
+                "guard_outcome FROM transcripts ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(
+            StoredTranscript(
+                id=row["id"],
+                started_at=row["started_at"],
+                transcript=row["transcript"],
+                raw_transcript=row["raw_transcript"],
+                injected=bool(row["injected"]),
+                guard_outcome=row["guard_outcome"],
+            )
+            for row in rows
+        )
+
+    def pending(self) -> tuple[StoredTranscript, ...]:
+        """Orphans under `pending/`, newest first. §5.5 gap 3.
+
+        Every one of these is a transcript the user did not receive: the file
+        exists only until injection succeeds. Before Phase 3 they were a file
+        nobody was told about and no command surfaced, which made §8's guarantee
+        mechanically preserved and practically unreachable.
+        """
+        if not self.pending_dir.exists():
+            return ()
+        found: list[StoredTranscript] = []
+        for path in sorted(self.pending_dir.glob("*.json")):
+            try:
+                row = json.loads(path.read_text())
+            except (OSError, ValueError):
+                # A half-written file must not stop the user reading the rest.
+                continue
+            found.append(
+                StoredTranscript(
+                    id=str(row.get("id", path.stem)),
+                    started_at=str(row.get("started_at", "")),
+                    transcript=str(row.get("transcript", "")),
+                    raw_transcript=row.get("raw_transcript"),
+                    injected=False,
+                    guard_outcome=row.get("guard_outcome"),
+                )
+            )
+        return tuple(sorted(found, key=lambda item: item.started_at, reverse=True))
 
     def _sweep_audio(self, cutoff: float) -> tuple[int, int, int]:
         """Expire stored audio on the same clock as pending transcripts.
@@ -481,10 +697,35 @@ class HistoryStore:
         that gets skipped exactly once, on the path where a transcript is
         being written before injection.
         """
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        # Owner-only, like everything else this module creates. The database is
+        # 0600 and `pending/` and `audio/` are 0700, but the directory holding
+        # all three was created with no mode and landed at 0755 under a default
+        # umask — so session identifiers and the existence of stored audio were
+        # listable by other local users (objection C12). `mode=` applies only on
+        # creation, which is why the chmod below covers a directory that already
+        # exists from an earlier version.
+        self._data_dir.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        try:
+            self._data_dir.chmod(_DIR_MODE)
+        except OSError:
+            # A data directory the user has deliberately shared is their call;
+            # failing to start the daemon over it is not.
+            pass
         if not self.db_path.exists():
             self.db_path.touch(mode=_FILE_MODE)
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=_BUSY_TIMEOUT_S)
+        # WAL, because `manu history` is a SECOND PROCESS on this file while the
+        # daemon holds it and IPC is Phase 4 (objection O11). Under the default
+        # rollback journal a `--purge` taking an exclusive lock while the worker
+        # calls `write_pending` raises OperationalError, which propagates into
+        # `_process` and returns without persisting or injecting — the user runs
+        # a *history* command and loses a transcript. WAL lets a reader run
+        # against a writer, which is that case exactly.
+        #
+        # Set on every connect rather than once: it is persistent in the file
+        # header, so this is a no-op after the first, and an `initialise()` the
+        # caller must remember is a step that gets skipped exactly once.
+        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute(_SCHEMA)
         _add_missing_columns(connection)
         return connection
