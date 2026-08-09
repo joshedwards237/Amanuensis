@@ -74,8 +74,28 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-from numpy.typing import NDArray
+#: Printed for any third-party import this script needs and cannot find.
+#:
+#: The failure mode this exists for is specific and was hit on the first real
+#: run. `sys.path.insert` below makes `amanuensis` importable from a source
+#: checkout with nothing installed, which is convenient and *also* means the
+#: script gets a long way into a session on an interpreter that cannot finish
+#: it — the operator read a prompt, pressed Enter twice, and met
+#: `ModuleNotFoundError: sounddevice` inside take 1 of 10.
+_WRONG_INTERPRETER = """\
+error: {missing!r} is not installed for this interpreter.
+  You are running: {executable}
+  This script puts src/ on sys.path, so `amanuensis` imports even outside the
+  virtualenv — which is why it got this far. Run it as:
+      .venv/bin/python scripts/record_phase3_corpus.py"""
+
+try:
+    import numpy as np
+    from numpy.typing import NDArray
+except ModuleNotFoundError as exc:  # pragma: no cover — an environment problem
+    raise SystemExit(
+        _WRONG_INTERPRETER.format(missing=exc.name, executable=sys.executable)
+    ) from exc
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -226,6 +246,55 @@ SHORT_TAKES: tuple[Take, ...] = (
     Take("S09-acronyms", SHORT_SPEAK_S, "Say three acronyms you use at work.", "the class [boost] exists for, at short duration"),
     Take("S10-fragment", 2.0, "Say an incomplete sentence and stop mid-thought.", "no terminal punctuation available — the R1 case"),
 )
+
+
+def preflight(capture: object, sample_rate: int) -> str | None:
+    """Actually open the microphone. Returns a problem to print, or None.
+
+    **This exists because the check it replaces could not fail.** The first
+    version reported the resolved device and moved on — but `resolve_device()`
+    returns `None` immediately when `[audio] device = "default"`, without
+    touching PortAudio, so in the default configuration it verified nothing.
+    The real failure surfaced on take 1, after the operator had read a prompt
+    and pressed Enter twice: `ModuleNotFoundError: No module named
+    'sounddevice'`.
+
+    That is the sixth instance in this repository of a check that passes by
+    checking nothing, and the first one written after the pattern was named.
+
+    So this opens a real stream, keeps it open briefly, and confirms frames
+    arrived. It exercises the import, the macOS microphone permission, the
+    device, and the callback — the four things that can be wrong — and it does
+    it *before* the session starts rather than inside the first take.
+    """
+    try:
+        import sounddevice  # noqa: F401
+    except ModuleNotFoundError as exc:
+        return _WRONG_INTERPRETER.format(
+            missing=exc.name, executable=sys.executable
+        ).removeprefix("error: ")
+
+    try:
+        capture.start()  # type: ignore[attr-defined]
+    except Exception as exc:  # PortAudio raises its own hierarchy
+        return (
+            f"the microphone could not be opened: {type(exc).__name__}: {exc}\n"
+            "  On macOS this is usually the Microphone permission — grant it in\n"
+            "  System Settings > Privacy & Security > Microphone."
+        )
+    try:
+        time.sleep(0.25)
+        probe = capture.stop()  # type: ignore[attr-defined]
+    except Exception as exc:
+        return f"the microphone could not be closed: {type(exc).__name__}: {exc}"
+
+    if probe is None or len(probe) == 0:
+        return (
+            "the microphone opened but delivered no audio.\n"
+            "  Check that the input device in Sound preferences is the one you "
+            "expect."
+        )
+    return None
 
 
 def countdown(label: str, seconds: float) -> None:
@@ -411,6 +480,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not pending:
         print("  Nothing to do.")
         return 0
+
+    # Before the operator commits to anything. A seventy-five second take is a
+    # bad place to discover the audio stack is not there.
+    problem = preflight(capture, audio_config.sample_rate)
+    if problem is not None:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
+    print("  microphone: OK (opened, delivered audio, closed)")
+    print()
     input("  Press Enter to begin. ")
 
     sample_rate = audio_config.sample_rate
