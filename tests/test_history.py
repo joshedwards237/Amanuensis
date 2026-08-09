@@ -341,7 +341,7 @@ def test_the_sweep_does_not_delete_a_recoverable_transcript(tmp_path: Path) -> N
     store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
     fresh = _orphan(store, "recent", age_days=1)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert fresh.exists()
     assert result.removed == 0
@@ -355,7 +355,7 @@ def test_the_sweep_applies_retain_days(tmp_path: Path) -> None:
     stale = _orphan(store, "old", age_days=31)
     fresh = _orphan(store, "new", age_days=29)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert not stale.exists()
     assert fresh.exists()
@@ -370,7 +370,7 @@ def test_retain_days_zero_sweeps_everything(tmp_path: Path) -> None:
     _orphan(store, "old", age_days=31)
     _orphan(store, "new", age_days=0)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert result.removed == 2
     assert result.remaining == 0
@@ -381,7 +381,7 @@ def test_a_missing_pending_directory_is_not_an_error(tmp_path: Path) -> None:
     never had an injection fail. Daemon start must not care."""
     store = HistoryStore(HistoryConfig(), data_dir=tmp_path)
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert result.removed == 0
     assert result.remaining == 0
@@ -395,7 +395,7 @@ def test_the_sweep_ignores_files_it_did_not_write(tmp_path: Path) -> None:
     stranger = store.pending_dir / "notes.txt"
     stranger.write_text("not ours")
 
-    result = store.sweep_pending()
+    result = store.sweep()
 
     assert stranger.exists()
     assert result.removed == 1
@@ -610,7 +610,7 @@ def test_the_sweep_applies_retain_days_to_audio(tmp_path: Path) -> None:
     old = time.time() - 3 * 86400
     os.utime(stale, (old, old))
 
-    store.sweep_pending()
+    store.sweep()
 
     assert not stale.exists()
 
@@ -622,7 +622,7 @@ def test_the_sweep_keeps_audio_inside_the_window(tmp_path: Path) -> None:
     store.write_pending(_session(audio=_audible()))
     fresh = next(iter(tmp_path.glob("audio/*.wav")))
 
-    store.sweep_pending()
+    store.sweep()
 
     assert fresh.exists()
 
@@ -834,3 +834,182 @@ def test_an_existing_database_is_widened_rather_than_left_behind(
         connection.close()
 
     assert "raw_transcript" in present
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C1 — retention reaches history.db
+# ---------------------------------------------------------------------------
+
+
+def _aged_row(store: HistoryStore, session_id: str, days_ago: float) -> None:
+    """Write a row and back-date it. `started_at` is the retention clock."""
+    from datetime import timedelta
+
+    when = datetime.now(UTC) - timedelta(days=days_ago)
+    store.write_pending(_session(id=session_id, started_at=when))
+
+
+def test_rows_older_than_retain_days_are_swept(tmp_path: Path) -> None:
+    """`retain_days` had never reached `history.db`. It expired `pending/` files
+    and stored audio and left the database growing without bound."""
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=30), data_dir=tmp_path)
+    _aged_row(store, "old", days_ago=40)
+    _aged_row(store, "new", days_ago=1)
+
+    result = store.sweep()
+
+    assert result.rows_removed == 1
+    remaining = {row["id"] for row in _rows(store.db_path)}
+    assert remaining == {"new"}
+
+
+def test_the_sweep_actually_deletes_something(tmp_path: Path) -> None:
+    """The positive control for the test above, and it is not ceremony.
+
+    `started_at` is an ISO-8601 *string* and the pending sweep compares
+    `st_mtime` floats. `DELETE ... WHERE started_at < <float>` does not error —
+    SQLite applies the TEXT column's affinity to the operand and the comparison
+    silently matches **nothing** (objection O12). A retention sweep that appears
+    to work and never deletes a row would pass any test that only checked the
+    survivors.
+    """
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=1), data_dir=tmp_path)
+    for index in range(3):
+        _aged_row(store, f"old-{index}", days_ago=10)
+
+    assert len(_rows(store.db_path)) == 3
+    result = store.sweep()
+    assert result.rows_removed == 3, "the cutoff matched nothing — see the docstring"
+    assert _rows(store.db_path) == []
+
+
+def test_retain_days_zero_keeps_nothing(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=0), data_dir=tmp_path)
+    _aged_row(store, "today", days_ago=0)
+
+    store.sweep()
+
+    assert _rows(store.db_path) == []
+
+
+def test_a_row_inside_the_window_survives_a_sweep(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True, retain_days=30), data_dir=tmp_path)
+    _aged_row(store, "recent", days_ago=29)
+
+    store.sweep()
+
+    assert len(_rows(store.db_path)) == 1
+
+
+def test_the_database_is_in_wal_mode(tmp_path: Path) -> None:
+    """`manu history` opens the database the daemon is holding, and IPC is Phase
+    4 (objection O11). WAL lets a reader run against a writer, which is the
+    `manu history`-during-dictation case exactly."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(_session())
+
+    connection = sqlite3.connect(store.db_path)
+    try:
+        mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        connection.close()
+    assert mode.lower() == "wal"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C2/C3 — purge
+# ---------------------------------------------------------------------------
+
+
+def test_purge_removes_every_artefact(tmp_path: Path) -> None:
+    """§5.5 says `--purge` wipes it. "It" is three things on two paths, plus the
+    sidecar files WAL introduces (choice-story #9)."""
+    store = HistoryStore(
+        HistoryConfig(retain=True, store_audio=True), data_dir=tmp_path
+    )
+    import numpy as np
+
+    session = _session(audio=np.zeros(16000, dtype=np.float32))
+    store.write_pending(session)
+    # And an orphan from the other path.
+    other = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    other.write_pending(_session(id="orphan"))
+
+    assert list(store.audio_dir.glob("*.wav"))
+    assert list(store.pending_dir.glob("*.json"))
+
+    result = store.purge()
+
+    assert result.rows_removed == 1
+    assert result.files_removed >= 2
+    assert _rows(store.db_path) == []
+    assert list(store.audio_dir.glob("*.wav")) == []
+    assert list(store.pending_dir.glob("*.json")) == []
+
+
+def test_purge_leaves_no_wal_sidecar_behind(tmp_path: Path) -> None:
+    """WAL adds `history.db-wal` and `-shm`. A purge that deletes rows and
+    leaves a write-ahead log holding them has not wiped anything — §5.5 already
+    declines to claim secure erasure, but the inventory has to be honest."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(_session())
+
+    store.purge()
+
+    assert not (tmp_path / "history.db-wal").exists()
+    assert not (tmp_path / "history.db-shm").exists()
+
+
+def test_purge_on_an_empty_store_is_not_an_error(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    result = store.purge()
+    assert result.rows_removed == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 C2 — reading it back
+# ---------------------------------------------------------------------------
+
+
+def test_recent_returns_newest_first(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    _aged_row(store, "older", days_ago=2)
+    _aged_row(store, "newer", days_ago=1)
+
+    found = store.recent(limit=10)
+
+    assert [item.id for item in found] == ["newer", "older"]
+
+
+def test_recent_respects_its_limit(tmp_path: Path) -> None:
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    for index in range(5):
+        _aged_row(store, f"row-{index}", days_ago=index)
+
+    assert len(store.recent(limit=2)) == 2
+
+
+def test_pending_lists_the_orphans(tmp_path: Path) -> None:
+    """§5.5 gap 3: before this they were a file the user was never told about
+    and no command surfaced."""
+    store = HistoryStore(HistoryConfig(retain=False), data_dir=tmp_path)
+    store.write_pending(_session(id="orphan-1"))
+
+    found = store.pending()
+
+    assert [item.id for item in found] == ["orphan-1"]
+    assert found[0].injected is False
+
+
+def test_the_raw_transcript_is_readable_back(tmp_path: Path) -> None:
+    """The column existed and nothing could show it (choice-story #10)."""
+    store = HistoryStore(HistoryConfig(retain=True), data_dir=tmp_path)
+    store.write_pending(
+        _session(raw_transcript="the breadshoe", final_text="the spreadsheet")
+    )
+
+    found = store.latest()
+
+    assert found is not None
+    assert found.transcript == "the spreadsheet"
+    assert found.raw_transcript == "the breadshoe"

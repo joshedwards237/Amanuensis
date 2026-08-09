@@ -100,3 +100,31 @@ def pad_with_silence(
     """
     pad = np.zeros(int(sample_rate * seconds), dtype=np.float32)
     return np.concatenate([pad, audio, pad]).astype(np.float32)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_data(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Point every test at a throwaway config and data directory.
+
+    **Added 2026-08-08 after the suite printed the operator's real
+    transcripts.** `manu history` began working in Phase 3, and a pre-existing
+    test that called `main(["history"])` to assert the verb refused now listed
+    live rows out of `~/Library/Application Support/amanuensis/history.db`.
+
+    The read was the visible half. The unacceptable half is that the same phase
+    ships `manu history --purge`, so a test one flag away from that one would
+    have deleted the operator's transcripts — the artefact §8 exists to
+    preserve — with no test asserting anything about it.
+
+    `autouse` rather than opt-in, deliberately. A fixture each test must
+    remember is a fixture one test forgets, and the failure is silent until it
+    is catastrophic. The two environment variables are the documented override
+    (§5.3, §7.3's portability floor), so this uses the product's own mechanism
+    rather than patching a path resolver.
+    """
+    base = tmp_path_factory.mktemp("amanuensis-isolated")
+    monkeypatch.setenv("AMANUENSIS_CONFIG_DIR", str(base / "config"))
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(base / "data"))
+    return base

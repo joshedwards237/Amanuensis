@@ -567,6 +567,31 @@ Three gaps follow from the mechanism and are closed here:
    §7.3 documents it failing in Electron and Java apps. Every failed injection and
    every crash between write and unlink leaves a plaintext transcript behind, and
    the user who set `retain = false` is the one accumulating them.
+**All three gaps closed 2026-08-08, in Phase 3.** `retain_days` now expires
+`history.db` rows as well as `pending/` files and stored audio, on one call at
+daemon start **and** once a day from the worker — a start-only sweep contradicted
+the long-lived-daemon argument that justifies re-reading `vocabulary.toml`, and a
+daemon running for a fortnight would never have expired a row (objection O11).
+
+Two things about the mechanism are worth recording because both were nearly
+silent failures:
+
+- **The cutoff is an ISO-8601 string, not an epoch float.** `started_at` is TEXT
+  and the other two sweeps compare `st_mtime`. `DELETE ... WHERE started_at <
+  <float>` does not error — SQLite applies the column's TEXT affinity to the
+  operand and matches **nothing** — so the sweep would have appeared to work and
+  never deleted a row.
+- **The database is opened in WAL mode with a 15 s busy timeout.** `manu history`
+  is a second process on the file the daemon holds, and IPC is Phase 4. Under the
+  default rollback journal a `--purge` taking an exclusive lock while the worker
+  calls `write_pending` raises `OperationalError` into the §8 write — the user
+  runs a *history* command and loses a transcript. WAL adds `-wal` and `-shm`
+  sidecars, and `--purge`'s inventory covers them.
+
+`--purge` asks before deleting. §5.5 says it "wipes it" and does not say it asks;
+asking is added because the artefact it wipes is the one §8 exists to preserve,
+and because the flag is one character from `--pending`. `--yes` skips it.
+
 3. **`manu history` surfaces pending transcripts and `--purge` covers them.**
    §8 promises the user can recover their words when injection fails. With
    `retain = true` that promise is discharged by `manu history`. Without this, the
@@ -2831,6 +2856,8 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-08-08 | **A test suite that could read — and was one flag from deleting — the operator's real transcripts.** `manu history` began working in Phase 3, and a pre-existing test that called `main(["history"])` to assert the verb *refused* started listing live rows out of the real data directory; the suite printed them. The read was the visible half. The unacceptable half is that the same phase ships `manu history --purge`, so a test one flag away would have destroyed the artefact §8 exists to preserve, with nothing asserting anything about it. `tests/conftest.py` now points `$AMANUENSIS_CONFIG_DIR` and `$AMANUENSIS_DATA_DIR` at a temporary directory for **every** test, `autouse` rather than opt-in — a fixture each test must remember is a fixture one test forgets, and this failure is silent until it is catastrophic. It uses the product's own documented override rather than patching a path resolver. |
+| 2026-08-08 | **§5.5's three retention gaps closed, and two of them were silent-failure shapes** (objection O11, objection O12). `retain_days` reaches `history.db` at last, on an **ISO-8601 string cutoff** — comparing the TEXT `started_at` against an epoch float does not error, it silently matches nothing, which is a retention sweep that appears to work forever. The sweep runs at daemon start **and daily from the worker**, because a start-only sweep contradicted the long-lived-daemon argument that justifies hot-reloading `vocabulary.toml`. The database moves to **WAL with a 15 s busy timeout**: `manu history` is a second process on the file the daemon holds, IPC is Phase 4, and under the default journal a `--purge` racing `write_pending` raises into the §8 write — losing a transcript to a *history* command. `--purge` covers rows, `pending/`, stored audio and the new `-wal`/`-shm` sidecars, asks before deleting, and repeats §5.5's refusal to claim secure erasure rather than letting the user infer the stronger promise. |
 | 2026-08-08 | **Phase 3's gate could not fail, and the clause that made it so was written before the thing it excused existed** (§9, objection O4, choice-story #8). The reject clause excused an edit rate driven by proper nouns because it "points at §5.6's vocabulary mechanisms, not at a phase failure" — and Phase 3 *builds* §5.6. With G2's 5% movable and §2's 909 ms prediction covering G1, every failure mode was pre-authorised. Amended, and **narrowed to terms present in the frozen `vocabulary.toml`**: un-excusing the class wholesale would fail the gate on the *corpus's scope* rather than the *dictionary's misses*, and would hand Phase 5 a reject clause counting the **87.2% of errors measured as unrecoverable ASR mistranscription**. Two derived latency ceilings added (`postprocess_ms` p95 ≤ 5 ms, `vocab_ms` p95 ≤ 10 ms), plus a minimum instrument — a frozen *empty* dictionary satisfies a SHA-256 and measures nothing, so entry count is recorded and one entry must fire. Second instance in this PRD of a gate that could not fail by construction; the first is §7.5's, about Phase 5. |
 | 2026-08-08 | **A raising post-processor loses the transcript, and two documents say it cannot** (§6.3, objection O1). `postprocess/base.py` and §6.3 both state that when `process` raises, "§8's persist-before-inject ordering already ran, so the words survive regardless." In `DictationController._process` the chain runs **before** the write, and the only handler returns before `deliver` — so nothing is persisted, nothing is injected, and the words exist in a local variable. Invisible for three phases because `cli.py` passed `processors=[]`; reachable the day Phase 3 ships one. The loop gets a per-processor guard **and both documents are corrected**, because guarding the loop while leaving a false statement in place is how the next reader inherits it. Fourth instance of the PRD stating a constraint the code cannot honour, after `restore_ms`, `store_audio`, and the missing `raw_transcript` column. |
 | 2026-08-08 | **§6.3's `TranscriptionEngine.transcribe` gains `boost: Sequence[str] = ()`** (objection O2). §5.6's per-application boosting needs terms chosen per dictation, and the contract had no channel: `initial_prompt` is read from a frozen `EngineConfig` at decode time and `biased` is all-or-nothing. Exactly the 2026-08-05 `biased` precedent — a term list is backend-neutral domain vocabulary and each engine says locally what boosting means, where passing a prompt string would make the caller responsible for a mechanism it is not supposed to know about. Also **`vocab_ms` joins `LatencyBreakdown`**, inside `g1_ms`: the vocabulary reload runs before the decode, and a stage inside G1's window needs a field. **Fifth phase in a row.** |

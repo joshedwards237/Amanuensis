@@ -84,7 +84,6 @@ _EXIT_OK = 0
 _VERB_PHASES = {
     "toggle": "Phase 4",
     "status": "Phase 4",
-    "history": "Phase 3",
 }
 
 
@@ -121,6 +120,29 @@ def build_parser() -> argparse.ArgumentParser:
             "print the most recent transcript, including one the collapse "
             "guard declined to inject"
         ),
+    )
+    history_parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="show the decoder's own words, before post-processing",
+    )
+    history_parser.add_argument(
+        "--pending",
+        action="store_true",
+        help="list transcripts written before a failed injection (§5.5)",
+    )
+    history_parser.add_argument(
+        "--limit", type=int, default=20, metavar="N", help="how many to list"
+    )
+    history_parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="delete every stored transcript, pending file and audio recording",
+    )
+    history_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip --purge's confirmation prompt (for scripts)",
     )
 
     transcribe = subparsers.add_parser(
@@ -210,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install(config, skip_download=args.skip_download, clip=args.clip)
     if args.verb == "daemon":
         return _daemon(config)
-    if args.verb == "history" and args.last:
-        return _history_last(config)
+    if args.verb == "history":
+        return _history(config, args)
     if args.verb == "vocab":
         if args.vocab_action != "check":
             print("manu vocab: try `manu vocab check --help`.", file=sys.stderr)
@@ -226,7 +248,89 @@ def main(argv: list[str] | None = None) -> int:
     return _EXIT_ERROR
 
 
-def _history_last(config: AppConfig) -> int:
+def _history(config: AppConfig, args: argparse.Namespace) -> int:
+    """`manu history` and its flags. §5.5's retention half, read side.
+
+    The default listing exists because §5.5 gap 3's complaint was that the
+    `pending/` orphans were "a file the user was never told about and no command
+    surfaced" — so a pending count is a **footer on the default output**, not
+    something behind a flag the user would have to know to ask for.
+    """
+    from amanuensis.storage.history import HistoryStore
+
+    store = HistoryStore(config.history)
+
+    if args.purge:
+        return _history_purge(store, assume_yes=args.yes)
+    if args.last:
+        return _history_last(config, raw=args.raw)
+    if args.pending:
+        found = store.pending()
+        if not found:
+            print("no pending transcripts.")
+            return _EXIT_OK
+        print(f"{len(found)} transcript(s) written before a failed injection:")
+        for item in found:
+            print(f"  {item.started_at}  {store.pending_dir / (item.id + '.json')}")
+            print(f"    {item.transcript.strip()[:100]}")
+        return _EXIT_OK
+
+    rows = store.recent(limit=args.limit)
+    if not rows:
+        print("no transcripts yet.")
+    for item in rows:
+        mark = " " if item.injected else "!"
+        text = (item.raw_transcript if args.raw else item.transcript) or ""
+        first = text.strip().splitlines()[0] if text.strip() else "(empty)"
+        print(f"{mark} {item.started_at}  {first[:90]}")
+
+    orphans = store.pending()
+    if orphans:
+        # The footer, not a flag. See the docstring.
+        print()
+        print(
+            f"{len(orphans)} transcript(s) are waiting from failed injections — "
+            "`manu history --pending`"
+        )
+    return _EXIT_OK
+
+
+def _history_purge(store: HistoryStore, assume_yes: bool) -> int:
+    """Delete everything, after asking.
+
+    §5.5 says `--purge` wipes it and does not say it asks. Asking is added here
+    because the artefact it wipes is the one §8 exists to preserve, and because
+    the flag is one character away from `--pending`.
+    """
+    if not assume_yes:
+        print(
+            f"This deletes every transcript and recording under {store.db_path.parent}."
+        )
+        print("It cannot be undone.")
+        try:
+            answer = input("Type 'purge' to confirm: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            answer = ""
+        if answer.strip() != "purge":
+            print("nothing was deleted.")
+            return _EXIT_OK
+
+    result = store.purge()
+    print(
+        f"purged {result.rows_removed} transcript(s) and "
+        f"{result.files_removed} file(s)."
+    )
+    # §5.5 already declines to claim secure erasure, and repeating the honest
+    # version here is cheaper than a user inferring the stronger one.
+    print(
+        "Amanuensis does not claim secure erasure — full-disk encryption is "
+        "what makes residue unreadable."
+    )
+    return _EXIT_OK
+
+
+def _history_last(config: AppConfig, raw: bool = False) -> int:
     """Print the most recent transcript. The whole of `history` that exists.
 
     Pulled forward from Phase 3 by objection O2, and no further. §5.7 refuses
@@ -254,7 +358,19 @@ def _history_last(config: AppConfig) -> int:
     else:
         print(found.started_at)
     print()
+    if raw:
+        print(found.raw_transcript or found.transcript)
+        return _EXIT_OK
+
     print(found.transcript)
+    if found.raw_transcript is not None and found.raw_transcript != found.transcript:
+        # Both, when they differ (choice-story #10). B0 made "did the processors
+        # change my words?" answerable for the first time, and the only viewer
+        # of that data was about to ship with no way to ask it — which is
+        # dictionary objection O5's complaint surviving its own fix.
+        print()
+        print("raw (before post-processing):")
+        print(found.raw_transcript)
     return _EXIT_OK
 
 
@@ -585,7 +701,7 @@ def _daemon(config: AppConfig) -> int:
             print(file=sys.stderr)
 
     history = HistoryStore(config.history)
-    swept = history.sweep_pending()
+    swept = history.sweep()
     if swept.removed or swept.remaining:
         print(
             f"pending transcripts: {swept.removed} expired, "

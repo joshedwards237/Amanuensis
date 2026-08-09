@@ -88,6 +88,15 @@ _SHUTDOWN_TIMEOUT_S = 30.0
 _DECODE_INTERCEPT_MS = 48.8
 _DECODE_MS_PER_SECOND = 13.69
 
+#: How long between retention sweeps on the worker thread.
+#:
+#: `retain_days` used to be enforced only at daemon start, while the whole
+#: argument for re-reading `vocabulary.toml` on mtime is that this daemon is
+#: **long-lived** (objection O11). Both cannot be true: a daemon running for a
+#: fortnight would never have expired a row. This is a clock comparison on a
+#: thread that already exists rather than a second timer thread.
+_SWEEP_INTERVAL_S = 24 * 60 * 60.0
+
 
 class DictationState(StrEnum):
     """What the user must be able to see without opening a menu (§5.4).
@@ -255,6 +264,10 @@ class DictationController:
         #: not about the dictation — `to_history_row` should not grow a column
         #: for it.
         self._focus_by_session: dict[str, str | None] = {}
+        #: Monotonic stamp of the last retention sweep. `None` until the daemon
+        #: does the start-up one, so the first worker sweep is a full interval
+        #: after start rather than on the first dictation.
+        self._last_sweep_at: float | None = None
 
     # -- state -------------------------------------------------------------
 
@@ -407,6 +420,29 @@ class DictationController:
             self._set_state(DictationState.IDLE)
 
     # -- the worker thread -------------------------------------------------
+
+    def _maybe_sweep(self) -> None:
+        """Expire old transcripts, at most once a day, on the worker.
+
+        Runs *after* a session rather than before: the sweep takes a write lock
+        and the one call that must not wait on it is the §8 pre-injection write.
+        Failures are swallowed — a retention sweep that cannot run is a disk
+        that fills, and raising here would take the microphone down with it.
+        """
+        sweep = getattr(self.history, "sweep", None)
+        if sweep is None:
+            return
+        now = time.monotonic()
+        if (
+            self._last_sweep_at is not None
+            and now - self._last_sweep_at < _SWEEP_INTERVAL_S
+        ):
+            return
+        self._last_sweep_at = now
+        try:
+            sweep()
+        except Exception:
+            pass
 
     def _drain(self) -> None:
         while True:
@@ -610,6 +646,8 @@ class DictationController:
             session.error = f"{type(exc).__name__}: {exc}"
             self._set_state(DictationState.ERROR)
             return
+
+        self._maybe_sweep()
 
         if session.error:
             self._set_state(DictationState.ERROR)
