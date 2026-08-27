@@ -82,3 +82,10 @@ src/amanuensis/assets/*.wav
 site/node_modules/
 site/dist/
 site/.astro/
+
+# SQLite sidecars the site fixture generator leaves behind. The fixture itself
+# is committed; its write-ahead log is not project state and differs on every
+# run even when the exported output is byte-identical.
+tests/fixtures/site/*.db-wal
+tests/fixtures/site/*.db-shm
+tests/fixtures/site/history.db

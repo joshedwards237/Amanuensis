@@ -102,11 +102,19 @@ jobs:
           path: site/dist
 
   deploy:
-    # Only from main, and only after both gates. Pages must be enabled on the
-    # repository first (Settings → Pages → Source: GitHub Actions); until it is,
-    # this job fails and the other two still give you the signal that matters.
+    # Deploys on a push to main, or on an explicit workflow_dispatch from any
+    # branch. The manual path exists so the page can be seen before it is
+    # merged; it publishes to the same single Pages site, so running it from a
+    # branch overwrites what main last published. That is a deliberate trade
+    # while the site has no audience, and it should be removed once it does.
+    #
+    # Pages must be enabled on the repository (Settings → Pages → Source:
+    # GitHub Actions). Without it this job fails and the other two still give
+    # you the signal that matters.
     name: deploy
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: >-
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     permissions:
