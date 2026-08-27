@@ -1,0 +1,245 @@
+---
+import Base from '../layouts/Base.astro'
+import claims from '../data/claims.json'
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const gh = 'https://github.com/joshedwards237/Amanuensis'
+const head = (claims.bands as Record<string, any>)[claims.headline_band]
+
+const toc = [
+  ['requirements', 'Requirements'],
+  ['install', 'Install'],
+  ['permissions', 'Permissions'],
+  ['first-dictation', 'Your first dictation'],
+  ['config', 'Configuration'],
+  ['vocabulary', 'Custom vocabulary'],
+  ['history', 'History and retention'],
+  ['troubleshooting', 'Troubleshooting'],
+]
+---
+
+<Base
+  current="docs"
+  title="Install Amanuensis — documentation"
+  description="Install, permissions, configuration and troubleshooting for Amanuensis, local dictation for macOS."
+>
+  <div class="docs page">
+    <aside class="toc" aria-label="On this page">
+      <p class="t-label">On this page</p>
+      <ul>
+        {toc.map(([id, label]) => <li><a href={`#${id}`}>{label}</a></li>)}
+      </ul>
+    </aside>
+
+    <article class="body">
+      <p class="t-label">Documentation</p>
+      <h1 class="t-h2">Install Amanuensis</h1>
+      <p class="t-lede">
+        About two minutes, most of it waiting for a model to download. macOS only.
+      </p>
+
+      <div class="callout">
+        <strong>Runs from a source checkout.</strong> There is no packaged app, installer or
+        signed binary yet — that is Phase 4. If you want a double-clickable <code>.app</code>, watch <a href={`${gh}/releases`}>releases</a> rather than installing today.
+      </div>
+
+      <h2 id="requirements" class="t-h3">Requirements</h2>
+      <ul>
+        <li><strong>macOS.</strong> The hotkey, the injection path and the menu-bar indicator are all platform-specific.</li>
+        <li><strong>Python 3.12 or newer.</strong> <code>python3 --version</code> to check.</li>
+        <li><strong>A desk microphone.</strong> Published figures were measured on one; a Bluetooth headset has a different acoustic profile.</li>
+        <li><strong>About 100 MB of disk</strong> for the model, downloaded once.</li>
+      </ul>
+
+      <h2 id="install" class="t-h3">Install</h2>
+      <pre><code>git clone {gh}
+cd Amanuensis
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e .</code></pre>
+
+      <p>Then download the model and measure this machine:</p>
+      <pre><code>manu install</code></pre>
+
+      <p class="t-caption">
+        <code>manu install</code> fetches the speech model once over HTTPS from a pinned
+        revision and checksum-verifies it. It then times a reference clip to work out which
+        tier your machine is in, and writes that to disk. Nothing is downloaded at runtime
+        ever again.
+      </p>
+
+      <h2 id="permissions" class="t-h3">Permissions</h2>
+      <p>
+        macOS will ask for two. The daemon names whichever is missing and refuses to start
+        rather than half-working:
+      </p>
+      <ul>
+        <li>
+          <strong>Input Monitoring</strong> — to notice the hotkey. The event tap is
+          listen-only; it does not modify or swallow your keystrokes.
+        </li>
+        <li>
+          <strong>Accessibility</strong> — to place text at the cursor in another
+          application.
+        </li>
+      </ul>
+      <p class="t-caption">
+        System Settings → Privacy &amp; Security → the relevant list → add your terminal (or
+        the Python binary). You will need to restart the daemon after granting.
+      </p>
+
+      <h2 id="first-dictation" class="t-h3">Your first dictation</h2>
+      <pre><code>manu daemon</code></pre>
+      <p>
+        Leave it running. Put your cursor anywhere you can type, hold <kbd>right ⌥</kbd>,
+        say a sentence, and let go. The text appears where your cursor is.
+      </p>
+      <p>The menu-bar glyph tells you the state:</p>
+      <table>
+        <thead><tr><th>Glyph</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="g">○</td><td>Idle. The microphone is held but not recording.</td></tr>
+          <tr><td class="g rec">●</td><td>Recording. Your voice is being captured.</td></tr>
+          <tr><td class="g">◐</td><td>Transcribing.</td></tr>
+          <tr><td class="g">◍</td><td>Recovered — the transcript was re-decoded without your vocabulary bias, so proper nouns are less reliable.</td></tr>
+          <tr><td class="g rec">⚠</td><td>Withheld. The words were <em>not</em> injected; <code>manu history --last</code> has them.</td></tr>
+        </tbody>
+      </table>
+      <p class="t-caption">
+        For a ten-second utterance, expect text about {head.p50_ms} ms after you release the
+        key (p95 {head.p95_ms} ms, measured over {head.n} real dictations). Longer dictations
+        take proportionally longer — <a href={`${base}/how-it-works#transcribe`}>the measured
+        bands are here</a>.
+      </p>
+
+      <h2 id="config" class="t-h3">Configuration</h2>
+      <p>
+        Everything that could reasonably go either way is a key in
+        <code>~/.config/amanuensis/config.toml</code>. The file is created with defaults on
+        first run.
+      </p>
+      <pre><code>[hotkey]
+key = "right_option"
+
+[injection]
+strategy = "clipboard"   # or "keystroke"
+
+[history]
+retain = true
+retain_days = 30</code></pre>
+      <div class="callout callout-warn">
+        <strong>A real trade, stated plainly.</strong> <code>clipboard</code> passes your
+        transcript through the system clipboard, so a clipboard manager will capture it —
+        and one that syncs across devices will move it off this machine.
+        <code>keystroke</code> avoids the clipboard, but macOS text substitution silently
+        rewrites synthetic keystrokes (five changes in one measured sentence). The private
+        strategy is the one that alters your words. <a href={`${base}/how-it-works#inject`}
+          >The measurements are here</a
+        >.
+      </div>
+
+      <h2 id="vocabulary" class="t-h3">Custom vocabulary</h2>
+      <p>
+        Names, jargon and acronyms the model will not know. Edit
+        <code>~/.config/amanuensis/vocabulary.toml</code>:
+      </p>
+      <pre><code>[replace]
+"kubernetes" = "Kubernetes"
+
+[boost]
+terms = ["Amanuensis", "faster-whisper"]</code></pre>
+      <p>Check it parses and see what it would do:</p>
+      <pre><code>manu vocab check</code></pre>
+
+      <h2 id="history" class="t-h3">History and retention</h2>
+      <pre><code>manu history --last      # the most recent transcript
+manu history --pending   # transcripts that were never injected
+manu history --raw       # before the cleanup pass
+manu history --purge     # delete beyond retain_days</code></pre>
+      <p class="t-caption">
+        Setting <code>retain = false</code> does not skip the write — it writes to a
+        mode-0600 temporary file that never enters the database and is deleted the moment
+        injection succeeds. "Nothing persists" and "a crash never loses a transcript" are
+        both true at once, and the write itself is deliberately not user-settable.
+      </p>
+
+      <h2 id="troubleshooting" class="t-h3">Troubleshooting</h2>
+
+      <h3 class="t-h3 sub">The daemon will not start</h3>
+      <p>It names the missing permission. Grant it, then restart the daemon — the permission is read at startup.</p>
+
+      <h3 class="t-h3 sub">Nothing happens when I hold the key</h3>
+      <p>
+        Check Input Monitoring. If the glyph never turns <span class="g rec">●</span>, the
+        event tap is not seeing the key.
+      </p>
+
+      <h3 class="t-h3 sub">I got ⚠ and no text</h3>
+      <p>
+        That is the collapse guard refusing to inject a transcript it judged broken.
+        <code>manu history --last</code> has your words. It fires when the decoder got
+        through too little of your speech.
+      </p>
+
+      <h3 class="t-h3 sub">My clipboard keeps getting replaced</h3>
+      <p>
+        Expected with <code>strategy = "clipboard"</code>. It saves and restores, but the
+        restore races with clipboard managers. Switch to <code>keystroke</code> if that
+        matters more to you than exact text.
+      </p>
+
+      <h3 class="t-h3 sub">It is slower than the numbers say</h3>
+      <p>
+        The published figures are Tier A on one machine. <code>manu install</code> recorded
+        your tier; slower hardware is genuinely slower, and Tier B has never been measured
+        against its own published bar.
+      </p>
+
+      <div class="callout">
+        Still stuck? <a href={`${gh}/issues`}>Open an issue</a>. Include the output of
+        <code>manu install</code>, which reports your tier.
+      </div>
+    </article>
+  </div>
+</Base>
+
+<style>
+  .docs {
+    display: grid;
+    grid-template-columns: 14rem minmax(0, 1fr);
+    gap: var(--s5);
+    padding: var(--s5) var(--s3) var(--s6);
+    align-items: start;
+  }
+  .toc { position: sticky; top: 5rem; }
+  .toc ul { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+  .toc li { margin-bottom: 0.4rem; }
+  .toc a { color: var(--ink-2); text-decoration: none; font-size: 0.9375rem; }
+  .toc a:hover { color: var(--iris); }
+  .body { max-width: 42rem; }
+  .body h1 { margin: 0.35rem 0 var(--s2); }
+  .body h2 { margin: var(--s5) 0 var(--s2); scroll-margin-top: 5rem; }
+  .body h3.sub { font-size: 1.0625rem; margin: var(--s3) 0 0.35rem; }
+  .body p, .body ul, .body table { margin-block: var(--s2); }
+  .body pre { margin-block: var(--s2); }
+  .body ul { padding-left: 1.15rem; }
+  .body li { margin-bottom: 0.4rem; }
+  .g { font-family: var(--font-mono); font-size: 1.1rem; }
+  .g.rec { color: var(--accent); }
+  .callout {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--iris);
+    background: var(--iris-soft);
+    border-radius: var(--radius-sm);
+    padding: var(--s2) var(--s3);
+    margin-block: var(--s3);
+    font-size: 0.9375rem;
+  }
+  .callout-warn {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+  }
+  @media (max-width: 900px) {
+    .docs { grid-template-columns: 1fr; gap: var(--s3); }
+    .toc { position: static; }
+  }
+</style>
