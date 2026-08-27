@@ -1,0 +1,10 @@
+{
+  "_why": "The allowlist used when the export runs against tests/fixtures/site/history-fixture.db, for \u00a77.3's regeneration diff. Separate from the real allowlist so that adding a publishable session does not silently change what CI diffs against.",
+  "sessions": [
+    {
+      "id": "hero-demo",
+      "role": "hero",
+      "note": "Synthetic. 9.8 s, inside the <=10s headline band."
+    }
+  ]
+}

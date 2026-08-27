@@ -1,0 +1,413 @@
+---
+import Base from '../layouts/Base.astro'
+import Figure from '../components/Figure.astro'
+import Stage from '../components/Stage.astro'
+import Replay from '../components/Replay.tsx'
+import claims from '../data/claims.json'
+import session from '../data/sessions/hero-demo.json'
+import peaks from '../data/sessions/hero-demo.peaks.json'
+import '../styles/replay.css'
+
+// BASE_URL is '/Amanuensis' with no trailing slash under `trailingSlash:
+// 'ignore'`, so joining it naively produced '/Amanuensisaudio/...'. Normalise
+// once here rather than remembering a slash at every call site.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const head = (claims.bands as Record<string, any>)[claims.headline_band]
+const stageMs = (key: string) =>
+  session.stages.find((s: any) => s.key === key)?.ms ?? null
+const audioSrc = `${base}/audio/${session.id}.wav`
+const gh = 'https://github.com/joshedwards237/Amanuensis'
+---
+
+<Base>
+  {/* ---- 1. Hero (§5.1) ------------------------------------------------ */}
+  <section class="hero">
+    <div class="measure">
+      <h1 class="t-display">
+        Hold a key. Speak. Your words are on disk before they're on screen.
+      </h1>
+      <p class="t-lede">
+        Amanuensis is open-source dictation for macOS that runs entirely on your
+        machine. Hold <kbd>right-option</kbd>, speak, release — the transcript is
+        written to local history, then pasted at your cursor. No account. No
+        network at runtime. No audio leaving the machine.
+      </p>
+      <p>
+        For utterances of ten seconds or less — the duration this project's own
+        goal is written against — <Figure inline /> from release to text present,
+        read from the daemon's own timing rows. The target was
+        {' '}{claims.targets.p50_ms} and {claims.targets.p95_ms}. Longer
+        dictations take longer, and stage two shows you the measurements rather
+        than a formula.
+      </p>
+
+      <div class="cta">
+        <a class="btn" href={gh}>Read the source on GitHub</a>
+        <a class="btn" href={`${gh}/releases`}>Watch releases →</a>
+      </div>
+
+      <pre><code>git clone {gh} &amp;&amp; cd Amanuensis
+pip install -e .
+manu install     # downloads the model, measures this machine
+manu daemon      # hold right-option, speak, release</code></pre>
+
+      <p class="t-caption">
+        Runs from a source checkout. No packaged app, no installer, no signed
+        binary yet — that's Phase 4. Needs Python 3.12+ and two macOS permissions
+        (Accessibility and Input Monitoring); the daemon names whichever is
+        missing.
+      </p>
+    </div>
+
+    <div class="measure-wide replay-wrap">
+      <Replay
+        client:load
+        session={session as any}
+        peaks={peaks as any}
+        audioSrc={audioSrc}
+        headline={{
+          label: head.label,
+          n: head.n,
+          p50: head.p50_ms,
+          p95: head.p95_ms,
+        }}
+      />
+      {
+        (peaks as any).placeholder && (
+          <p class="placeholder-note t-caption">
+            <strong>This is not a real recording yet.</strong> The waveform above
+            is a flat placeholder and the timings come from a synthetic fixture
+            database. The demo corpus (SITE_PRD §10.2) has not been recorded, and
+            the production build refuses to ship this file.
+          </p>
+        )
+      }
+    </div>
+  </section>
+
+  {/* ---- 2. The loop (§4.3) -------------------------------------------- */}
+  <section id="loop">
+    <div class="measure">
+      <p class="t-label">The loop</p>
+      <h2 class="t-h2">Seven stages between your voice and your cursor.</h2>
+      <p>
+        Everything after you release the key happens in sequence, on one serial
+        worker, and every stage records its own time into the row you just saw.
+        The clock starts when your thumb comes up: the time you spend talking is
+        yours, so <code>capture</code> is not in the number.
+      </p>
+      <ol class="loop-list t-data">
+        <li><a href="#capture">capture</a></li>
+        <li><a href="#trim">trim</a></li>
+        <li><a href="#transcribe">transcribe</a></li>
+        <li><a href="#guard">guard</a></li>
+        <li><a href="#postprocess">post-processing</a></li>
+        <li><a href="#persist">persist</a></li>
+        <li><a href="#inject">inject</a></li>
+      </ol>
+    </div>
+  </section>
+
+  <Stage n={1} name="Capture" id="capture" cost="A resident process that holds
+    the microphone permanently. That is the reason recording state is never
+    allowed to be ambiguous — you must be able to tell whether the mic is live
+    without opening a menu." weight={3}>
+    <p>
+      The daemon holds the model in memory, because loading it per invocation
+      costs three to eight seconds and there is no version of that which is
+      acceptable. A listen-only <code>CGEventTap</code> watches right-option;
+      audio capture starts on press.
+    </p>
+    <p>
+      Push-to-talk is the default because it is predictable — there are no false
+      starts. The menu bar carries the state: <code>○</code> idle,
+      <code>●</code> recording, <code>◐</code> transcribing. macOS draws its own
+      microphone indicator too, and that one is not ours to get wrong.
+    </p>
+  </Stage>
+
+  <Stage n={2} name="Trim" id="trim" ms={stageMs('vad')} cost="No material cost
+    to you. The cost is on the measurement: the VAD parameters are the ones the
+    published figures were measured under, so changing one invalidates them.
+    There is deliberately no off switch, because an off switch would be a
+    supported way to break a published guarantee." weight={1}>
+    <p>
+      Silero VAD strips the silence before the model ever sees the audio. This is
+      the largest latency lever on the page and it is invisible: the model's time
+      scales with audio length, so the cheapest millisecond is the one you never
+      decode.
+    </p>
+    <p class="t-caption">
+      Its column in <code>history.db</code> is <code>vad_ms</code> — the schema is
+      named after the mechanism, this page after the effect. Since the widget
+      shows you the literal row, the mismatch is worth knowing rather than
+      quietly renaming.
+    </p>
+  </Stage>
+
+  <Stage n={3} name="Transcribe" id="transcribe" ms={stageMs('transcribe')}
+    cost="Latency grows with utterance length, and batch means silence on screen
+    until you release. The measurements below are bands this project actually
+    recorded; where a band does not exist, it says so." weight={2}>
+    <p>
+      faster-whisper, batch rather than streaming. Nothing appears until you
+      release the key — that is a decision, not a limitation: streaming partial
+      results is a named non-goal.
+    </p>
+
+    <Figure />
+
+    <h3 class="t-label">Other bands</h3>
+    <Figure band="band_7_16s" />
+    <Figure band="band_16_60s" />
+    <Figure band="gte_60s" />
+
+    <p class="t-caption">
+      <strong>There is no scaling formula on this page, deliberately.</strong>
+      One was fitted over fourteen samples spanning 0.7 to 43 seconds and then
+      used to predict at sixty. Refitting the clean rows explains under 60% of
+      the variance in a single decode. A model is not evidence about durations it
+      never saw, so this page shows measured bands and nothing between them.
+    </p>
+  </Stage>
+
+  <Stage n={4} name="The guard" id="guard" ms={stageMs('guard')}
+    cost="The false-positive direction — refusing something you actually said —
+    is untested, and the blind spot is at the short end. Six samples from one
+    speaker cannot produce a speaker it is wrong about." weight={2}>
+    <p>
+      A 30.5-second dictation once came back as two words. No error, injected at
+      the cursor. The vocabulary bias can silently destroy a transcript, and it
+      shipped in Phase 1 with nothing watching it.
+    </p>
+    <p>
+      Now the daemon measures how much of your speech the decoder actually got
+      through. Below the floor it decodes again with the bias dropped, and if
+      that fails too the text is <em>not</em> injected —
+      <code>manu history --last</code> still has your words, because every
+      transcript is persisted before injection is attempted. It fires at 8.3%
+      coverage on a reproduced collapse and stays silent across all six corpus
+      samples, whose floor is 82.8%.
+    </p>
+    <p>
+      <code>◍</code> in the menu bar means a transcript was recovered.
+      <code>⚠</code> means the words were withheld. This matters most for the
+      people this tool is quietly for: if you dictate because typing hurts, a
+      dropped transcription is not a minor annoyance.
+    </p>
+  </Stage>
+
+  <Stage n={5} name="Post-processing" id="postprocess" ms={stageMs('postprocess')}
+    cost="No material cost to you — the pass is under 1.2 ms at p95. Its real
+    cost is the rules it refuses to add." weight={1}>
+    <p>
+      A deterministic rules pass: whitespace, sentence capitalisation, punctuation
+      spacing. The widget above shows you exactly what it changed on this
+      session, and which rules fired, from the same database row.
+    </p>
+    <p>
+      <strong>Two rules are deliberately absent</strong>, and they are more
+      interesting than the ones that are there. Lowercasing a spurious
+      mid-sentence capital was rejected because a mid-sentence capital is
+      indistinguishable from a proper noun without a model, and the test that
+      would make it safe — "the same token appears lowercase elsewhere" — is the
+      definition of a homograph. <em>Ask Bill about the bill.</em> Folding spoken
+      numbers into digits was measured harmful on the first real corpus it met:
+      <em>one thought ends and the next one starts</em> became
+      <em>1 thought ends and the next 1 starts</em>.
+    </p>
+  </Stage>
+
+  <Stage n={6} name="Persist" id="persist" ms={stageMs('persist')}
+    cost="A millisecond or two of disk write on the critical path, spent on
+    purpose." weight={1}>
+    <p>
+      The transcript is written to local storage <strong>before</strong> injection
+      is attempted. Unconditionally. A crash, a failed paste, an application that
+      swallows the text — none of these can cost you your words, because the words
+      were already saved when the attempt began.
+    </p>
+    <p>
+      The ordering is the design, not a detail. Injection is the stage Amanuensis
+      controls least: it hands your words to somebody else's application. You do
+      not hand off the only copy.
+    </p>
+    <p>
+      Turning retention off does not skip the write. It writes to a mode-0600
+      temporary file that never enters the database and is unlinked the moment
+      injection succeeds — so "nothing persists" and "a crash never loses a
+      transcript" are both true at once. The guarantee is deliberately not
+      user-settable: the setting governs retention, never the write.
+    </p>
+  </Stage>
+
+  <Stage n={7} name="Inject" id="inject" ms={stageMs('inject')}
+    leaves="0, unless you run a clipboard manager"
+    cost="Two costs, both measured, neither fixable from inside this program.
+    <strong>Clipboard:</strong> your transcripts pass through your clipboard, and
+    a real clipboard manager on default settings captured every one of them —
+    managers that sync across devices will move a transcript off the machine as a
+    direct consequence of their defaults. Amanuensis warns when it detects a
+    known manager, and absence of a warning means no known manager was detected,
+    never that none is present. <strong>Keystroke:</strong> the strategy that
+    avoids the clipboard gets silently rewritten by the target application's text
+    substitution — five changes in one measured sentence. The strategy that
+    protects your privacy is the one that alters your words." weight={3}>
+    <p>
+      Clipboard paste by default, with save and restore of whatever you had.
+      Keystroke synthesis as the fallback. Verified in TextEdit, Terminal, VS Code
+      and Chrome on both strategies, by reading the text back out of each
+      application through the accessibility API rather than by eye. Zero failures.
+    </p>
+    <p class="t-caption">
+      Putting your clipboard back costs about 155 ms and happens after your text
+      is already on screen, which is exactly why it sits outside the latency
+      number.
+    </p>
+  </Stage>
+
+  {/* ---- 10. Nothing leaves (§4.3) -------------------------------------- */}
+  <section id="network">
+    <div class="measure">
+      <p class="t-label">Nothing leaves — the evidence</p>
+      <h2 class="t-h2">Zero sockets. Zero bytes.</h2>
+      <p>
+        Verified by packet capture on the running process, under load, twice —
+        most recently after a new dependency was added. <strong>0 sockets, 0
+        bytes</strong>, against a positive control that observed 865 bytes.
+      </p>
+      <p>
+        The control is the part that matters. An instrument that cannot see
+        traffic proves nothing by reporting none, so the harness first
+        demonstrates it can see a request, then reports zero on the product.
+      </p>
+      <p>
+        Model weights download once, at install, over HTTPS, checksum-verified
+        from a pinned revision. Never at runtime.
+      </p>
+      <p>
+        <strong>And the limit of that claim:</strong> the capture covers this
+        process only. Stage 7 hands your transcript to the system clipboard,
+        which other processes can read. That is the blind spot, it was measured
+        separately, and it is stated at the stage that causes it rather than
+        buried here.
+      </p>
+    </div>
+  </section>
+
+  {/* ---- 11. What isn't measured (§2.5) --------------------------------- */}
+  <section id="unmeasured">
+    <div class="measure">
+      <p class="t-label">What isn't measured</p>
+      <h2 class="t-h2">The gaps, at the same size as the numbers.</h2>
+      <ul class="gaps">
+        <li>
+          <strong>Anything between 16 and 60 seconds.</strong> No band exists —
+          there are too few clean observations to publish a percentile, and this
+          is the modal length for dictating prose.
+        </li>
+        <li>
+          <strong>Any machine that is not the one these were taken on.</strong>
+          One machine, one speaker, one room. The slower tier is unmeasured
+          against its own published bar, and the people most likely to want a
+          local-only tool are disproportionately likely to own slower hardware.
+        </li>
+        <li>
+          <strong>End-to-end accuracy.</strong> The gate that measures it needs
+          ten real long-form dictations and has not been run.
+        </li>
+        <li>
+          <strong>The guard's false-positive direction.</strong> Untested.
+        </li>
+        <li>
+          <strong>A packaged application.</strong> There isn't one.
+          <code>toggle</code> and <code>status</code> refuse and name their phase.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  {/* ---- 12. Colophon (§4.3, §5.3) -------------------------------------- */}
+  <section id="colophon">
+    <div class="measure">
+      <p class="t-label">Colophon</p>
+      <p class="t-caption etym">
+        <em>amanuensis</em>, from Latin <em>servus a manu</em> — one employed to
+        take down the words of another.
+      </p>
+      <pre><code>git clone {gh} &amp;&amp; cd Amanuensis
+pip install -e .
+manu install
+manu daemon</code></pre>
+      <p>
+        <a href={gh}>Source</a> · <a href={`${gh}/releases`}>Releases</a> ·
+        <a href={`${gh}/blob/main/AMANUENSIS_PRD.md`}>The specification</a> ·
+        <a href={`${gh}/tree/main/docs/gates`}>Gate records</a> ·
+        <a href={`${gh}/tree/main/docs/adr`}>Decisions</a>
+      </p>
+      <p class="t-caption">
+        Apache-2.0. The specification behind this has been adversarially reviewed;
+        every phase measured rather than assumed, and the gate records include the
+        numbers that contradicted it.
+      </p>
+      <p class="t-caption">
+        <strong>The alternatives, named:</strong> nerd-dictation on Linux, and
+        Talon, which is more capable than this and has been for years. The
+        specification records why this exists alongside them rather than instead
+        of them.
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    padding-top: var(--s5);
+  }
+  /* The display face is set tight; without this the lede collides with the
+     last descender of the headline. */
+  .hero .t-lede {
+    margin-top: var(--s3);
+  }
+  .cta {
+    display: flex;
+    gap: var(--s2);
+    flex-wrap: wrap;
+    margin: var(--s3) 0;
+  }
+  .btn {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    padding: 0.5rem 1rem;
+    text-decoration: none;
+    color: var(--ink);
+    font-size: 0.9375rem;
+    transition: border-color var(--t-hover) var(--ease);
+  }
+  .btn:hover {
+    border-color: var(--ink);
+  }
+  .replay-wrap {
+    margin-top: var(--s5);
+  }
+  .placeholder-note {
+    border-left: 3px solid var(--accent);
+    padding-left: var(--s2);
+    margin-top: var(--s2);
+  }
+  .loop-list {
+    list-style: decimal;
+    padding-left: 1.5rem;
+    columns: 2;
+  }
+  .gaps {
+    padding-left: 1.1rem;
+  }
+  .gaps li {
+    margin-bottom: var(--s2);
+  }
+  .etym {
+    color: var(--muted);
+    margin-bottom: var(--s3);
+  }
+</style>

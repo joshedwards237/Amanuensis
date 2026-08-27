@@ -1,0 +1,76 @@
+---
+/**
+ * A latency figure, with its band and n attached — SITE_PRD §2.6 rule 1.
+ *
+ * This component exists so the rule is structural rather than remembered. There
+ * is no way to render a p50 through it without also rendering its p95, its band
+ * label and its n, because they arrive together from `claims.json` and this is
+ * the only component that renders any of them. A figure the page wanted to show
+ * bare would have to bypass this file, which is visible in review.
+ */
+import claims from '../data/claims.json'
+
+interface Props {
+  band?: string
+  /** Render inline in a sentence rather than as a block. */
+  inline?: boolean
+}
+
+const { band = claims.headline_band, inline = false } = Astro.props
+const entry = (claims.bands as Record<string, any>)[band]
+
+if (!entry) throw new Error(`unknown band ${band} — check claims.json`)
+---
+
+{
+  entry.publishable ? (
+    inline ? (
+      <span class="fig-inline">
+        <strong>p50 {entry.p50_ms} ms / p95 {entry.p95_ms} ms</strong>
+        <span class="fig-prov"> — {entry.label}, {entry.n} dictations</span>
+      </span>
+    ) : (
+      <div class="fig">
+        <p class="t-label">{entry.label} · n = {entry.n}</p>
+        <p class="fig-nums">
+          <span>p50 <b>{entry.p50_ms}</b> ms</span>
+          <span>p95 <b>{entry.p95_ms}</b> ms</span>
+        </p>
+        <p class="t-caption">
+          Targets: p50 {claims.targets.p50_ms} ms, p95 {claims.targets.p95_ms} ms.
+          Measured end to end through the hotkey, read from the daemon's own
+          history.db rows.
+        </p>
+      </div>
+    )
+  ) : (
+    <p class="t-caption">
+      <strong>{entry.label}: no band exists.</strong> Only {entry.n} clean
+      observations, below the {10} this page requires before it will show a
+      percentile. Stated rather than filled in — a p95 over four observations is
+      a number, not a measurement.
+    </p>
+  )
+}
+
+<style>
+  .fig {
+    border-left: 3px solid var(--rule);
+    padding-left: var(--s2);
+    margin: var(--s3) 0;
+  }
+  .fig-nums {
+    font-family: var(--font-mono);
+    font-size: 1.75rem;
+    display: flex;
+    gap: var(--s3);
+    flex-wrap: wrap;
+    margin: 0.25rem 0 0.5rem;
+  }
+  .fig-nums b {
+    font-weight: 500;
+  }
+  .fig-prov {
+    color: var(--muted);
+  }
+</style>

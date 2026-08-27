@@ -1,0 +1,95 @@
+/* Design tokens — SITE_PRD §8.3.
+ *
+ * Both themes are first-class and dark is not an inversion. The structure below
+ * is required by §12.4 criterion 17 and is easy to get subtly wrong:
+ *
+ *   1. The COMPLETE light palette is defined on bare `:root`. No colour may have
+ *      its only definition inside a media query — a page whose palette lives in
+ *      `prefers-color-scheme` renders unstyled for anything that does not match.
+ *   2. Dark redefines the same tokens under `prefers-color-scheme: dark`,
+ *      guarded as `:root:not([data-theme="light"])` so an explicit light choice
+ *      still wins on a dark-set OS.
+ *   3. Dark redefines them again under `:root[data-theme="dark"]` so an explicit
+ *      dark choice wins on a light-set OS.
+ *
+ * The accent means exactly one thing: live, or being measured. The recording
+ * glyph, the playhead, the active spine tick, the caret, the g1 bracket, and
+ * the keycap. It is never spent on headings, backgrounds, buttons at rest, or
+ * decoration. Rubrication: scribes set in red the marks a reader must not miss
+ * and everything else in black, which is this usage rule exactly. It also
+ * collides usefully with the recording-dot convention, so one colour reads as
+ * both the scribe's ink and "the mic is hot" — the product's one non-negotiable
+ * feedback requirement (PRD §5.4).
+ *
+ * `--link` exists because an earlier revision gave links `--ink` text with a
+ * `--rule` underline, roughly 1.2:1 against the page, while resting the entire
+ * no-restatement strategy on links being found and followed. The page's least
+ * emphasised element was the one its architecture depended on.
+ */
+
+:root {
+  /* Light — the complete palette. Nothing here may move into a media query. */
+  --bg: #fbfaf7;
+  --panel: #f5f3ec;
+  --ink: #1c1b18;
+  --muted: #6e6b62;
+  --rule: #e5e2d9;
+  --link: #3a5f7d;
+  --accent: #b23b22;
+
+  /* Bars are ink, deliberately not accent: they are the record, not the event. */
+  --bar: var(--ink);
+  --bar-track: var(--rule);
+
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    monospace;
+
+  /* 8px grid (§8.4) */
+  --s1: 0.5rem;
+  --s2: 1rem;
+  --s3: 1.5rem;
+  --s4: 2.5rem;
+  --s5: 4rem;
+  --s6: 6rem;
+  --s7: 9rem;
+
+  --measure: 44rem;
+  --measure-wide: 56rem;
+
+  /* Motion (§9). Durations are UI constants; anything derived from a session
+   * row is data and lives in the session JSON, never here. */
+  --t-hover: 120ms;
+  --t-spine: 150ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #141311;
+    --panel: #1b1a17;
+    --ink: #e9e6dd;
+    --muted: #8f8b80;
+    --rule: #2b2925;
+    --link: #8fb4ce;
+    --accent: #e06845;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #141311;
+  --panel: #1b1a17;
+  --ink: #e9e6dd;
+  --muted: #8f8b80;
+  --rule: #2b2925;
+  --link: #8fb4ce;
+  --accent: #e06845;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-hover: 0ms;
+    --t-spine: 0ms;
+  }
+}

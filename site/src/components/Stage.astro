@@ -1,0 +1,78 @@
+---
+/**
+ * One pipeline section — SITE_PRD §4.2's fixed anatomy.
+ *
+ * Every pipeline section carries the same six slots, learned once by the
+ * reader, and two of them are structural rather than editorial:
+ *
+ * **The privacy rail** (§4.1). "Nothing leaves the machine" is a property, not
+ * a stage, so dataflow order had nowhere to put it and an earlier revision
+ * appended it as a section near the end, off the spine. As a per-stage marker
+ * it rides the pipeline instead, and the one stage where the answer differs is
+ * the stage that causes it — stated in causal order, at the moment it becomes
+ * true, rather than one section later.
+ *
+ * **The cost block is mandatory, and weighted.** A section with no material
+ * cost says so explicitly rather than filling the slot with a methodology
+ * caveat dressed as a cost; a template that is always full trains the reader
+ * that it is sometimes empty. The 1/2/3px left border keeps a 2 ms disk write
+ * from looking typographically identical to a clipboard-manager leak. Never
+ * accent — a cost is content, not an alert.
+ */
+interface Props {
+  n: number
+  name: string
+  id: string
+  leaves?: string
+  cost: string
+  weight?: 1 | 2 | 3
+  ms?: number | null
+}
+const { n, name, id, leaves = '0', cost, weight = 1, ms = null } = Astro.props
+---
+
+<section id={id} data-stage={id}>
+  <div class="measure">
+    <p class="t-label">Stage {n} — {name}</p>
+    <p class="rail t-data">
+      bytes off this machine at this stage: <b>{leaves}</b>
+      {ms !== null && <span class="rail-ms">· this session: {ms} ms</span>}
+    </p>
+    <slot />
+    <div class="cost" data-weight={weight}>
+      <p class="t-label">What it costs</p>
+      <p set:html={cost} />
+    </div>
+  </div>
+</section>
+
+<style>
+  .rail {
+    color: var(--muted);
+    font-size: 0.8125rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.5rem;
+    margin: 0.25rem 0 var(--s3);
+  }
+  .rail b {
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .rail-ms {
+    margin-left: 0.5rem;
+  }
+  .cost {
+    margin-top: var(--s3);
+    padding-left: var(--s2);
+    border-left: 1px solid var(--rule);
+  }
+  .cost[data-weight='2'] {
+    border-left-width: 2px;
+  }
+  .cost[data-weight='3'] {
+    border-left-width: 3px;
+  }
+  .cost p:last-child {
+    margin: 0.25rem 0 0;
+  }
+</style>

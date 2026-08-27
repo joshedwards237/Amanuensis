@@ -119,6 +119,11 @@ ignore = [
 "tests/**" = ["ANN201"]
 
 [tool.mypy]
+# `site/` is a static Astro site, not a Python package (SITE_PRD §11). It is not
+# importable, is not on sys.path, and adds no runtime or test dependency to
+# amanuensis. Its own toolchain checks it. The dependency direction is one-way:
+# the site depends on the product, the product never on the site.
+exclude = ["^site/"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
