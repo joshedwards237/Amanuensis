@@ -1,0 +1,7 @@
+{
+  "_why": "SITE_PRD §7.2 rule 1. The export refuses to run without this file and never queries for a session. history.db is the author's real dictation history; a query returns whatever was last said, and history.py already ships a latest() helper that a hurried implementer would reach for. Publication is a decision, so it is a committed line in a reviewed file rather than the result of an ORDER BY.",
+  "_adding_an_entry": "One id per session that may be published. Each addition is a deliberate act visible in a diff. The id must exist in the database the export is run against, or the export fails.",
+  "sessions": [
+    { "id": "hero-10s", "role": "hero", "note": "Widget centrepiece. Must fall inside the <=10s headline band." }
+  ]
+}

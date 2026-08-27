@@ -1,0 +1,95 @@
+{
+  "_generated_by": "scripts/export_site_session.py — do not hand-edit; CI diffs this",
+  "bands": {
+    "band_16_60s": {
+      "label": "16–60 s",
+      "max_s": 60.0,
+      "min_s": 16.0,
+      "n": 4,
+      "publishable": false
+    },
+    "band_7_16s": {
+      "label": "7–16 s",
+      "max_s": 16.0,
+      "min_s": 7.0,
+      "n": 19,
+      "p50_ms": 198.1,
+      "p95_ms": 284.5,
+      "publishable": true
+    },
+    "gte_60s": {
+      "label": "≥ 60 s",
+      "max_s": null,
+      "min_s": 60.0,
+      "n": 12,
+      "p50_ms": 1613.0,
+      "p95_ms": 2001.1,
+      "publishable": true
+    },
+    "lte_10s": {
+      "label": "≤ 10 s",
+      "max_s": 10.0,
+      "min_s": 0.0,
+      "n": 19,
+      "p50_ms": 145.6,
+      "p95_ms": 198.1,
+      "publishable": true
+    }
+  },
+  "exclusion_log": [
+    {
+      "dropped": [
+        "dup-write-b"
+      ],
+      "group": "2026-08-01T15:00:00",
+      "reading": "duplicate_write",
+      "rows": [
+        "dup-write-a",
+        "dup-write-b"
+      ]
+    },
+    {
+      "dropped": [
+        "parallel-a",
+        "parallel-b"
+      ],
+      "group": "2026-08-01T15:01:30",
+      "reading": "parallel_config",
+      "rows": [
+        "parallel-a",
+        "parallel-b"
+      ]
+    },
+    {
+      "dropped": [],
+      "group": "2026-08-01T15:03:00",
+      "reading": "guard_retry",
+      "rows": [
+        "retry-a",
+        "retry-b"
+      ]
+    },
+    {
+      "dropped": [],
+      "group": "2026-08-01T15:04:30",
+      "reading": "batch_stamp_reuse",
+      "rows": [
+        "batch-01",
+        "batch-02",
+        "batch-03"
+      ]
+    }
+  ],
+  "headline_band": "lte_10s",
+  "postprocess": {
+    "n": 46,
+    "p50_ms": 0.4,
+    "p95_ms": 0.43
+  },
+  "rows_excluded": 3,
+  "rows_total": 52,
+  "targets": {
+    "p50_ms": 400.0,
+    "p95_ms": 800.0
+  }
+}
