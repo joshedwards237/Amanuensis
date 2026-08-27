@@ -65,6 +65,14 @@ jobs:
           PY
 
       - name: Lint and type-check the site's Python
+        env:
+          # `amanuensis` ships no py.typed marker, so mypy treats the installed
+          # package as an untyped third-party import and refuses to follow it
+          # under --strict. Pointing MYPYPATH at the source makes it analyse the
+          # real definitions instead. The alternative -- adding py.typed -- is a
+          # change to src/ and is deferred to the Phase 3 gate along with the
+          # percentile extraction (SITE_PRD §7.2 rule 4).
+          MYPYPATH: src
         run: |
           ruff check scripts/export_site_session.py scripts/verify_site_claims.py scripts/verify_site_network.py tests/fixtures/site/make_fixture.py
           black --check --line-length 88 scripts/export_site_session.py scripts/verify_site_claims.py scripts/verify_site_network.py
