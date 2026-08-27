@@ -1,0 +1,330 @@
+/* The replay widget — SITE_PRD §6.2, §8.4.
+ *
+ * The one place on the page with a border radius (2px, §8.4). No shadow, here
+ * or anywhere.
+ *
+ * The alignment that matters: `.wave` and `.bars` share the same inline
+ * padding, and the release tick sits at the right edge of the waveform, so the
+ * moment the key comes up lines up with the left edge of the first bar. That
+ * vertical relationship *is* the claim "the clock starts when your thumb comes
+ * up" (§6.2), so it is expressed as shared padding rather than as two
+ * independently tuned magic numbers that would drift apart at the next
+ * breakpoint.
+ */
+
+.replay {
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--bg);
+}
+
+.replay-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.replay-head .meta {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.replay-head .glyph {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.replay-head .glyph.is-live {
+  color: var(--accent);
+}
+
+.replay-body {
+  padding: var(--s3);
+}
+
+.wave svg {
+  width: 100%;
+  height: 96px;
+  display: block;
+}
+
+.wave-placeholder {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+  margin: 0.25rem 0 0;
+}
+
+.wave-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.wave-axis .rec.is-live {
+  color: var(--accent);
+}
+
+.cursor-line {
+  margin-top: var(--s3);
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  padding: var(--s2);
+  min-height: 4.5rem;
+}
+
+.cursor-line .caret {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor-line .caret {
+    animation: none;
+  }
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.cursor-note {
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+.ws {
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.diff {
+  margin-top: var(--s2);
+}
+
+.diff-controls {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+}
+
+.diff-controls button {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  cursor: pointer;
+  transition: color var(--t-hover) var(--ease);
+}
+
+.diff-controls button.is-on {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.gap-label {
+  margin: var(--s4) 0 var(--s2);
+}
+
+.bars {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bars .row,
+.bars .g1 {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr 6rem;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 0.15rem 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.bars button.row {
+  cursor: pointer;
+}
+
+.bars .name {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--muted);
+  transition: color var(--t-hover) var(--ease);
+}
+
+.bars .row.is-active .name,
+.bars .row.is-active .value {
+  color: var(--ink);
+}
+
+.bars .track {
+  position: relative;
+  height: 0.75rem;
+  background: var(--bar-track);
+}
+
+.bars .fill {
+  display: block;
+  height: 100%;
+  background: var(--bar);
+}
+
+/* "Too small to draw" must be visibly distinct from "zero" — postprocess was
+ * genuinely zero for two phases and is genuinely tiny now, and those are
+ * different facts. */
+.bars .dotted {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 100%;
+  border-top: 1px dotted var(--rule);
+}
+
+.bars .value {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  text-align: right;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--t-hover) var(--ease);
+}
+
+.bars .value.is-shown {
+  opacity: 1;
+}
+
+.bars .floor {
+  color: var(--muted);
+}
+
+.bars .g1 .bracket {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+  border-top: 1px solid var(--accent);
+  padding-top: 0.25rem;
+}
+
+.bars .row.is-outside .name,
+.bars .row.is-outside .value {
+  opacity: 0.7;
+}
+
+.bars .hatch {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--muted),
+    var(--muted) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+  opacity: 0.65;
+}
+
+.outside-note {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+.replay-foot {
+  padding: var(--s2) var(--s3) var(--s3);
+  border-top: 1px solid var(--rule);
+}
+
+.controls {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.controls button {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  padding: 0.4rem 0.9rem;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition: border-color var(--t-hover) var(--ease);
+}
+
+.controls button:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.controls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.receipt summary,
+.diff summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--link);
+  margin: var(--s2) 0 0.5rem;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: var(--s2);
+  border-bottom: 1px solid var(--rule);
+  padding: 0.15rem 0;
+}
+
+.kv .k,
+.diff .k {
+  color: var(--muted);
+}
+
+.diff .k {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.diff .v {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  .bars .row,
+  .bars .g1 {
+    grid-template-columns: 5.5rem 1fr 4.5rem;
+    gap: 0.5rem;
+  }
+  .kv {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .replay-body {
+    padding: var(--s2);
+  }
+}

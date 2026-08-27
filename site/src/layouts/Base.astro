@@ -1,0 +1,70 @@
+---
+/**
+ * The page shell. SITE_PRD §5.3, §2.6.
+ *
+ * The <title> and OG description carry the etymology, which is where §5.3 puts
+ * it: it costs no visual register there and it is the surface a link-sharer sees
+ * before the page renders. It is not the hero — a Latin headword above the fold
+ * recruits an editorial register the visual direction rejected, and the page's
+ * credibility comes from measurement rather than from erudition.
+ *
+ * Neither carries a latency figure. §2.6 rule 1 forbids one appearing without
+ * its p50, p95 and band, and a social card is not a place where three numbers
+ * and a qualifier read as anything but noise. Carrying none is the only
+ * correct option, not a shortcut past the rule.
+ */
+interface Props {
+  title?: string
+  description?: string
+}
+
+const {
+  title = 'Amanuensis — one employed to take down the words of another',
+  description = 'Open-source dictation for macOS that runs entirely on your machine. Hold a key, speak, release. No account, no network at runtime, no audio leaving the machine.',
+} = Astro.props
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+    {/* No preconnect, no dns-prefetch, no external stylesheet. See
+        site/public/fonts/README.md — the absence is the point. */}
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to content</a>
+    <main id="main">
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style is:global>
+  @import '../styles/tokens.css';
+  @import '../styles/base.css';
+
+  .skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    background: var(--panel);
+    color: var(--ink);
+    padding: var(--s1) var(--s2);
+    border: 1px solid var(--rule);
+    z-index: 10;
+  }
+  .skip:focus {
+    left: var(--s2);
+    top: var(--s2);
+  }
+</style>

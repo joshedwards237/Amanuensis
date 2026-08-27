@@ -330,6 +330,62 @@ def build_session(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+PEAK_BUCKETS: Final = 160
+
+
+def build_peaks(audio: Path | None, duration_s: float) -> dict[str, Any]:
+    """The waveform envelope, from the real audio when it exists.
+
+    When it does not, this emits a flat placeholder **and says so in the file**,
+    which the widget renders behind a visible banner. That is deliberate: the
+    page forbids fabricated data, and the failure mode to avoid is not "the
+    demo is missing" but "the demo looks real and is not". A silent synthetic
+    envelope would be a drawing of a voice that never spoke, on the one page
+    whose whole argument is that nothing shown is simulated.
+
+    `--require-audio` turns the placeholder into a refusal, and the production
+    build passes it. Local development may proceed without the corpus; a
+    deploy may not.
+    """
+    if audio is None or not audio.exists():
+        return {
+            "placeholder": True,
+            "_why": (
+                "No audio for this session. These peaks are a flat placeholder, "
+                "not a recording. The widget labels itself accordingly and the "
+                "production build refuses to ship this file — see "
+                "--require-audio."
+            ),
+            "peaks": [0.06] * PEAK_BUCKETS,
+            "release_at_s": round(duration_s, 3),
+            "duration_s": round(duration_s, 3),
+        }
+
+    import audioop
+    import wave
+
+    with wave.open(str(audio), "rb") as handle:
+        frames = handle.getnframes()
+        width = handle.getsampwidth()
+        rate = handle.getframerate()
+        chunk = max(frames // PEAK_BUCKETS, 1)
+        peaks: list[float] = []
+        for _ in range(PEAK_BUCKETS):
+            raw = handle.readframes(chunk)
+            if not raw:
+                break
+            peaks.append(audioop.rms(raw, width))
+    ceiling = max(peaks) if peaks else 0
+    normalised = [round(p / ceiling, 4) if ceiling else 0.0 for p in peaks]
+    seconds = frames / rate if rate else duration_s
+    return {
+        "placeholder": False,
+        "peaks": normalised,
+        "release_at_s": round(seconds, 3),
+        "duration_s": round(seconds, 3),
+    }
+
+
 def _write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -347,6 +403,20 @@ def main(argv: list[str] | None = None) -> int:
         help="committed JSON naming the sessions that may be published (§7.2 rule 1)",
     )
     parser.add_argument("--out", type=Path, required=True, help="site/src/data")
+    parser.add_argument(
+        "--audio-dir",
+        type=Path,
+        default=None,
+        help="directory holding <id>.wav for allowlisted sessions",
+    )
+    parser.add_argument(
+        "--require-audio",
+        action="store_true",
+        help=(
+            "refuse to emit a placeholder waveform. The production build passes "
+            "this; local development without the corpus does not."
+        ),
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -362,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         if not wanted:
             raise ExportError(f"{args.allowlist} names no sessions.")
 
+        placeholders: list[str] = []
         rows = _rows(args.db)
         eligible, verdicts = partition(rows)
         claims = build_claims(eligible, len(rows), verdicts)
@@ -375,10 +446,23 @@ def main(argv: list[str] | None = None) -> int:
                     "Refusing rather than skipping: a silently absent hero "
                     "session renders an empty widget that still looks correct."
                 )
+            row = by_id[session_id]
             _write(
                 args.out / "sessions" / f"{session_id}.json",
-                build_session(by_id[session_id]),
+                build_session(row),
             )
+            audio = args.audio_dir / f"{session_id}.wav" if args.audio_dir else None
+            peaks = build_peaks(audio, float(row["duration_seconds"]))
+            if peaks["placeholder"] and args.require_audio:
+                raise ExportError(
+                    f"no audio for {session_id!r} and --require-audio was given. "
+                    "A placeholder waveform is a drawing of a voice that never "
+                    "spoke; it is fine locally and must never ship. Record the "
+                    "corpus (SITE_PRD §10.2) or drop --require-audio."
+                )
+            _write(args.out / "sessions" / f"{session_id}.peaks.json", peaks)
+            if peaks["placeholder"] and not args.quiet:
+                placeholders.append(session_id)
     except ExportError as exc:
         print(f"export refused: {exc}", file=sys.stderr)
         return 1
@@ -396,6 +480,12 @@ def main(argv: list[str] | None = None) -> int:
             f"p50={head['p50_ms']} p95={head['p95_ms']}"
         )
         print(f"sessions: {', '.join(wanted)}")
+        for session_id in placeholders:
+            print(
+                f"  WARNING: {session_id} has no audio — placeholder waveform "
+                "written. It is labelled in the file and on the page, and "
+                "--require-audio refuses it."
+            )
     return 0
 
 

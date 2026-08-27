@@ -1,0 +1,120 @@
+# The landing page — verify, build, deploy (SITE_PRD §11, §12).
+#
+# The verify job runs before the build and can fail it. That ordering is the
+# point: §13.3 names the export and its checks as the whole defence against the
+# page drifting from the product, and a check that runs after a deploy is a
+# report, not a gate.
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', 'scripts/export_site_session.py', 'scripts/verify_site_*.py', 'tests/fixtures/site/**', '.github/workflows/site.yml']
+  pull_request:
+    paths: ['site/**', 'scripts/export_site_session.py', 'scripts/verify_site_*.py', 'tests/fixtures/site/**', '.github/workflows/site.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: claims and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the product
+        # The export imports `percentile` from amanuensis.tier rather than
+        # reimplementing it, which is correct and drags an ASR runtime into this
+        # job. SITE_PRD §7.2 rule 4 records the fix — extract percentile to a
+        # dependency-free module — and defers it to the Phase 3 gate because it
+        # is a change to src/.
+        run: pip install -e ".[dev]"
+
+      - name: The fixture regenerates
+        run: python tests/fixtures/site/make_fixture.py
+
+      - name: Claims are the database's claims, with both controls
+        # Fails if the clean fixture stops reproducing the golden (the export
+        # changed or the golden is stale), AND fails if a perturbed row does
+        # NOT move the output — which would mean this check reads nothing.
+        run: python scripts/verify_site_claims.py
+
+      - name: Headline band is the one the specification binds
+        # §2.2 rule 5. Asserted from claims.json rather than from prose: a rule
+        # about not choosing a band by outcome is worth nothing if the choice
+        # can be re-made by hand at render time.
+        run: |
+          python - <<'PY'
+          import json, sys
+          claims = json.load(open("tests/fixtures/site/golden/claims.json"))
+          if claims["headline_band"] != "lte_10s":
+              sys.exit(f"headline band is {claims['headline_band']!r}, expected 'lte_10s'")
+          band = claims["bands"]["lte_10s"]
+          if not band["publishable"]:
+              sys.exit("the headline band is not publishable")
+          print(f"headline band lte_10s: n={band['n']} p50={band['p50_ms']} p95={band['p95_ms']}")
+          PY
+
+      - name: Lint and type-check the site's Python
+        run: |
+          ruff check scripts/export_site_session.py scripts/verify_site_claims.py scripts/verify_site_network.py tests/fixtures/site/make_fixture.py
+          black --check --line-length 88 scripts/export_site_session.py scripts/verify_site_claims.py scripts/verify_site_network.py
+          mypy --strict scripts/export_site_session.py scripts/verify_site_claims.py
+
+  build:
+    name: build and check origins
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: npm ci
+        working-directory: site
+
+      - run: npm run build
+        working-directory: site
+
+      - name: No third-party origins, with both controls
+        # No allowlist, deliberately. An earlier revision exempted a font CDN
+        # inside this very criterion, which is an exemption written into the
+        # verifier rather than into the design.
+        run: python scripts/verify_site_network.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    # Only from main, and only after both gates. Pages must be enabled on the
+    # repository first (Settings → Pages → Source: GitHub Actions); until it is,
+    # this job fails and the other two still give you the signal that matters.
+    name: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

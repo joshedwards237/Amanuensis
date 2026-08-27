@@ -1,0 +1,87 @@
+{
+  "duration_s": 9.8,
+  "engine": "faster_whisper:tiny.en",
+  "fired_entries": [
+    "collapse_whitespace",
+    "capitalise_sentences"
+  ],
+  "g1_ms": 145.6,
+  "guard": {
+    "coverage": 0.96,
+    "outcome": "passed",
+    "retained_seconds": 9.5
+  },
+  "id": "hero-demo",
+  "raw_transcript": "  the small conference room needs a  projector bulb",
+  "recorded_on": "2026-08-01",
+  "restore_ms": 6.0,
+  "row": {
+    "capture_ms": 0.0,
+    "duration_seconds": 9.8,
+    "engine": "faster_whisper:tiny.en",
+    "error": null,
+    "fired_entries": "collapse_whitespace, capitalise_sentences",
+    "guard_coverage": 0.96,
+    "guard_ms": 0.0,
+    "guard_outcome": "passed",
+    "guard_retained_seconds": 9.5,
+    "id": "hero-demo",
+    "inject_ms": 4.0,
+    "injected": 1,
+    "persist_ms": 1.1,
+    "postprocess_ms": 0.43,
+    "raw_transcript": "  the small conference room needs a  projector bulb",
+    "restore_ms": 6.0,
+    "started_at": "2026-08-01T14:00:00+00:00",
+    "transcribe_ms": 134.0,
+    "transcript": "The small conference room needs a projector bulb.",
+    "vad_ms": 6.1,
+    "vocab_ms": 0.2
+  },
+  "stages": [
+    {
+      "in_g1": true,
+      "key": "vad",
+      "label": "trim",
+      "ms": 6.1
+    },
+    {
+      "in_g1": true,
+      "key": "transcribe",
+      "label": "transcribe",
+      "ms": 134.0
+    },
+    {
+      "in_g1": true,
+      "key": "guard",
+      "label": "guard",
+      "ms": 0.0
+    },
+    {
+      "in_g1": true,
+      "key": "postprocess",
+      "label": "postprocess",
+      "ms": 0.43
+    },
+    {
+      "in_g1": true,
+      "key": "persist",
+      "label": "persist",
+      "ms": 1.1
+    },
+    {
+      "in_g1": true,
+      "key": "inject",
+      "label": "inject",
+      "ms": 4.0
+    },
+    {
+      "in_g1": false,
+      "key": "restore",
+      "label": "restore",
+      "ms": 6.0
+    }
+  ],
+  "tier": "A",
+  "transcript": "The small conference room needs a projector bulb."
+}
