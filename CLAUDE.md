@@ -77,6 +77,53 @@ configuration §5.6 recommends.
 
 ---
 
+## The landing page (`site/`), added 2026-08-27
+
+A static Astro site at `site/`, deployed to GitHub Pages, specified in
+`docs/site/SITE_PRD.md`. Parallel track: it does not touch `src/`, adds no
+runtime dependency, and is excluded from `mypy` and `ruff`. The dependency
+direction is one-way — the site depends on the product, never the reverse.
+
+Four things here will bite again.
+
+- **No page figure is ever typed.** `scripts/export_site_session.py` computes
+  every public number from `history.db`; components read `claims.json`.
+  `scripts/verify_site_claims.py` runs the export against a committed fixture and
+  diffs it against goldens, with two controls — a perturbed row **must** produce
+  a diff, and the clean fixture **must not**. If you hand-edit `claims.json` the
+  positive control catches it. If you make the export blind to a column, only the
+  *negative* control catches it: verified by sabotage, and the positive control
+  passed the whole time.
+- **The headline band is chosen by the specification, not by the data.** PRD §2
+  binds G1 at ten seconds, so the published band is `≤ 10 s` and
+  `HEADLINE_BAND` is a constant. An earlier revision of the site spec picked
+  `7–16 s` from five candidates — half the rows and a p95 47% better — which is
+  outcome selection inside the section written to prevent it. CI asserts the band
+  from `claims.json` rather than trusting prose.
+- **Zero third-party origins is a build gate, not a preference.**
+  `scripts/verify_site_network.py` fails on any origin that is not our own, with
+  no allowlist, because an earlier revision exempted a font CDN *inside the
+  criterion meant to catch it*. Fonts are self-hosted in `site/public/fonts/`.
+  The check is static analysis, so the interaction surface is **not** covered —
+  it says so in its own output rather than reporting a clean pass over less than
+  its criterion.
+- **A branch deploy overwrites what `main` published.** There is one Pages site
+  and `workflow_dispatch` can deploy any allowlisted branch to it. On 2026-08-27
+  a branch build replaced main's nine minutes after it landed. `scripts/smoke-site.sh`
+  prints the deployed ref for exactly this reason. Remove the manual path once
+  the page has an audience.
+
+`scripts/smoke-site.sh` verifies the deploy: routes, real content, that the
+self-hosted fonts resolve (a 404 there falls back silently rather than erroring),
+no third-party origins, and the deployed ref. `SINCE=<date>` fails a stale build.
+
+**The demo corpus does not exist.** Every number on the published site currently
+comes from a synthetic fixture and the waveform is a flat placeholder that says
+so. `--require-audio` makes the production export refuse it. Recording it is
+SITE_PRD §10.2 and it is the one task nobody can delegate.
+
+---
+
 ## Hard constraints
 
 These are binding. Each one exists because the PRD argued it, and each has a
