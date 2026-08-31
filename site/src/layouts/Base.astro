@@ -1,29 +1,26 @@
 ---
 /**
- * The page shell. SITE_PRD §5.3, §2.6.
+ * The shell every page shares: nav, skip link, footer.
  *
- * The <title> and OG description carry the etymology, which is where §5.3 puts
- * it: it costs no visual register there and it is the surface a link-sharer sees
- * before the page renders. It is not the hero — a Latin headword above the fold
- * recruits an editorial register the visual direction rejected, and the page's
- * credibility comes from measurement rather than from erudition.
- *
- * Neither carries a latency figure. §2.6 rule 1 forbids one appearing without
- * its p50, p95 and band, and a social card is not a place where three numbers
- * and a qualifier read as anything but noise. Carrying none is the only
- * correct option, not a shortcut past the rule.
+ * The nav is the only navigation on the site and it names four things. That is
+ * deliberate — a product with one loop does not need a mega-menu, and every
+ * additional destination is a page somebody has to keep true.
  */
 interface Props {
   title?: string
   description?: string
+  /** Which nav item to mark as current. */
+  current?: 'home' | 'how' | 'docs'
 }
 
 const {
-  title = 'Amanuensis — one employed to take down the words of another',
-  description = 'Open-source dictation for macOS that runs entirely on your machine. Hold a key, speak, release. No account, no network at runtime, no audio leaving the machine.',
+  title = 'Amanuensis — local dictation for macOS',
+  description = 'Hold a key, speak, release. Your words appear at the cursor. Runs entirely on your machine — no account, no network at runtime, no audio leaving the device.',
+  current,
 } = Astro.props
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const gh = 'https://github.com/joshedwards237/Amanuensis'
 ---
 
 <!doctype html>
@@ -38,33 +35,64 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary" />
     <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
-    {/* No preconnect, no dns-prefetch, no external stylesheet. See
-        site/public/fonts/README.md — the absence is the point. */}
+    {/* No preconnect, no external stylesheet, no font host. The absence is the
+        product claim; scripts/verify_site_network.py fails the build on any
+        origin that is not our own. */}
   </head>
   <body>
     <a href="#main" class="skip">Skip to content</a>
+
+    <nav class="nav" aria-label="Primary">
+      <div class="nav-inner">
+        <a class="nav-brand" href={`${base}/`}>Amanuensis</a>
+        <div class="nav-links">
+          <a href={`${base}/how-it-works`} aria-current={current === 'how' ? 'page' : undefined}>
+            How it works
+          </a>
+          <a href={`${base}/docs`} aria-current={current === 'docs' ? 'page' : undefined}>
+            Docs
+          </a>
+          <a href={gh}>GitHub</a>
+          <a class="btn btn-primary nav-cta" href={`${base}/docs`}>Install</a>
+        </div>
+      </div>
+    </nav>
+
     <main id="main">
       <slot />
     </main>
+
+    <footer class="site">
+      <div class="page">
+        <p>
+          <strong style="font-family: var(--font-display); font-size: 1.2rem; font-weight: 400;"
+            >Amanuensis</strong
+          ><br />
+          <em>amanuensis</em>, from Latin <em>servus a manu</em> — one employed to take down the
+          words of another.
+        </p>
+        <p>
+          <a href={`${base}/how-it-works`}>How it works</a> ·
+          <a href={`${base}/docs`}>Docs</a> ·
+          <a href={gh}>Source</a> ·
+          <a href={`${gh}/blob/main/AMANUENSIS_PRD.md`}>Specification</a> ·
+          <a href={`${gh}/tree/main/docs/gates`}>Gate records</a>
+        </p>
+        <p>
+          Apache-2.0. macOS only. Runs from a source checkout — there is no packaged app yet.
+        </p>
+        <p>
+          The mature alternatives are <a href="https://github.com/ideasman42/nerd-dictation"
+            >nerd-dictation</a
+          > on Linux and <a href="https://talonvoice.com">Talon</a>. The specification records why
+          this exists alongside them.
+        </p>
+      </div>
+    </footer>
   </body>
 </html>
 
 <style is:global>
   @import '../styles/tokens.css';
   @import '../styles/base.css';
-
-  .skip {
-    position: absolute;
-    left: -9999px;
-    top: 0;
-    background: var(--panel);
-    color: var(--ink);
-    padding: var(--s1) var(--s2);
-    border: 1px solid var(--rule);
-    z-index: 10;
-  }
-  .skip:focus {
-    left: var(--s2);
-    top: var(--s2);
-  }
 </style>

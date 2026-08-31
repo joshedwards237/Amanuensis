@@ -2,62 +2,62 @@
 
 **No external font host. This is a hard constraint, not a preference.**
 
-SITE_PRD §5.2 and §12.2. The page's most-repeated claim is that nothing leaves
-your machine. A stylesheet fetched from `fonts.googleapis.com` sends every
-visitor's IP and User-Agent to a third party on first paint — the same shape the
-spec refuses for a GitHub star count, and refuted by exactly the devtools panel
-§5.2 invokes. An earlier revision carved the font host out of the acceptance
-criterion that would have caught it, which is an exemption written into the
-verifier rather than into the design.
+The page's central claim is that nothing leaves your machine. A stylesheet
+fetched from `fonts.googleapis.com` sends every visitor's IP and User-Agent to a
+third party on first paint — the same shape the site refuses for a GitHub star
+count, and refuted by exactly the devtools panel a sceptical reader would open.
+`scripts/verify_site_network.py` fails the build on any origin that is not our
+own, with **no allowlist**.
 
-`scripts/verify_site_network.py` fails the build if any origin other than the
-page's own appears. There is no allowlist for fonts.
+These four files are committed. There is nothing to fetch and nothing to
+install.
 
-## Files this directory must contain
+| File | Family | Role | Size |
+| --- | --- | --- | ---: |
+| `InstrumentSerif-400.woff2` | Instrument Serif | display | 15 KB |
+| `InstrumentSerif-400i.woff2` | Instrument Serif italic | display emphasis | 16 KB |
+| `Geist-var.woff2` | Geist (variable, 100–900) | body, UI | 29 KB |
+| `GeistMono-var.woff2` | Geist Mono (variable, 100–900) | data, code, glyphs | 23 KB |
 
-`site/src/styles/base.css` references these four by exact name:
+**92 KB total**, latin subset.
 
-| File | Family | Weight |
-| --- | --- | ---: |
-| `IBMPlexSans-Regular-latin.woff2` | IBM Plex Sans | 400 |
-| `IBMPlexSans-SemiBold-latin.woff2` | IBM Plex Sans | 600 |
-| `IBMPlexMono-Regular-latin.woff2` | IBM Plex Mono | 400 |
-| `IBMPlexMono-Medium-latin.woff2` | IBM Plex Mono | 500 |
+## Why these two
 
-Four files, two families, four weights. Nothing else loads. Adding a weight
-means adding an `@font-face` block and a file; it is not free, and §5.4's prose
-budget is a reminder that the page does not need more voices than it has.
+**Instrument Serif** for display. High-contrast, editorial, and it ships in a
+single weight — which is the point. You cannot bold your way out of a weak
+headline, so the headline has to work at 400 or be rewritten.
 
-## Where to get them
+**Geist and Geist Mono** for everything else. Drawn for developer products, and
+crucially they are one superfamily: body text and machine values agree with each
+other instead of arguing. That matters here because the site's typographic rule
+is semantic — *if it is set in mono, it is a value the product produced or would
+parse* — and the rule reads as a change of register rather than a change of
+voice when the two faces share a skeleton.
 
-IBM Plex is **SIL Open Font License 1.1** — redistribution is permitted, which
-is what makes self-hosting available rather than merely preferable.
+Both are **SIL Open Font License 1.1**, which is what makes self-hosting
+available rather than merely preferable.
 
-Upstream: <https://github.com/IBM/plex> (`IBM-Plex-Sans/fonts/complete/woff2/`
-and `IBM-Plex-Mono/fonts/complete/woff2/`).
+## Variable, deduplicated
 
-Subset to latin before committing — the complete faces carry Cyrillic, Greek and
-Vietnamese this page never renders, and a page selling latency should not ship
-glyphs it cannot display. `pyftsubset` from `fonttools`:
+Google serves Geist and Geist Mono as single variable files covering the whole
+weight range. The first download pulled `Geist-400/500/600` and all three were
+byte-identical (`sha256 9b6f5ff4…`), so they are stored once and declared with
+`font-weight: 100 900`. That is 87 KB saved by checking rather than assuming.
+
+## Regenerating
 
 ```
-pyftsubset IBMPlexSans-Regular.ttf \
-  --unicodes="U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD,U+25CB,U+25CF,U+25D0,U+25D1,U+26A0,U+2423" \
-  --flavor=woff2 --layout-features="*" \
-  --output-file=IBMPlexSans-Regular-latin.woff2
+curl -H "User-Agent: Mozilla/5.0 …" \
+  "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap"
 ```
 
-The tail of that unicode range is deliberate and easy to lose: `U+25CB ○`,
-`U+25CF ●`, `U+25D0 ◐`, `U+25D1 ◍`, `U+26A0 ⚠` are the daemon's own menu-bar
-glyphs, which the page renders inline, and `U+2423 ␣` is the open-box the replay
-widget uses to make leading whitespace visible in a raw transcript (§6.5). Subset
-them out and the page silently falls back for exactly the characters that carry
-the product's state.
+Take the `url(...)` from the block whose `unicode-range` contains `U+0000-00FF`
+— that is the latin subset — and download it with `curl`. Note that Python's
+`urllib` has no CA bundle on macOS by default and will fail with
+`CERTIFICATE_VERIFY_FAILED`; use `curl`.
 
-## Until the files are here
-
-`font-display: swap` means the page renders in the declared fallbacks —
-`-apple-system` and `ui-monospace` / `SF Mono`. On macOS, which is the only
-platform this product runs on, that is San Francisco and SF Mono, and it sits
-comfortably in the Zed / Ghostty / Obsidian reference lane. The page is not
-broken without these files; it is only less specific.
+Keep `U+25CB ○`, `U+25CF ●`, `U+25D0 ◐`, `U+25D1 ◍`, `U+26A0 ⚠` and
+`U+2423 ␣` if you ever re-subset by hand. Those are the daemon's own menu-bar
+glyphs and the open-box the replay widget uses to make leading whitespace
+visible. Subset them out and the page silently falls back for exactly the
+characters that carry the product's state.

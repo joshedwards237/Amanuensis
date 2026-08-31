@@ -1,6 +1,6 @@
 # Amanuensis — Landing Page PRD
 
-**Status:** draft, revision 3 · **Created** 2026-08-26 · **Track:** parallel, outside the PRD §9 phase sequence
+**Status:** draft, revision 4 · **Created** 2026-08-26 · **Track:** parallel, outside the PRD §9 phase sequence
 
 This document specifies a hosted landing page for Amanuensis. It is subordinate
 to `AMANUENSIS_PRD.md` on every question of product fact: where this document
@@ -11,7 +11,22 @@ It governs one deliverable — a static site at `site/` — and nothing else. It
 does not amend the product, does not add a runtime dependency, and does not
 touch `src/`.
 
-> **Revision 3 folds an adversarial review: twelve objections, two critical.**
+> **Revision 4 splits the site into three pages after the single-route version
+> was judged too wordy to work as a product page.** The one-route decision was
+> recorded in rev 2 as a prohibition with no reason attached, and the choice
+> cartographer flagged that it staked the audience bet whole — no shallow
+> surface for the skimmer, no deep one for the checker. That is what happened.
+> `/` is now a feature-forward landing page, `/how-it-works` is the dense
+> technical argument rev 3 specified almost unchanged, and `/docs` is the
+> install guide the primary CTA points at. A persistent nav carries all three.
+> Type changed with it: Instrument Serif for display and Geist / Geist Mono for
+> body and data, replacing IBM Plex, all four files self-hosted. The palette
+> gains two ranked hues — `--iris` for the product's own colour and `--lime`
+> used once, for the moment text lands — above the same near-monochrome ground.
+> §2's claims register, §7's pipeline and §12's criteria are **unchanged** and
+> still bind every page.
+>
+> **Revision 3 folded an adversarial review: twelve objections, two critical.**
 > The one that matters most is **O4** — revision 2's headline band was selected
 > after the data was seen, and it had a *better* p95 than the band G1 actually
 > binds. §2.2 now chooses the band by rule rather than by outcome, and the
@@ -376,6 +391,10 @@ The cost block is mandatory. Two refinements from [CC-1]:
 
 ### 4.3 Sections
 
+> **Rev 4:** the table below is `/how-it-works`. The hero row is replaced by a
+> page header; the marketing hero moved to `/` and is specified in §4.6.
+
+
 | # | Section | Job | Height |
 | --- | --- | --- | --- |
 | 1 | **Hero** | Complete the pitch and the CTA before any scrolling. | ~100vh incl. widget |
@@ -423,6 +442,23 @@ for the checker. Accepted anyway, because two surfaces means two things to keep
 true and this project's recorded failure is duplicated documents drifting. **One
 mitigation is adopted:** `claims.json` is served at a stable URL, so a sceptic
 gets a citable machine-readable artefact without a second authored page.
+
+### 4.6 Routes (rev 4)
+
+| Route | Job | Reader |
+| --- | --- | --- |
+| `/` | Sell the product in one screen. Feature cards, three honest numbers, two CTAs. Under 400 words. | Someone who has heard of local dictation and does not yet care enough to read. |
+| `/how-it-works` | The pipeline argument, unchanged from rev 3 — seven stages, each with what it costs, the replay widget, the measured bands, the gaps. | The reader who checks. |
+| `/docs` | Install, permissions, first dictation, configuration, troubleshooting. The primary CTA's destination. | Someone who has decided and wants it working. |
+
+The nav names exactly four things: How it works, Docs, GitHub, Install. A
+product with one loop does not need a mega-menu, and every extra destination is
+a page somebody has to keep true.
+
+**What did not move.** Every rule in §2 binds all three pages: no latency figure
+without its p50, p95 and band; no extrapolation; unmeasured stated at body size.
+The landing page shows three numbers and each one carries its band. §12.1's
+regeneration diff and §12.2's origin check run over the whole build.
 
 ---
 
