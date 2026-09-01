@@ -59,7 +59,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -114,70 +114,211 @@ class EditResult:
         return self.edits / self.reference_words if self.reference_words else 0.0
 
 
+#: Buckets, in report order. The split is by WHICH COMPONENT could have fixed
+#: the edit, not by what the edit looks like. §9's reject clause is about
+#: responsibility — "classes the rules chain should have caught" — and the
+#: earlier surface-form split could not express that: it counted an interior
+#: sentence break Whisper never emitted as "punctuation", identically to a
+#: terminal mark `ensure_terminal_punctuation` genuinely missed.
+EDIT_CLASSES: Final[tuple[str, ...]] = (
+    "chain_terminal",
+    "chain_capital",
+    "chain_spacing",
+    "vocabulary",
+    "decoder_segmentation",
+    "decoder_capital",
+    "decoder_words",
+)
+
+#: The three the phase ships the fix for, plus `vocabulary`, are what §9 weighs.
+CHAIN_CLASSES: Final[tuple[str, ...]] = (
+    "chain_terminal",
+    "chain_capital",
+    "chain_spacing",
+)
+
+_TERMINALS = ".!?"
+
+
+def _merge_floating(words: list[str]) -> tuple[list[str], int]:
+    """Attach a free-standing punctuation token to the word before it.
+
+    `normalise_punctuation_spacing` operates on the string, so its defect —
+    `wait , then` — is invisible to a whitespace tokeniser: the mark arrives as
+    its own token that bares to the empty string, and the aligner deletes it
+    rather than reporting the mark that moved. Merging first makes the two
+    streams comparable and makes the merge itself countable, which is the edit.
+    """
+    merged: list[str] = []
+    count = 0
+    for word in words:
+        if merged and word and not _bare(word):
+            merged[-1] += word
+            count += 1
+        else:
+            merged.append(word)
+    return merged, count
+
+
+def _adds_terminal(before: str, after: str) -> bool:
+    return bool((set(after) - set(before)) & set(_TERMINALS))
+
+
 def classify_edits(
-    injected: str, corrected: str, vocabulary_terms: set[str]
+    injected: str,
+    corrected: str,
+    vocabulary_terms: set[str],
+    *,
+    terminal_punctuation: bool = True,
 ) -> EditResult:
-    """Word-level edit count between what landed and what the user meant.
+    """Word-level edits between what landed and what the user meant, by cause.
 
     `difflib` rather than `jiwer`: the alignment is the same shape and it costs
-    no dependency, which CLAUDE.md asks for. The classification is what §9's
-    reject clause needs, and the classes are its vocabulary rather than mine:
+    no dependency, which CLAUDE.md asks for.
 
-    - **punctuation** / **capitalisation** — the classes the rules chain should
-      have caught. These are what reject the phase.
-    - **vocabulary** — a word the frozen dictionary *covers* and still got
-      wrong. §9's clause was amended (objection O4, choice-story #8) to count
-      only these among proper nouns: un-excusing the class wholesale would fail
-      the gate on the corpus's scope rather than the dictionary's misses.
-    - **other** — everything else, which is ASR mistranscription the chain
-      cannot reach. `04-rules-only.md` measured this at 87.2% of corpus errors.
+    **The classes are the rules chain's actual remit, not the shape of the
+    difference.** `rules.py` can do four things to punctuation and case: fix
+    spacing around a mark, capitalise after an existing terminal mark, append
+    the utterance's final mark, and expand spoken commands. It has **no** rule
+    that inserts an interior sentence break, none that inserts a comma, and
+    none that lowercases anything. So:
+
+    - **chain_terminal** — the utterance ended on a word character and
+      `ensure_terminal_punctuation` did not append. Only chargeable when the
+      key is on; with `terminal_punctuation = false` the product never
+      promised it, and charging it would fail the gate for a configured
+      choice.
+    - **chain_capital** — a word that opens a sentence *after a mark already
+      present* was left lowercase. That is exactly `capitalise_sentences`'
+      precondition, so it is exactly what it should have caught.
+    - **chain_spacing** — the span's words are identical bare and differ only
+      in how punctuation is attached, which is `normalise_punctuation_spacing`.
+    - **vocabulary** — a word the FROZEN dictionary covers and still got wrong.
+      §9's clause was amended (objection O4, choice-story #8) to count only
+      these among proper nouns: un-excusing the class wholesale would fail the
+      gate on the corpus's scope rather than the dictionary's misses.
+    - **decoder_segmentation** — an interior mark the decoder did not emit. No
+      rule in the chain inserts one; knowing where a sentence ends is the LLM
+      pass §9 lists as UNRESOLVED.
+    - **decoder_capital** — a case change with no chain rule behind it, which
+      in practice is the decoder capitalising the first word of its own
+      segment mid-sentence. The chain cannot lowercase.
+    - **decoder_words** — mistranscription. `04-rules-only.md` measured this at
+      87.2% of corpus errors, which no downstream pass can recover.
+
+    Measured 2026-09-01 against the ten-take corpus, the surface split called
+    107 of 172 edits "punctuation/capitalisation" and fired the reject clause;
+    the responsibility split puts 8 of them inside the chain. Both numbers
+    describe the same corrections file.
     """
-    left, right = _words(injected), _words(corrected)
+    left, left_merges = _merge_floating(_words(injected))
+    right, right_merges = _merge_floating(_words(corrected))
     matcher = difflib.SequenceMatcher(
         a=[_bare(w) for w in left], b=[_bare(w) for w in right], autojunk=False
     )
 
-    classes = {"punctuation": 0, "capitalisation": 0, "vocabulary": 0, "other": 0}
-    edits = 0
+    classes = {name: 0 for name in EDIT_CLASSES}
+    # A mark that had to be re-attached is one spacing edit, charged before the
+    # alignment so the two streams below describe the same words.
+    spacing = max(left_merges - right_merges, 0)
+    classes["chain_spacing"] += spacing
+    edits = spacing
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
-            # Same words modulo punctuation and case — so any difference in the
-            # surface forms is exactly a punctuation or capitalisation edit.
+            # Same words modulo punctuation and case, so every difference here
+            # is a mark or a capital — the question is only whose it was.
             for offset in range(i2 - i1):
-                before, after = left[i1 + offset], right[j1 + offset]
+                index_l, index_r = i1 + offset, j1 + offset
+                before, after = left[index_l], right[index_r]
                 if before == after:
                     continue
                 edits += 1
+
                 if before.lower() == after.lower():
-                    classes["capitalisation"] += 1
+                    previous = right[index_r - 1] if index_r else ""
+                    opens_sentence = index_r == 0 or (
+                        bool(previous) and previous[-1] in _TERMINALS
+                    )
+                    if opens_sentence and after[:1].isupper():
+                        classes["chain_capital"] += 1
+                    else:
+                        classes["decoder_capital"] += 1
+                    continue
+
+                if (
+                    index_l == len(left) - 1
+                    and _adds_terminal(before, after)
+                    and terminal_punctuation
+                ):
+                    classes["chain_terminal"] += 1
                 else:
-                    classes["punctuation"] += 1
+                    classes["decoder_segmentation"] += 1
             continue
 
         span = max(i2 - i1, j2 - j1)
         edits += span
+
+        # A span whose bare text matches on both sides was NOT a spacing defect,
+        # tempting as it looks: measured on the 2026-09-01 corpus it caught
+        # `off boarded -> offboarded`, `code base. -> codebase.` and
+        # `a K a -> AKA` — word-joining by the decoder, which
+        # `normalise_punctuation_spacing` cannot do and never claimed. Charging
+        # them to the chain over-counted its misses by 9 of 17. Real spacing
+        # defects are free-standing marks and are handled by `_merge_floating`
+        # before the alignment; there is nothing left for a span rule to catch.
+
         for offset in range(j2 - j1):
             wanted = _bare(right[j1 + offset])
             if wanted in vocabulary_terms:
                 classes["vocabulary"] += 1
             else:
-                classes["other"] += 1
-        # A deletion has no right-hand word to classify; charge the remainder to
-        # `other` rather than dropping it, or the class counts stop summing to
-        # the edit count and the report quietly under-states.
-        classes["other"] += max(0, (i2 - i1) - (j2 - j1))
+                classes["decoder_words"] += 1
+        # A deletion has no right-hand word to classify; charge the remainder
+        # rather than dropping it, or the class counts stop summing to the edit
+        # count and the report quietly under-states.
+        classes["decoder_words"] += max(0, (i2 - i1) - (j2 - j1))
 
     return EditResult(reference_words=len(right), edits=edits, classes=classes)
 
 
 def _self_check() -> list[Failure]:
-    """The positive control, and it exits non-zero when it catches nothing.
+    """The controls, and it exits non-zero when any of them catches nothing.
 
     A check that has never failed has not been tested, and a control that
-    reproduces nothing measures the other control twice. Three cases, each
-    aimed at one class the reject clause distinguishes.
+    reproduces nothing measures the other control twice. Since 2026-09-01 the
+    classes are attributions rather than shapes, so one control per class is not
+    enough: an attribution can be wrong by charging the chain for the decoder's
+    work, which no positive control detects. Every chain class therefore carries
+    a **negative** control — the adjacent decoder-side edit that must NOT land
+    in it.
     """
     problems: list[Failure] = []
+
+    def check(
+        label: str,
+        injected: str,
+        corrected: str,
+        terms: set[str],
+        expected: str,
+        forbidden: tuple[str, ...] = (),
+    ) -> None:
+        result = classify_edits(injected, corrected, terms)
+        if result.edits == 0:
+            problems.append(Failure("control", f"{label}: produced no edit at all"))
+            return
+        if result.classes[expected] == 0:
+            problems.append(
+                Failure("control", f"{label}: nothing landed in {expected}")
+            )
+        for name in forbidden:
+            if result.classes[name]:
+                problems.append(
+                    Failure(
+                        "control",
+                        f"{label}: {result.classes[name]} edit(s) wrongly "
+                        f"charged to {name}",
+                    )
+                )
 
     identical = classify_edits("the same words", "the same words", set())
     if identical.edits != 0:
@@ -185,23 +326,88 @@ def _self_check() -> list[Failure]:
             Failure("control", f"identical text reported {identical.edits} edits")
         )
 
-    punctuation = classify_edits("hello there", "hello there.", set())
-    if punctuation.edits == 0:
-        problems.append(
-            Failure("control", "a missing full stop produced no edit — see O4")
-        )
-
-    vocab = classify_edits(
-        "open the breadshoe", "open the spreadsheet", {"spreadsheet"}
+    # POSITIVE — each chain class must be reachable.
+    check("terminal mark", "hello there", "hello there.", set(), "chain_terminal")
+    check(
+        "sentence capital", "one. two things", "one. Two things", set(), "chain_capital"
     )
-    if vocab.edits == 0 or vocab.classes["vocabulary"] == 0:
+    check(
+        "punctuation spacing", "wait , then go", "wait, then go", set(), "chain_spacing"
+    )
+    check(
+        "covered vocabulary",
+        "open the breadshoe",
+        "open the spreadsheet",
+        {"spreadsheet"},
+        "vocabulary",
+    )
+
+    # NEGATIVE — the decoder's own misses must not be charged to the chain.
+    # Without these the attribution can be uniformly wrong and every positive
+    # control still passes, which is the defect this split exists to fix.
+    check(
+        "interior break is not the chain's",
+        "i went home it was late",
+        "i went home. It was late",
+        set(),
+        "decoder_segmentation",
+        forbidden=("chain_terminal", "chain_spacing"),
+    )
+    check(
+        "interior comma is not the chain's",
+        "first this then that",
+        "first this, then that",
+        set(),
+        "decoder_segmentation",
+        forbidden=("chain_terminal", "chain_capital", "chain_spacing"),
+    )
+    check(
+        "mid-sentence capital is not the chain's",
+        "the Habitat is ready",
+        "the habitat is ready",
+        set(),
+        "decoder_capital",
+        forbidden=("chain_capital",),
+    )
+    check(
+        "mid-sentence proper noun is not the chain's",
+        "we use firebase today",
+        "we use Firebase today",
+        set(),
+        "decoder_capital",
+        forbidden=("chain_capital",),
+    )
+    check(
+        "word-joining is not the chain's",
+        "the code base is old",
+        "the codebase is old",
+        set(),
+        "decoder_words",
+        forbidden=("chain_spacing",),
+    )
+    check(
+        "mistranscription is not the chain's",
+        "run the demon now",
+        "run the daemon now",
+        set(),
+        "decoder_words",
+        forbidden=("chain_terminal", "chain_capital", "chain_spacing", "vocabulary"),
+    )
+
+    # And the key that gates the terminal rule must actually gate it: with
+    # `terminal_punctuation = false` the product never promised the mark.
+    off = classify_edits(
+        "hello there", "hello there.", set(), terminal_punctuation=False
+    )
+    if off.classes["chain_terminal"]:
         problems.append(
             Failure(
                 "control",
-                "a covered vocabulary miss was not counted as one — the reject "
-                "clause cannot fire",
+                "a missing terminal mark was charged to the chain with "
+                "terminal_punctuation = false",
             )
         )
+
     return problems
 
 
@@ -307,7 +513,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    fired_any = any((row.get("fired_entries") or "").strip() for row in rows)
+    # `fired_entries` carries the whole chain, not just the dictionary: the
+    # rules pass writes `collapse_whitespace` and `capitalise_sentences` into
+    # the same column. Testing the column for *any* content therefore answered
+    # "did post-processing do something" while claiming to answer "did the
+    # dictionary do something" — and `collapse_whitespace` fires on nearly
+    # every utterance, so the check was satisfied on a signal the dictionary
+    # never produced. `VocabularyPostProcessor` labels its own with a
+    # `replace:` prefix (vocabulary.py:176); discriminate on that.
+    #
+    # The column is a ", "-join, so a `[replace]` key containing a comma splits
+    # into fragments. Detection survives it: the fragment that opens the entry
+    # still carries the prefix.
+    fired_any = any(
+        entry.strip().startswith("replace:")
+        for row in rows
+        for entry in (row.get("fired_entries") or "").split(",")
+    )
     if rows and not fired_any:
         failures.append(
             Failure(
@@ -401,39 +623,74 @@ def main(argv: list[str] | None = None) -> int:
         for by_app in vocabulary.boost_by_app.values():
             terms |= {_bare(term) for term in by_app}
 
-        totals = EditResult(
-            0,
-            0,
-            {k: 0 for k in ("punctuation", "capitalisation", "vocabulary", "other")},
-        )
+        totals = EditResult(0, 0, {k: 0 for k in EDIT_CLASSES})
+        missing: list[str] = []
         for row in rows:
             entry = payload.get(row["id"])
             if entry is None:
+                # Silently skipping is how a stale corrections file scores
+                # 0 edits over 0 words and prints PASS. Found 2026-09-01 by
+                # running the August file against the September takes: every
+                # id missed, every class zero, verdict PASS.
+                missing.append(str(row["id"])[:12])
                 continue
-            result = classify_edits(entry["injected"], entry["corrected"], terms)
+            result = classify_edits(
+                entry["injected"],
+                entry["corrected"],
+                terms,
+                terminal_punctuation=config.postprocess.terminal_punctuation,
+            )
             totals.reference_words += result.reference_words
             totals.edits += result.edits
             for key, value in result.classes.items():
                 totals.classes[key] += value
         edit = totals
 
-        rules_classes = edit.classes["punctuation"] + edit.classes["capitalisation"]
-        # §9's amended reject clause. `vocabulary` counts only terms the FROZEN
+        if missing:
+            failures.append(
+                Failure(
+                    "corrections",
+                    f"{len(missing)} of {len(rows)} dictations have no entry in "
+                    f"{args.corrections.name} ({', '.join(missing[:3])}"
+                    f"{', ...' if len(missing) > 3 else ''}) — re-emit it with "
+                    "--emit-corrections against the current set",
+                )
+            )
+
+        chain_classes = sum(edit.classes[name] for name in CHAIN_CLASSES)
+        decoder_classes = edit.edits - chain_classes - edit.classes["vocabulary"]
+        # §9's amended reject clause, weighed by attribution rather than by the
+        # shape of the difference. `vocabulary` counts only terms the FROZEN
         # dictionary covers — un-excusing proper nouns wholesale would fail the
         # gate on the corpus's scope rather than the dictionary's misses, and
         # would hand Phase 5 a clause counting the 87.2% of errors no
         # downstream pass can recover (choice-story #8).
-        dominant = rules_classes + edit.classes["vocabulary"] > edit.classes["other"]
+        #
+        # The rate condition is unchanged and still stands alone in the report:
+        # an edit rate over G2 is stated whether or not the clause fires, so
+        # re-attributing edits can never hide it.
+        dominant = chain_classes + edit.classes["vocabulary"] > decoder_classes
         if edit.rate > G2_EDIT_RATE and dominant:
             failures.append(
                 Failure(
                     "edit-rate",
                     f"edit rate {edit.rate:.1%} over G2's {G2_EDIT_RATE:.0%} and "
                     "dominated by classes this phase ships the fix for "
-                    f"(punctuation/capitalisation {rules_classes}, covered "
-                    f"vocabulary {edit.classes['vocabulary']}, other "
-                    f"{edit.classes['other']})",
+                    f"(rules chain {chain_classes}, covered vocabulary "
+                    f"{edit.classes['vocabulary']}, decoder {decoder_classes})",
                 )
+            )
+        elif edit.rate > G2_EDIT_RATE:
+            # Not a failure by §9, and not silent either: G2 is missed and the
+            # gate record has to say so and say why it did not reject.
+            print(
+                f"NOTE: edit rate {edit.rate:.2%} is over G2's "
+                f"{G2_EDIT_RATE:.0%}, but {decoder_classes} of {edit.edits} "
+                f"edits are decoder-side and outside this phase's remit "
+                f"(rules chain {chain_classes}, covered vocabulary "
+                f"{edit.classes['vocabulary']}). §9 requires the gate record "
+                f"to state this and to confirm or move G2 explicitly.",
+                file=sys.stderr,
             )
     else:
         failures.append(

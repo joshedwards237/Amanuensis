@@ -1626,6 +1626,41 @@ misses G1. **Do not finalise the model choice until the Phase 1 corpus exists**
 (objection O7). Doing so would repeat, on the accuracy axis, exactly the mistake
 this revision is correcting on the latency axis — twice over now.
 
+**The accuracy cost of `tiny.en` is now measured, and it is concentrated in
+punctuation** (added 2026-09-01, Phase 3 gate). O7's "do not finalise the model
+choice until the corpus exists" is answered on the axis that turned out to
+matter. Over the ten-take Phase 3 corpus, scored against the operator's own
+corrections through the shipped chain:
+
+| model | edit rate | sentence marks missed | stray capitals | p50 | p95 |
+|---|---|---|---|---|---|
+| `tiny.en` (selected) | 9.59% | 84 | 38 | 932 ms | 1109 ms |
+| `base.en` | 10.04% | 90 | 43 | 1526 ms | 1954 ms |
+| `small.en` | **7.88%** | **55** | 40 | 3950 ms | 5311 ms |
+
+Three things this settles and one it opens.
+
+- **`base.en` is worse than `tiny.en` on accuracy *and* slower.** It is
+  eliminated on both axes rather than traded away on one, which is more than the
+  latency-only table could say.
+- **`small.en` buys a third of the missing sentence marks for 4.2× the decode.**
+  §7.4 already measured it at 1,438 ms on a ten-second clip against a G1 p95 of
+  800 ms, so the trade is not available inside G1. It is the first candidate
+  whose accuracy advantage is large enough to be worth naming.
+- **No model size fixes the capitals.** 38 → 43 → 40 across the three. Whisper
+  capitalises the first token of each segment it emits at every size, and the
+  rules chain has no rule that lowercases anything. This is structural, not a
+  tuning parameter.
+
+**Open, and marked here deliberately: the model may be the constraint rather
+than the chain.** `small.en`'s 7.88% is the lowest edit rate this project has
+measured on real dictation, and it is unreachable only because of G1. If G1 is
+ever renegotiated (§7.1's revisit trigger is already live at length), or if a
+faster backend closes the gap — Moonshine and Parakeet are both named in this
+section and neither has been benchmarked for punctuation — this table is the
+evidence to reopen. **Revisit at the Phase 4 gate**, where the per-tier latency
+table is published and the accuracy claim beside it becomes user-facing.
+
 **WER in this document is macro-average** — the unweighted mean of per-sample
 rates (2026-07-31, objection A3). The frozen fixture's mean is **19.62%**. A
 micro-average figure of 14.8% was also in circulation; the two differ by a third
@@ -2882,6 +2917,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 | 2026-08-03 | **The daemon could not be stopped, and that is §5.4's problem with the escape hatch removed.** Ctrl-C and SIGTERM both did nothing; only `kill -9` worked. Two independent causes: CPython cannot run a signal handler while the main thread is blocked inside `NSApplication.run()`, and `NSApplication.stop_` sets a flag checked only when an event is dequeued — which an idle dictation daemon never has. Fixed with a 250 ms `NSTimer` that yields to the interpreter and a posted application-defined event. The indicator was correct the entire time; the failure was that knowing did not help. |
 | 2026-08-03 | **`restore_ms` had no column in `history.db`.** Phase 2a added the field as its headline finding, argued it across §2 and §6.3, and never added the column — so `to_history_row()` emitted the value and `_insert` dropped it, silently, on every row since. Found by reading a real row at this gate. Second instance of AGENTS.md's *an amendment must reach the tooling that can regenerate it*. The regression test iterates `dataclasses.fields(LatencyBreakdown)` rather than naming the field, because the defect was a hand-maintained list that stopped being checked against the dataclass. |
 | 2026-08-03 | **§6.3 contracts `HotkeyListener` and adds `check_permissions`; `TextInjector` gains `focus_identity`; `DictationController`'s constructor gains `capture`, `detector`, `on_state_change`, and a `start`/`shutdown` lifetime.** The listener was declared in §6.4 and listed in §6.2 and never contracted here, which floor item 4 had already flagged. `focus_identity` exists for the hazard the async handoff creates, not for injection: `None` means *cannot tell*, deliberately not *changed*. `capture` and `detector` were in §6.2's tree and absent from the constructor, which would have had the controller reach for PortAudio itself. |
+| 2026-09-01 | **Phase 3 gate findings applied** (`docs/gates/phase-3.md`). §7.2 gains the **measured accuracy cost of `tiny.en`**, which O7 deferred until a corpus existed: `base.en` is worse on accuracy *and* slower and is eliminated; `small.en` reaches **7.88%** edit rate against `tiny.en`'s 9.59% but costs 4.2× the decode, which G1 cannot pay; and **no model size fixes the stray capitals** (38 / 43 / 40), because Whisper capitalises the first token of every segment at every size. Marked open and carried to the **Phase 4 gate**: the model, not the chain, may be the binding constraint on edit rate, and Moonshine and Parakeet have never been benchmarked for punctuation. §5.7 gains **two blind spots**, both established with controls — coverage measures where decoding stopped rather than how much came back, so a 21.7 s interior loss passed at 100%; and its numerator quantises to whole seconds below ~3 s, making the refusal gate unreachable under 2.00 s of speech. §9's Phase 3 asks for "the real G1 number" from a corpus its own ≥ 60 s rule forbids containing one — **deferred to Phase 4**. G2 is **missed at 8.59% and neither confirmed nor moved**; 163 of 171 edits are decoder-side. |
 | 2026-08-03 | **`manu toggle` and `manu status` move to Phase 4, with the IPC transport they need.** `cli.py` said Phase 2b; §9's Phase 2b text names the listener, the controller and the indicator and names neither. Both need §7.3's portability floor item 3, which **no phase had ever scheduled** — a floor item with no phase is a floor item that does not exist. Phase 4 also inherits the asynchronous-restore question Phase 2b declined, because the serial worker is what makes the focus check meaningful. |
 | 2026-08-03 | **`hotkey/listener.py` renamed to `hotkey/macos.py`** (§6.4), on this section's own precedent. `injection/` names its implementation after the platform because `factory.py` dispatches on platform, and `hotkey/factory.py` was specified to mirror it down to the error wording. A Windows port adds `hotkey/windows.py`; it cannot add a second `listener.py`. |
 | 2026-08-02 | **Two §9 gate conditions name components from later phases, and one Phase 1 decision was never made.** Phase 2b's gate asks for `chain = ["rules"]`, which Phase 3 builds — resolved the way Phase 2a's tray indicator was: Phase 2b measures end to end with an empty chain and labels `g1_ms` a floor, and the real G1 number is taken at the Phase 3 gate. Phases 0, 1, 3 and 4 were checked and name nothing they do not build, so the pattern is confined to the two phases the 2026-07-31 split created. Separately: §9 required Phase 1 to decide whether a Phase 2b G1 miss re-runs the project-level go/no-go, and Phase 1 closed without deciding. **Backfilled: re-armed.** A floor clearing a budget shows the budget is reachable and does not measure the thing the budget is about. Also recorded: Phase 3's deliverable list names `HistoryStore` (built in 2a) and VAD trimming (built in Phase 1). |

@@ -13,67 +13,52 @@ PRD, the PRD wins.
 
 ---
 
-## Status: Phase 3 built 2026-08-08. **Gate not yet run — it needs the operator.**
+## Status: **Phase 3 gate PASSED 2026-09-01** — `docs/gates/phase-3.md`
 
-Post-processing exists. `postprocess_ms` is no longer structurally zero, the
-dictionary is live on both mechanisms, and history retains and purges. What is
-*not* done is the gate: §9 wants ten real dictations of >= 60 s judged on edit
-rate, and that is dictation the operator has to do.
+Edit rate **8.59%** over ten real dictations of 67–97 s. The gate does not
+reject because 163 of 171 edits are decoder-side; the rules chain missed **8**
+and the frozen dictionary missed **0**. `postprocess_ms` p95 0.478 ms against a
+5 ms ceiling, `vocab_ms` p95 0.171 ms against 10 ms. Guard reported on all ten.
 
-**What shipped.** `RuleBasedPostProcessor` (ported from
-`experiments/scripts/exp4_rules_only.py`, not rewritten — that code has measured
-numbers attached: p50 0.0445 ms, 0/6 INVENT, 0/6 SHRINK). `vocabulary.toml` with
-`[replace]` as one compiled alternation and `[boost]` scoped per bundle
-identifier. `manu vocab check`. `manu history` with `--pending`, `--purge`,
-`--raw`. `retain_days` reaching `history.db` at last. Two harnesses:
-`scripts/gate_phase3.py` and `scripts/measure_long_audio.py`.
+**G2 is missed and was deliberately neither confirmed nor moved.** §9 allows
+moving it and requires the reason stated; the gate prints a NOTE and leaves the
+number to the operator. That sentence is still unwritten.
 
-**Three defects in shipped code, found by reviewing the spec rather than the
-code**, and all three were live before this phase: a raising post-processor lost
-the transcript; `end_session()` queued a session before stashing the focus, which
-silently disabled §6.3's protection against injecting into the wrong
-application; and `_why_no_retry` refused §5.7's recovery in exactly the
-configuration §5.6 recommends.
+Four things to carry into Phase 4.
 
-**Four things to carry into Phase 4 and the gate:**
+- **The corpus was recorded twice, and the first one measured a dead config.**
+  The 2026-08-18 takes were decoded under an `initial_prompt` removed from
+  `config.toml` at 15:41 the same afternoon — 8m39s after the last take. One
+  take lost **21.7 seconds** of speech to it and the guard passed it at 100%.
+  Re-recording moved `transcribe_ms` p95 from 4018 ms to 1120 ms. Before quoting
+  any measurement, check what config produced it.
+- **§5.7's guard has two blind spots, both with controls.** Coverage measures
+  *where decoding stopped*, not how much came back, so an interior hole is
+  invisible by construction. And its numerator quantises to whole seconds below
+  ~3 s, so the refusal gate is unreachable under 2.00 s of speech — which is the
+  operator's ordinary utterance. Neither is fixed.
+- **The model may be the constraint, not the chain.** `small.en` reaches 7.88%
+  against `tiny.en`'s 9.59% at 4.2× the decode; `base.en` is worse *and* slower;
+  **no size fixes the stray capitals**. PRD §7.2 carries the table and a dated
+  revision note. Revisit at the Phase 4 gate.
+- **The dominant error class is unreachable by a rule.** 58 missing sentence
+  marks and 41 stray capitals. The obvious fix — a mark at each Whisper segment
+  join — was measured and **rejected**: 29 right, 66 invented, +55 edits. That
+  is the subject matter Phase 5 was missing.
 
-- **Fixing an instance is not fixing a shape.** The chain-guard fix (objection
-  O1) was recorded as restoring §8's guarantee. It closed one third of the
-  window: a raise in the guard's *retry* still discarded a transcript the decoder
-  had produced, and the code review found it. Fifth instance of this
-  specification asserting a guarantee the code did not honour.
-- **Verify a test by breaking the code.** Two regression tests written for
-  accepted dispositions could not fail — reverting the fix left 492 tests green.
-  Both were written immediately after watching the bug fail, which is what makes
-  it feel verified. It is not the same event. Ninety seconds of sabotage catches
-  it; see `AGENTS.md`.
-- **Instruments disagree with the product silently.** Two of the three problems
-  reported from measurement this phase were in the harness, not the product —
-  a pre-flight microphone check that could not fail, and a coverage figure that
-  reimplemented `guard.evaluate` and did not clamp. Call the product's own
-  function; `measure_g1.py` reusing `tier.percentile` is the precedent.
-- **The rules pass keeps hiding hazards in rules nobody questioned.** Three
-  separate defects in `collapse_immediate_repeats` alone. The first two were
-  patched with conjuncts; the third was fixed by inverting the premise, which is
-  what should have happened the first time.
+Two harness defects fixed at this gate, both of the same species this repository
+keeps producing: `fired_any` was satisfied by `collapse_whitespace` rather than
+by the dictionary, and a **stale corrections file scored 0 edits over 0 words and
+printed PASS**. `classify_edits` now buckets by *responsibility* rather than by
+the shape of a difference — the surface split called 107 of 171 edits
+chain-attributable and fired the reject clause; the responsibility split puts 8
+inside the chain, on the same file.
 
-**Still open, and the gate needs them:**
-
-- **The short-utterance corpus does not exist.** `scripts/record_phase3_corpus.py
-  --set short`. §5.7's false-positive direction is untested and the blind spot is
-  at the *short* end — the ten 60-second takes measured coverage 1.0 across the
-  board and the guard never fired, which is what objection O5 predicted and is
-  not evidence about the direction that matters.
-- **§2's decode model is loose at length.** Measured over ten ~74 s takes:
-  p50 917–938 ms against a predicted 1069, and p95 1247–1345 ms against 1083, on
-  two runs of the same files. A duration-only linear model cannot predict a
-  single decode, and `_why_no_retry` spends that model as a budget.
-- **G1 is missed at 75 s on decode alone** (p50 ~930 ms against an 800 ms p95).
-  §2 binds G1 at ten seconds and recorded this prediction in advance; it is
-  utterance length, not post-processing, and per objection O4 it is **not** a
-  reject exemption.
-
-**Stop at the Phase 3 gate.** Do not begin Phase 4 until Phase 3 is approved.
+**Phase 4 is next** (PRD §9): `TrayApp`, `toggle` and `vad_auto`, `manu toggle` /
+`manu status` and the IPC transport, error surfacing, the README with the
+clipboard caveat and the per-tier latency table, and the checksummed install
+path. Its gate is a second person installing from the README unaided, plus the
+second G3 packet capture against the assembled product.
 
 ---
 
