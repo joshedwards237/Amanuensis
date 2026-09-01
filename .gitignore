@@ -49,6 +49,28 @@ tests/fixtures/phase3
 tests/fixtures/asr/*.flac
 probe.wav
 
+# Gate corrections (`gate_phase3.py --emit-corrections`). These carry no audio,
+# and the rule above still reaches them: they are the VERBATIM TEXT of
+# spontaneous dictation — the operator's week, his employer's work, a named
+# colleague, the room he was sitting in. The "reference transcripts ARE
+# committed" exemption above was written for scripted prompt text read aloud,
+# which carries none of that, and it does not extend here. Added 2026-09-01 at
+# the Phase 3 gate, where the file was one `git add .` from a public repository.
+#
+# Nothing depends on them being present: `docs/gates/phase-3.md` cites the
+# derived figures, and the corpus is re-emitted from `history.db` on demand.
+corrections*.json
+
+# Dictation injected into whatever had focus, which during the Phase 3 corpus
+# was an unsaved buffer inside this checkout. The filename is the first line of
+# the transcript, so the *name* discloses as much as the contents.
+docs/This project is called*.md
+
+# Empty artefact from a harness run with a relative path. The real store lives
+# under the platform data directory; a stray one here would be a second,
+# silently divergent history.
+/history.db
+
 # Local voice recordings (see note above). Never committed.
 .audio/
 

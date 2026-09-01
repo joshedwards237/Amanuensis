@@ -7,11 +7,16 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: Phase 2b complete, plus one defect fix. Phase 3 next.
+## Status: Phase 3 built 2026-08-08. **Gate not yet run — it needs the operator.**
 
 **The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
-your words appear at the cursor in whatever application has focus. That is the
-product, minus post-processing.
+your words appear at the cursor in whatever application has focus.
+
+Post-processing now runs: the rules pass fixes whitespace, sentence
+capitalisation and punctuation spacing, the dictionary is live on both
+mechanisms, and history retains and purges. What is *not* done is the **gate** —
+ten real dictations of ≥ 60 s judged on edit rate, which is dictation the
+operator has to do. Nothing below should be read as a gate result.
 
 Working: model download and the install-time tier check (`manu install`), the
 global hotkey, the resident daemon, microphone capture, silence trimming,
@@ -34,9 +39,14 @@ Two menu-bar states are worth knowing: `◍` means the guard recovered a
 transcript, so what landed was decoded without your `initial_prompt` and is less
 reliable at proper nouns. `⚠` after a dictation means the words were withheld.
 
-Not built yet: **post-processing**. The transcript you get is what the model
-emitted — leading whitespace, missing sentence-final punctuation, occasional
-spurious capitals. Phase 3.
+**Post-processing** shipped 2026-08-08. A deterministic rules pass cleans
+whitespace, sentence capitalisation and punctuation spacing before the transcript
+is injected; `manu history --raw` shows what the model emitted before it ran. It
+is measured at p50 0.0445 ms against the Phase 1 corpus — an experiment figure,
+not a gate figure. Two rules are deliberately absent: lowercasing a spurious
+mid-sentence capital (indistinguishable from a proper noun without a model) and
+folding spoken numbers into digits (measured harmful — *one thought ends* became
+*1 thought ends*).
 
 What the guard cannot see: a transcript that is too *long*, and one that covers
 the audio and gets the words wrong. It catches a decoder that stopped early,
@@ -108,7 +118,7 @@ that one is not ours to get wrong.
 
 | Goal | Target | Status |
 |---|---|---|
-| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met, still a floor.** Measured end to end through the hotkey over ten real dictations: **p50 223.0 ms / p95 270.0 ms**. Post-processing is the one stage not yet in the number. **Read the scaling note below before quoting this figure** |
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met.** Over every clean row at ≤ 10 s in `history.db` (n = 27): **p50 206.0 ms / p95 538.9 ms**. All stages are now in the number, post-processing included. **Read the scaling note below before quoting this figure** |
 | Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
 | Accuracy | edit rate ≤ 5% | **not yet measured.** Edit rate is a Phase 3 measurement; the WER figures in `docs/adr/0001-engine-selection.md` are a different quantity |
 | Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat below |
@@ -118,22 +128,30 @@ backend, so "Apple Silicon" was never a distinct execution path — a machine's 
 is decided by what it measures at install.
 
 **The latency figure is for a ten-second utterance and it does not generalise
-across lengths.** Transcription scales with how long you spoke — measured across
-0.7 to 43 seconds of speech, `transcribe_ms ≈ 49 + 13.7 × seconds`:
+across lengths.** These are measured bands from `history.db`, with concurrent
+benchmark rows excluded:
 
-| you spoke for | text appears after |
-|---|---|
-| 10 s | ~225 ms — the figure G1 gates |
-| 30 s | ~500 ms |
-| 60 s | ~910 ms — over the 800 ms p95 |
+| you spoke for | text appears after | n |
+|---|---|---|
+| ≤ 10 s | p50 206.0 ms / p95 538.9 ms — the band G1 gates | 27 |
+| 16–60 s | **no band exists** — fewer than the ten clean observations needed before a percentile is publishable | 7 |
+| ≥ 60 s | p50 1566.4 ms / p95 4203.6 ms — well over the 800 ms p95 | 11 |
 
 That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
 so. But dictating a paragraph is the ordinary case, and the headline number says
 nothing about it, so both are here.
 
-Every latency figure here is from **one machine and one speaker in one room**,
-and the p95 above is the *maximum* of ten observations rather than an estimate of
-a 95th percentile. Treat it as an extreme that was survived, not a distribution.
+> **Correction, 2026-08-31.** This section previously published a fitted model,
+> `transcribe_ms ≈ 49 + 13.7 × seconds`, and a 10/30/60 s table derived from it.
+> **Those numbers were wrong and are withdrawn.** The model was fitted over
+> n = 14 spanning 0.7–43.4 s and then used to predict at 60 s, outside the range
+> it ever saw; refitting the clean rows over 0.8–104.4 s gives R² ≈ 0.59, so a
+> duration-only linear model does not predict a single decode. `CLAUDE.md`
+> reached the same conclusion independently from ten ~74 s takes (p50 917–938 ms
+> against a predicted 1069). The table above replaces it with measured bands
+> only, and no figure here is extrapolated to a duration that was not measured.
+
+Every latency figure here is from **one machine and one speaker in one room**.
 
 **The latency claim is hardware-conditional and that is a real caveat**, not a
 footnote. Privacy motivation and offline constraint correlate with older
