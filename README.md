@@ -223,9 +223,9 @@ that one is not ours to get wrong.
 
 | Goal | Target | Status |
 |---|---|---|
-| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met.** Over every clean row at ≤ 10 s in `history.db` (n = 27): **p50 206.0 ms / p95 538.9 ms**. All stages are now in the number, post-processing included. **Read the scaling note below before quoting this figure** |
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met: p50 312.4 ms / p95 344.5 ms**, over ten dictations of 7.5–10.0 s recorded 2026-09-02 for this purpose, with the full shipped chain. [`docs/gates/g1-at-ten-seconds.md`](docs/gates/g1-at-ten-seconds.md) carries the conditions. **Read the scaling note below before quoting this figure** |
 | Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
-| Accuracy | edit rate ≤ 5% | **not yet measured.** Edit rate is a Phase 3 measurement; the WER figures in `docs/adr/0001-engine-selection.md` are a different quantity |
+| Accuracy | edit rate ≤ 5% | **missed, at 8.59%**, measured over ten real dictations of 67–97 s at the Phase 3 gate. The threshold was deliberately **not moved**; the gap is carried as debt. 163 of 171 edits are the decoder's — see below |
 | Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat below |
 
 Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Metal
@@ -233,14 +233,30 @@ backend, so "Apple Silicon" was never a distinct execution path — a machine's 
 is decided by what it measures at install.
 
 **The latency figure is for a ten-second utterance and it does not generalise
-across lengths.** These are measured bands from `history.db`, with concurrent
-benchmark rows excluded:
+across lengths.**
 
 | you spoke for | text appears after | n |
 |---|---|---|
-| ≤ 10 s | p50 206.0 ms / p95 538.9 ms — the band G1 gates | 27 |
-| 16–60 s | **no band exists** — fewer than the ten clean observations needed before a percentile is publishable | 7 |
-| ≥ 60 s | p50 1566.4 ms / p95 4203.6 ms — well over the 800 ms p95 | 11 |
+| **7.5–10.0 s** | **p50 312.4 ms / p95 344.5 ms** — the band G1 gates, measured deliberately | **10** |
+| 10–60 s | **no band is published** — too few observations under known conditions | — |
+| 67–97 s | p50 ≈ 0.9 s, and over 800 ms throughout — the Phase 3 corpus | 10 |
+
+> **Why the headline row is a dedicated recording and not a query over
+> `history.db`.** A band scraped from stored rows mixes configurations, machine
+> load and product versions, and this project has already published one figure
+> that way and had to withdraw it. On 2026-09-02 a first attempt at the row
+> above produced a p95 of **4014 ms** — three of nine takes running 7.4×, 8.9×
+> and 19.6× their idle re-decode cost on identical-length input, because a test
+> suite was running on the same machine. All nine were discarded rather than the
+> three outliers, because keeping the fastest six would have been choosing the
+> rows that flatter. The accepted run carries the same control and shows
+> 1.29–1.76× with no outliers.
+>
+> Those contaminated rows are still in `history.db` and **the site's
+> eligibility rule cannot exclude them** — it drops rows sharing a timestamp
+> second, which catches parallel writes and not external load. Any band this
+> project publishes from stored rows should be read with that in mind until the
+> `config_sha256` provenance column exists.
 
 That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
 so. But dictating a paragraph is the ordinary case, and the headline number says
@@ -265,8 +281,8 @@ slower tier. PRD §4 says so in the same place it makes the speed claim.
 
 ## Known costs, stated up front
 
-The PRD's rule is that a cost gets documented rather than papered over. Three
-that will affect you as a user. The first two are now **measured**, not argued.
+The PRD's rule is that a cost gets documented rather than papered over. The
+first two are **measured**, not argued.
 
 - **Your transcripts go into your clipboard manager.** Not "may" — measured
   against a real one (Maccy) on default settings: every transcript was captured,
@@ -299,6 +315,47 @@ that will affect you as a user. The first two are now **measured**, not argued.
   Amanuensis cannot see egress that happens inside a different process, which is
   exactly where the clipboard path goes. The Maccy result above *is* that blind
   spot, measured. (§2 G3)
+
+### The collapse guard has two blind spots, and neither is fixed
+
+§5.7's guard measures **decoded coverage** — how far into your audio the decoder
+got before it stopped — and refuses to inject a transcript that covers less than
+half. It caught a real 30.5-second dictation that came back as two words. Two
+things it cannot do, both established with controls at the Phase 3 gate and both
+still true:
+
+- **It cannot see a hole in the middle.** Coverage is the *end point* of
+  decoding, not how much came back. One take lost 56 words spanning 27.7 s to
+  49.4 s of a single dictation, and the guard reported **coverage 100.0%,
+  passed**. That is invisible by construction, not by oversight.
+- **It cannot fire below about two seconds of speech.** The refusal threshold is
+  unreachable under 2.00 s — measured on 11 of 11 short takes — because the
+  numerator quantises to whole seconds at that length. Short dictation is the
+  ordinary case for most people, and there the guard is decorative.
+
+Both fail **open**: a bad short transcript is injected rather than withheld, so
+you see it at your own cursor and can undo it. That is the safe direction, and
+it is why this is documented rather than treated as a release blocker. It is
+recorded here rather than only in the gate record because the gate record is not
+a document users read.
+
+### What you get in this phase, and what it does not do
+
+- A **recording panel** appears while the microphone is live, and it stays
+  visible over a full-screen application with the menu bar hidden — which is
+  where the menu-bar glyph is not merely small but absent. It never takes focus.
+  Turn it off with `[feedback] overlay = false`.
+- **`hotkey.mode`** accepts `push_to_talk` (default), `toggle` (press to start,
+  press to stop) and `vad_auto` (press to start, silence ends it). `vad_auto`
+  has its own `[vad_auto]` silence window and a `max_seconds` hard stop, because
+  a detector that misses the end would otherwise leave the microphone open.
+- **`manu status`** and **`manu toggle`** talk to a running daemon over a unix
+  socket at mode `0600`. Any process running as you can send those; nothing on
+  the network can, and no transcript text ever crosses that socket.
+- **Spoken commands are on**: say "new paragraph" as a complete sentence and you
+  get a blank line. It frequently will not fire, and the reason is documented —
+  it needs sentence marks on both sides of the phrase, and the decoder often
+  supplies neither.
 
 ## Scope
 
