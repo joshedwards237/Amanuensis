@@ -11,57 +11,57 @@ slices:
     scope: "The README's install half written FIRST as the specification; the model download built to satisfy it; then a rehearsal in which the operator installs on a genuinely fresh machine following only the written text and records every gap. Excludes the latency table, the privacy section, and the n=1 gate itself."
     decision_focus: "Is the README a specification written before the install path, or a report written after it? The gate is n=1 and unrepeatable, and the plan leaves its only artifact until last."
     lens_used: end-to-end
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Becomes the phase's first slice. The README's install half is the specification the install path is built to satisfy, rehearsed on a fresh machine before the tester exists."
   - id: S2
     title: "Recording state a user believes, and errors they can read"
     scope: "TrayApp (ui/tray.py) with its menu, the NSPanel overlay, error text with room for words, and §7.3's clipboard-manager exposure as a persistent tray state. Plus a written confidence test, authored before the overlay is built, that decides overlay-vs-bundle. Excludes business logic (§6.2), mode switching, async restore."
     decision_focus: "What counts as 'confident the microphone is live', stated in advance? Operator decision 1 makes the bundle fallback turn on a confidence test that does not exist."
     lens_used: decision-boundary
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Confidence test written first. Carries S7.3's clipboard-manager tray state and S5.4's [feedback] sounds, both of which the draft dropped."
   - id: S3
     title: "Modes that leave the microphone open with no finger on a key"
     scope: "hotkey.mode = 'toggle' and hotkey.mode = 'vad_auto', both currently rejected at hotkey/macos.py:151, plus the streaming detector audio/vad.py:25 records vad_auto as needing. Excludes `manu toggle`, which is a different feature sharing the word."
     decision_focus: "push_to_talk's guarantee is physical — your finger is on the key. Both new modes remove it, and vad_auto opens the mic with no user action at all. §5.4 makes this a privacy question, not an ergonomics one. What replaces the finger?"
     lens_used: decision-boundary
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "S2 precedes it. vad_auto ships behind its own flag with its own silence window."
   - id: S4
     title: "A second process can read the daemon, and tell it to record"
     scope: "The IPC transport ABC (§7.3 portability floor item 3), the macOS unix socket behind it, and both verbs — `manu status` and `manu toggle`, today 'Phase 4' stubs at cli.py:85-86. Includes the socket's path, permissions and authority model, and the CLI-contract wording floor item 3 constrains."
     decision_focus: "A local socket that starts the microphone is an authority boundary. §7.6 forbids interpreting a transcript as a command; the sibling question — who may command the process holding the mic — has never been asked."
     lens_used: decision-boundary
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Both verbs in one slice. The socket's authority model is decided here rather than by whoever writes it, and S6.3 gains the acceptor's thread row."
   - id: S5
     title: "The daemon's thread inventory, written down and asserted, with the async restore as its first test"
     scope: "§7.3 portability floor item 1 — the threading model named rather than implied — as §6.3 text plus a test that fails when AppKit is touched off the main thread; and the asynchronous clipboard restore moved off the worker with its failure reported. Excludes any change to what restore protects, because Phase 2a measured that it protects nothing."
     decision_focus: "What does the async restore actually buy? restore_ms is documented OUTSIDE g1_ms, so 155 ms is worker occupancy, not user-visible latency — and it costs the serial-worker property §6.3's focus check depends on."
     lens_used: decision-boundary
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The thread inventory is carried regardless of D1's outcome; it is floor item 1 and no phase has ever scheduled it. The async restore rides here only if D1 says build."
   - id: S6
     title: "Benchmark Moonshine and Parakeet — and decide first whether the result may move the default"
     scope: "Both backends behind the existing TranscriptionEngine ABC; edit rate, punctuation classes, p50/p95 for all four engines on the Phase 3 corpus. Excludes switching the default. Requires a §6.4 amendment (parakeet.py is in §5.3's enum and not in §6.4's tree)."
     decision_focus: "If Parakeet wins, does the shipped default change inside Phase 4? Answered after the table is seen, that is outcome selection. Answered yes, Phase 4 is two phases wearing one number."
     lens_used: decision-boundary
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D3: the default is frozen in S7.2 before the benchmark runs. Deletion counts added to the deliverable."
   - id: S7
     title: "The published claims — measured, generated, and qualified"
     scope: "G1 at ten seconds with the full shipped chain (~9 short dictations); the per-tier latency table labelled by what the machine measured; the privacy section carrying the second G3 capture with its §7.3 qualification; the clipboard caveat with the Phase 2a Maccy measurement. Excludes install instructions (S1)."
     decision_focus: "Is the README's latency table typed or generated? The site already refuses typed public figures — export from history.db, claims.json, two controls. A hand-typed README table is the same claim surface with none of that."
     lens_used: acceptance-criterion
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "G1 at ten seconds is inside this slice as a precondition. The Tier B column states that no Tier B machine has been measured."
   - id: S8
     title: "Phase 3's instrument debt — two blind spots and a reject clause that has never fired for the right reason"
     scope: "§5.7's interior-loss blindness, addressed where avg_logprob, no_speech_prob and compression_ratio are discarded (faster_whisper.py:329); the sub-2.00 s unreachability of the refusal gate; and a synthetic corrections set where chain-attributable classes dominate, asserted to REJECT. Nothing in §9's Phase 4 text."
     decision_focus: "Does Phase 4 carry it, or does it become a named phase? 'Named as debt' is what §9's own language calls a floor item with no phase: a floor item that does not exist."
     lens_used: independence
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D4: split. The reject-clause control is carried in Phase 4; the guard's blind spots are disclosed in the README and fixed in their own phase."
 ---
 
 # Slicing record — Amanuensis Phase 4

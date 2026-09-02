@@ -7,53 +7,53 @@ stories:
   - id: 1
     lens: [defaults, patterns, coherence]
     title: IPC listener has no thread assigned
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "S6.3 gains a row for the IPC acceptor and its thread affinity is written down before the socket is built. Floor item 1's whole purpose."
   - id: 2
     lens: [defaults, consequences]
     title: Socket directory inherits platformdirs by analogy
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The platformdirs accessor is named explicitly in S4 rather than inherited by analogy, together with whether a stale socket survives a reboot."
   - id: 3
     lens: [alternatives, consequences]
     title: manu status contents decided by first slice
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "manu status ships a contract, not an acceptance criterion. The recorded tier is included - the README publishes a per-tier table and the reader needs to know which row is theirs."
   - id: 4
     lens: [forces, defaults]
     title: vad_auto inherits the trimming VAD parameters
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "vad_auto gets its own silence window. Sharing S7.2's measured trimming parameters means either two seconds of dead time per dictation or a user silently invalidating every figure this project has published."
   - id: 5
     lens: [defaults, coherence]
     title: Overlay ships without a config key
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The overlay's config keys and S5.4's unbuilt [feedback] sounds are both booked into S2 rather than lapsing in the phase that owns S5.4."
   - id: 6
     lens: [forces, alternatives]
     title: Overlay confidence test — no criterion, builder judges
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The criterion is written before the overlay exists. Who judges is named at the same time."
   - id: 7
     lens: [patterns, coherence]
     title: Errors routed through tray, not modelled upstream
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Errors are state the tray reads, not traffic routed through it. Whether TrayApp replaces RecordingIndicator is decided in S2 rather than discovered by two glyphs appearing in one menu bar."
   - id: 8
     lens: [consequences, coherence]
     title: Phase 4 gate drops the G2 revisit
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The G2 revisit is restored to the Phase 4 gate, where docs/gates/phase-3.md:330 put it."
   - id: 9
     lens: [consequences, alternatives]
     title: Engine rematch omits ADR 0001's deciding metric
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Deletion counts added to the benchmark deliverable - see objection O1."
   - id: 10
     lens: [consequences, defaults]
     title: Two new engines no pinned revision covers
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D2 resolves it: manu install stays, so the download is not in the daemon and the capture's subject is unchanged. Pinned revisions for the two new engines are required before any of their numbers reach a user-facing surface."
   - id: 11
     lens: [consequences, defaults]
     title: spoken_commands stays off by never deciding
@@ -62,8 +62,8 @@ stories:
   - id: 12
     lens: [alternatives, forces]
     title: The gate's second person, unnamed and single-use
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The archetype is named in advance and recorded in the gate record, and the 30-minute stop is reconciled with the 185 s download and the nine-run tier check that sit inside it."
 ---
 
 # Choice stories — Amanuensis Phase 4 plan

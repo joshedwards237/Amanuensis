@@ -1661,6 +1661,26 @@ section and neither has been benchmarked for punctuation — this table is the
 evidence to reopen. **Revisit at the Phase 4 gate**, where the per-tier latency
 table is published and the accuracy claim beside it becomes user-facing.
 
+**The Phase 4 default is frozen at `faster_whisper` / `tiny.en`, and this
+sentence is written before the benchmark runs** (2026-09-02, operator
+disposition D3; slicing record S6, objection O1). Phase 4 benchmarks Moonshine
+and Parakeet and **may not move the shipped default on the result.** The order
+matters and is the whole point of writing it here: a benchmark whose consequence
+is decided after the table is seen selects its own outcome, which this project
+has on record once already — an earlier revision of the site spec picked its
+headline band from five candidates by which read best, inside the section
+written to prevent exactly that. A default that changed mid-phase would also
+invalidate every latency figure in the Phase 4 README and reopen G1 against
+§7.1, in the phase whose gate is a second person installing that README.
+
+**The benchmark's deliverable gains deletion counts.** ADR 0001 declined
+Moonshine on an axis none of edit rate, punctuation classes or p50/p95 can see:
+it deletes 12–14 words where the faster-whisper models delete 2–7, and §8 exists
+to refuse silent data loss. `classify_edits`' `decoder_words` bucket merges
+substitution with deletion, so two engines with identical edit rates and
+opposite failure modes score identically. Re-opening a decision on a different
+metric set than the one that closed it is how the closed reason gets lost.
+
 **WER in this document is macro-average** — the unweighted mean of per-sample
 rates (2026-07-31, objection A3). The frozen fixture's mean is **19.62%**. A
 micro-average figure of 14.8% was also in circulation; the two differ by a third
@@ -2792,7 +2812,17 @@ Resolve before or at the stated gate. Do not guess.
    tested, and is now not relied upon for v1.
 2. **Settings UI** — tray menu is sufficient for v1. A React/Tauri settings panel is a
    post-v1 question and is not in §9.
-3. **Model distribution** — Hugging Face at first run vs. bundled installer. Phase 4.
+3. ~~**Model distribution**~~ — **RESOLVED 2026-09-02 (operator disposition D2):
+   `manu install`, which already exists, invoked by the first launch rather than
+   by a command the user must discover.** §11.3 offered "Hugging Face at first
+   run vs. bundled installer" and the shipped answer is neither — the weights
+   come from Hugging Face at *install* time, and §7.6's **never at runtime** is
+   unchanged. Recorded because the question nearly resolved the other way: "at
+   first run" reads as the daemon's first start, which would put an HTTPS fetch
+   inside the process whose network silence is G3's headline claim, and
+   `engines/faster_whisper.py:16-19` calls the absence of that path *structural*.
+   The distinction is invisible in the phrase and decides what the Phase 4
+   packet capture is looking at.
 4. ~~**Public repo timing**~~ — **RESOLVED 2026-09-02, by observation: the
    repository has been public since it was created on 2026-07-31.** The decision
    was never taken; it was made by the act of creating the remote public, three
@@ -2900,6 +2930,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-02 | **Three sentinels were run against the Phase 4 plan while it was still a sketch, and two of four operator decisions did not survive contact with the repository** (`docs/superpowers/{slices,objections,stories}/phase-4*`). Twelve objections, two critical. **The asynchronous clipboard restore was priced before it was built** and buys nothing: over 92 consecutive dictations spanning a month, **0 pairs** would have been helped — the nine that overlapped did so by ~5 s against a 0.155 s restore, and `injection/macos.py:132-137` already records that restoring without waiting for the paste is *a worse race than the clipboard-manager one and entirely self-inflicted*. **§11.3 is resolved as `manu install` invoked by first launch**, not as a fetch in the daemon: the phrase "at first run" would have put an HTTPS call inside the process whose silence G3 verifies, and `verify_g3.py:77-78` fails on one socket or one byte with no notion of permitted install traffic. **§7.2 freezes the Phase 4 default before the benchmark runs**, because a benchmark whose consequence is decided after the table is seen selects its own outcome — the site's headline band is the precedent — and the deliverable gains **deletion counts**, the axis ADR 0001 actually decided Moonshine on and the one `classify_edits` merges into `decoder_words`. Also found and unfixed: `download_weights` verifies **no digest** while §7.6 claims checksum verification (sixth instance of a stated constraint the code does not honour), and **§6.3's thread table has four rows and none serves a socket** — floor item 1's failure shape one component over, in the phase that adds the acceptor. |
 | 2026-09-02 | **G2's threshold is confirmed at 5% and the miss is carried as debt** (§2, §9, `docs/gates/phase-3.md`). §9 permits moving a missed threshold and requires the reason stated; the Phase 3 gate measured the reason — 95% of the 8.59% is decoder-side, 58% of *that* is one class no rule reaches — and left the number to the operator. Disposition: **do not move it.** A measured reason to move is not an obligation to, and `small.en` reaches 7.88% on the same corpus while being priced out only by G1's p95 — so relaxing the target before the engine question is settled would fix 8.59% as acceptable using evidence the Phase 4 gate may overturn. Revisited there. Also **§11.4 is resolved by observation rather than by decision**: the repository has been public since it was created on 2026-07-31, three phases before this section expected to answer the question, and every `.gitignore` argument about verbatim dictation was made in an interval this document still described as open. |
 | 2026-08-08 | **A code-mode review found §8 losing a transcript, and the fix for the same hazard three weeks earlier had closed one third of the window.** `_process` assigned `session.raw_transcript` *after* `_judge` returned, and `_judge` runs a second decode for §5.7's retry — so a raise there reached the handler with the decoder's words in a local variable and nothing persisted. Reproduced. The earlier disposition (objection O1) had guarded the post-processing chain and been recorded as restoring the guarantee; the window between "the words exist" and "the words are safe" still spanned a second decode and a guard evaluation. **Fixing an instance is not fixing a shape**, and this is the fifth time this project has recorded the specification asserting a guarantee the code did not honour. The transcript is now on the session the moment it exists, and the failure path writes it. |
 | 2026-08-08 | **Four rules in `RuleBasedPostProcessor` corrupted ordinary English, and the tests written for two earlier defects in the same file could not see them.** `it was really really good` lost a word; `20 minutes left` became `20 Minutes left`; `the U.S. economy is fine` became `The U.S. Economy is fine.` — two rules compounding, because the space one inserted created a boundary the other acted on; and `Add a note. New line items are on order.` lost three words to the spoken-command rule. All four verified at a REPL. The repeat rule's guard was **inverted from a blocklist to an allowlist** of closed-class function words, which makes the no-deleted-content-word property structural instead of a thing a test has to remember to probe — the third defect in that one function, and the first fix to revisit its premise rather than add a conjunct to it. |

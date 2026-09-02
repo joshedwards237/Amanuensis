@@ -1,7 +1,7 @@
 # Phase 4 plan — tray, modes, polish
 
 **Status: revised 2026-09-02 after three sentinel records. Four dispositions
-outstanding; work below is blocked on them where marked.**
+taken; one choice-story remains open. Slices proceed.**
 
 Branch `phase-4-tray-modes`, developed in `../worktrees/phase-4-tray-modes/`,
 off `origin/main` at `6ebcacf`.
@@ -29,36 +29,53 @@ satisfy, and rehearsed on a fresh machine before the tester exists.**
 Two objections are critical and both land on operator decisions taken before the
 review. They are not resolved below; they are put back.
 
-## Blocked on operator disposition
+## Operator dispositions, 2026-09-02
 
-These four cannot be settled by reading the repository. Everything else proceeds.
+**D1 — the asynchronous clipboard restore: priced before deciding.**
+`scripts/price_restore.py` reads 93 rows spanning 2026-08-03 to 2026-09-01 and
+computes, for each of the 92 consecutive pairs, whether the worker was still
+occupied when the next dictation arrived and whether the restore was what
+occupied it.
 
-**D1 — the asynchronous clipboard restore (O4 critical, O5, O6; decision 3).**
-`injection/macos.py:132-137` states that restoring without waiting for the paste
-"would race the paste itself, **which is a worse race than the clipboard-manager
-one and entirely self-inflicted**." The failure mode is the user's *previous*
-clipboard landing in their document, which a tray report cannot undo. Separately,
-§7.3:1851 already records that the restore protects nothing — Maccy 2.7.0
-captured the transcript at 150 ms with a positive control. Options: build it with
-an explicit paste-in-flight interlock; decline it permanently and write the
-refusal into §7.3; or price it first from `history.db`'s inter-dictation gaps.
+    restore_ms          p50 155.2   p95 155.9   max 156.3
+    slack               p50  92.4 s   p05 -4.8 s   min -5.5 s
+    pairs the async restore would have helped:              0
+    pairs where the worker was busy with real work anyway:  9
 
-**D2 — what "first run" means (O7 critical; decision 2).** §7.6:2026 says weights
-download at install and **never at runtime**, and
-`engines/faster_whisper.py:16-19` calls that property *structural*. If the
-download moves into `manu daemon`, that is a §7.6 amendment and the second G3
-capture needs a written rule for permitted traffic — `verify_g3.py:77-78` fails on
-one socket or one byte. If it means the installer is invoked by first launch,
-this is packaging and `manu install` stays.
+Nine pairs overlapped, every one by roughly **five seconds** against a restore of
+0.155 s. Moving the restore off the worker shaves 155 ms off a 5,500 ms wait —
+2.8% of the contention, in the only cases where there was any. In the other 83
+the worker was idle by a median of 92 seconds. **Recommendation: decline, and
+write the refusal into §7.3 with this number beside it**, which retires O4's
+critical race, O5's `restore_ms`-to-zero shape and O6 together. The build call
+remains the operator's; the interlock design is specified in O4's
+counter-argument if he wants it.
 
-**D3 — may the benchmark move the shipped default (O1; slice S6).** If yes, the
-README's latency figures are measured against a component replaced days earlier
-and the engine swap has no gate. If no, §7.2 must say so **before** the benchmark
-runs, so the result cannot select its own consequence.
+**D2 — "first run" means the installer invoked by first launch.** `manu install`
+stays; §7.6's *never at runtime* is unchanged; the packet capture's subject is
+unchanged. §11.3 resolved accordingly, with the near-miss recorded: the phrase
+"at first run" reads as the daemon's first start, which would have put an HTTPS
+fetch inside the process whose network silence is G3's headline claim.
 
-**D4 — S8, the Phase 3 instrument debt (O11).** Carry it in this phase, or give
-it its own named phase. "Named as debt in the gate record" is what §9's own
-language calls a floor item with no phase.
+**D3 — the benchmark may not move the shipped default.** Written into §7.2
+**before** the benchmark runs, so the result cannot select its own consequence.
+The deliverable gains deletion counts, because ADR 0001 declined Moonshine on an
+axis edit rate cannot see.
+
+**D4 — S8 splits.** The reject-clause control is carried in Phase 4, because a
+user-facing number depends on the instrument it governs. The guard's two blind
+spots are **disclosed in the README** — not only in the gate record, which is the
+one document the second person never opens — and fixed in their own named phase.
+
+## Still undecided
+
+**`spoken_commands`.** §5.3's comment carries a sunset clause — "if it changes
+nothing, the code goes" — and the Phase 3 gate reported it never fired, on a
+corpus that contains no spoken command and therefore could not have made it fire.
+Three exits: delete the code, flip the default, or amend §5.3 to retire the
+clause and say the key waits for Phase 5. Keeping it off and scheduling nothing
+is the state the clause was written to prevent, and Phase 5 is unscheduled, so
+"meanwhile" has no end. Choice-story #11 is the only disposition still `pending`.
 
 ## Slices
 

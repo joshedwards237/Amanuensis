@@ -9,85 +9,85 @@ objections:
     severity: high
     claim: "Slice 12 publishes a user-facing accuracy claim while G2 is missed by 72% relative, and slice 10's stated outputs cannot measure the axis on which the leading alternative engine was already rejected."
     evidence: "Plan L18-19, L34, L36. docs/gates/phase-3.md:330-336. docs/adr/0001-engine-selection.md:112-118. docs/gates/phase-3.md:62-69 (the classifier's seven buckets)."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "S7.2 amended 2026-09-02: the Phase 4 default is frozen before the benchmark runs, and the benchmark's deliverable gains deletion counts so the axis ADR 0001 decided on is measurable."
   - id: O2
     category: scope
     severity: high
     claim: "The plan produces at least three new measurement sets while the constraint added at the previous gate to stop exactly that class of loss — a stored measurement carrying the config that produced it — is unimplemented and unscheduled."
     evidence: "HARNESS.md:149-165 ('Enforcement: unverified. Tool: none yet — needs a config_sha256 column'). Plan L34, L37, L41-43."
-    disposition: pending
-    disposition_rationale: null
+    disposition: deferred
+    disposition_rationale: "Real and unscheduled. config_sha256 is harness work with no owner; named in the plan's carried section rather than given a Phase 4 slice. Not dismissed - it is the constraint the August corpus loss produced."
   - id: O3
     category: scope
     severity: high
     claim: "Slice 12 publishes a per-tier latency table, and no Tier B figure has ever been measured on a Tier B machine; the only one that exists is a simulated constraint on Tier A hardware."
     evidence: "Plan L36. docs/gates/phase-1.md:95-98. AMANUENSIS_PRD.md:2609-2614, 147-149."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The README states in its own text that no Tier B machine has ever been measured and points the reader at manu install for their own number. Folded into S7."
   - id: O4
     category: implementation
     severity: critical
     claim: "The asynchronous restore reintroduces a race the injector's own source names as worse than the clipboard-manager one and entirely self-inflicted; its failure mode is the user's previous clipboard pasted into their document, which a tray report cannot undo."
     evidence: "Plan L15-17, L33. src/amanuensis/injection/macos.py:132-137. AMANUENSIS_PRD.md:1320-1332."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D1: priced from the operator's own 92 consecutive pairs. 0 would have been helped. The build-or-decline call returns to the operator with the number in hand."
   - id: O5
     category: implementation
     severity: high
     claim: "A restore that outlives inject() breaks the one synchronisation rule the concurrency model has, and makes restore_ms structurally zero in history.db — the same shape as the missing column this project already shipped once."
     evidence: "src/amanuensis/controllers/dictation_controller.py:210-221, 454-464. AMANUENSIS_PRD.md:1305-1318. src/amanuensis/storage/history.py:211-214, 650-668."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Same measurement. If the restore is declined the restore_ms-goes-to-zero shape never arises; if it is built, the interlock and the completion-event ordering are both explicit requirements."
   - id: O6
     category: alternatives
     severity: high
     claim: "The plan does not weigh doing nothing: the 155 ms is already outside G1 by the PRD's own boundary, and nothing measures how often worker occupancy costs a user anything."
     evidence: "Plan L33. AMANUENSIS_PRD.md:88-93, 1018-1026. No contention figure appears in the plan, the PRD, or docs/gates/phase-3.md."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "This objection is what D1 answered. The benefit was stated in milliseconds and never priced; it is now priced at 0 of 92 pairs over a month of real dictation."
   - id: O7
     category: risk
     severity: critical
     claim: "Decision 2 puts a network fetch on the daemon's first run, which is the path 7.6 forbids, and slice 13 states no rule for what its capture is permitted to see — leaving a check that either passes by excluding the thing it was asked to observe, or fails by construction."
     evidence: "Plan L13-14, L35, L37, L67-70. AMANUENSIS_PRD.md:2025-2026 ('Never at runtime'). src/amanuensis/engines/faster_whisper.py:11-19. scripts/verify_g3.py:236-241, 282-283, 77-78."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D2: 'first run' means the installer invoked by first launch. manu install stays, S7.6's never-at-runtime is unchanged, and the packet capture keeps its current meaning. S11.3 resolved accordingly."
   - id: O8
     category: risk
     severity: high
     claim: "No checksum verification exists in the download path today, slice 11's completion criterion is satisfied without one, and slice 10 introduces two engines whose weights have no pinned revision at all."
     evidence: "src/amanuensis/engines/faster_whisper.py:195-213 (revision pin only, no digest), 101-105. Plan L34-35. AMANUENSIS_PRD.md:2025-2026."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "download_weights verifies no digest while S7.6 claims checksum verification - a stated constraint the code does not honour, sixth instance. S1's criterion names the property rather than the outcome."
   - id: O9
     category: implementation
     severity: high
     claim: "Decision 1 defers the .app bundle on 5.4 confidence grounds alone, but the bundle also carries the permission identity the n=1 install gate depends on — and the overlay cannot discharge that job."
     evidence: "Plan L10-12, L31, L65-66. src/amanuensis/injection/macos.py:29-35, 108-112. AMANUENSIS_PRD.md:2776, 1186-1193."
-    disposition: pending
-    disposition_rationale: null
+    disposition: deferred
+    disposition_rationale: "The bundle deferral stands on cost grounds. The permission-identity risk is recorded and the README instructs the tester to grant to their terminal, which the shipped remediation text already does well. Revisit if the gate's defect list is dominated by it."
   - id: O10
     category: specification quality
     severity: high
     claim: "Slice 6's completion criterion is already satisfied by shipped code, slice 7's is unfalsifiable, and decision 1's deciding test has no criterion, no tester and no threshold."
     evidence: "Plan L30-31, L10-12. src/amanuensis/ui/indicator.py:53-72, src/amanuensis/cli.py:647-650. AMANUENSIS_PRD.md:2092-2097."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The confidence test is written before the overlay is built. Slice criteria renamed to name what is new rather than what ui/indicator.py already ships."
   - id: O11
     category: risk
     severity: high
     claim: "Items 15 and 16 are offered as cuttable against 'named as debt in the gate record', which is a record and not a mitigation — and the two readers who need those facts read the README and the engine comparison, not the gate record."
     evidence: "Plan L44-54. docs/gates/phase-3.md:117-127, 155-173. HARNESS.md:176-182."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "D4, in the diaboli's own narrower form: item 16 is carried in Phase 4 because a user-facing number depends on the instrument it controls; item 15 is disclosed in the README - not only the gate record - and fixed in its own named phase."
   - id: O12
     category: specification quality
     severity: medium
     claim: "The README depends on slices 9, 10 and 11 but not on item 14, so the per-tier latency table can publish with G1 at ten seconds still unmeasured, and the n=1 gate sits behind the two largest slices with no stated fallback."
     evidence: "Plan L36, L41-43. docs/gates/phase-3.md:142-145, 344-346, 89-92."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "G1 at ten seconds is a precondition of S7 rather than an item beside the phase, so the latency table cannot publish without it."
 ---
 
 # Objection record — Amanuensis Phase 4 plan
