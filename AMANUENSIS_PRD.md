@@ -1980,6 +1980,43 @@ ordinary copy:
 | **Transcript, default config — restore on, `restore_delay_ms = 150`** | **yes** |
 | Transcript, `restore_clipboard = false` | yes |
 
+**The asynchronous restore is refused, and this is the third time the question
+has been asked** (2026-09-02, Phase 4 slice S5, operator disposition D1).
+Phase 2b declined it because the restore thread races the next dictation. The
+Phase 4 plan reversed that on the argument that the tray could now report the
+failure. It is refused again, on a measurement rather than an argument.
+
+`scripts/price_restore.py` reads the operator's own history — 93 rows across
+2026-08-03 to 2026-09-01, 92 consecutive pairs:
+
+| | |
+|---|---|
+| `restore_ms` | p50 155.2, p95 155.9, max 156.3 |
+| slack between dictations | p50 92.4 s, p05 −4.8 s, min −5.5 s |
+| pairs the async restore would have helped | **0** |
+| pairs where the worker was busy with real work anyway | 9 |
+
+Nine pairs overlapped and every one overlapped by roughly **five seconds**
+against a restore of 0.155 s. Moving it off the worker buys 2.8% of the
+contention in the only cases where there was any, and in the other 83 the
+worker was idle by a median of a minute and a half.
+
+Against that: `injection/macos.py` states that restoring without waiting for
+the paste "would race the paste itself, which is a worse race than the
+clipboard-manager one and entirely self-inflicted" — and the tray reporting
+that failure does not undo it. The failure is the user's *previous* clipboard
+landing in their document, which is visible only after it has happened. A
+recorded risk is not a mitigation.
+
+Note also what the plan's argument assumed and this section already knew: the
+restore protects nothing measurable. Phase 2a found Maccy 2.7.0 captured the
+transcript with restore on at 150 ms, with a positive control proving the
+instrument could see an ordinary copy.
+
+**This is now settled rather than open.** Reopening it requires a measurement
+showing the operator's inter-dictation gap has changed, not an argument that
+155 ms is a lot of milliseconds.
+
 A 150 ms window is not a mitigation. The transcript of every dictation is
 recorded by a clipboard manager running on default settings, which is what this
 section already said and now no longer has to assert.
@@ -3127,6 +3164,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-02 | **The asynchronous clipboard restore is refused for the third time, now on a measurement** (§7.3, Phase 4 slice S5, operator disposition D1). Phase 2b declined it because the restore races the next dictation; the Phase 4 plan reversed that on the argument that the tray could now report the failure. `scripts/price_restore.py` reads the operator's own 93 rows: over **92 consecutive pairs, 0** would have been helped. The nine that overlapped did so by roughly **five seconds** against a 0.155 s restore. Reporting a failure does not undo it — the failure is the user's *previous* clipboard landing in their document, visible only after it has happened, and `injection/macos.py` already called this race "worse than the clipboard-manager one and entirely self-inflicted". **Settled rather than open**: reopening needs a measurement that the gap has changed, not an argument that 155 ms is a lot of milliseconds. **§7.3 floor item 1 gets its test.** The model was named in §6.3 and never checked, and `indicator.py`'s preamble calls main-thread discipline "the single most likely thing to be quietly removed" — which Phase 4 promptly did in `TrayApp`, undetected, because the fake main queue runs blocks inline. `tests/test_thread_model.py` drives all three UI surfaces through a **deferring** queue and asserts nothing touched AppKit before it ran. Generic over the surfaces on purpose: a per-surface check is one the fourth surface does not get. Carries its own positive control, and reverting either the tray's or the overlay's dispatch fails it. |
 | 2026-09-02 | **`manu status` and `manu toggle` ship, and §7.6 answers the question it never asked** (§6.3, §6.4, §7.3 floor item 3, §7.6, slicing record S4). The transport spent **two phases as a floor item with no phase**, which §7.3's own words call a floor item that does not exist. `ipc/` joins §6.4 on `hotkey/`'s pattern — `base.py`, `factory.py`, `macos.py` — and the unix socket does not appear in the CLI contract, which floor item 3 requires. **§7.6 gains the authority model.** It forbids interpreting a *transcript* as a command and never asked who may command the process that holds the microphone. The boundary is filesystem permissions and nothing else: `0600` inside a `0700` directory. That is the right level rather than a shortcut, because a same-user process can already synthesise the hotkey through `CGEvent`, open the microphone itself, read the clipboard the transcript transits, and read `history.db` — a socket that starts a dictation is strictly less than any of those, and a token would move the secret into a file with the same permissions as the socket. Three requirements follow: the transport **carries no transcript content ever** (a `status` returning the last transcript is an egress path the packet capture cannot see); unknown verbs are **refused, not ignored**, naming the ones that work; and a **stale socket is not a running daemon**, because reporting "nothing is listening" as "the daemon says it is idle" is a claim about the microphone nobody checked. **§6.3's thread table gains the acceptor's row** (choice-story #1). It had four rows and none served a socket, while the Phase 4 plan asserted threading was settled and booked no work for the fifth concern it was adding — floor item 1's failure shape one component over. A dedicated thread, because a main-thread `CFSocket` source couples the transport to AppKit and serving from the worker makes `manu status` block behind a decode. Found while building it: **`sun_path` is 104 bytes on macOS** and `$AMANUENSIS_DATA_DIR` can exceed it — pytest's own tmp tree does, at 129. Refused with a sentence naming the variable rather than the kernel's bare `AF_UNIX path too long`. |
 | 2026-09-02 | **`toggle` and `vad_auto` ship, and a refusal test opened the operator's microphone** (§5.2, §5.3, §9 Phase 4). `toggle` alternates on key-down and ignores the physical release; `vad_auto` starts on key-down and is ended by a new `SilenceWatcher` on the capture thread, because §5.2 is *press to start, silence ends the session* — the finger still opens the microphone and only the close is automatic. New **`[vad_auto]`** block rather than reusing `[vad]`: that block trims before transcription and its defaults are the ones §7.2's figures were measured under, this one decides when to stop recording, and the two want opposite windows. Sharing them would let a user tuning responsiveness silently move the configuration every published G1 figure was measured under. `max_seconds` is the floor under the mode's worst failure — §5.2 calls `vad_auto` the most likely to misfire and the dangerous misfire is the one that never fires, leaving the microphone open indefinitely. **The incident.** `test_the_daemon_refuses_a_mode_it_does_not_implement` passed `mode="toggle"` and asserted the daemon refused it as unbuilt. Building `toggle` removed the refusal, and the test did not fail — it **hung**, running `_daemon` for real: model loaded, microphone opened, AppKit run loop blocked inside pytest. Two such processes held the operator's microphone for **thirteen and ten minutes** and put two status items in his menu bar. He noticed; the suite did not. A test written against a refusal becomes a test that exercises the thing the moment the refusal is lifted, and it does not announce itself. `tests/conftest.py` gains an **autouse** `_no_real_microphone` guard — the same answer as the 2026-08-08 `_isolate_user_data` fixture, for the same species, because a guard each test must remember is a guard one test forgets. Positive and negative controls both present; removing the guard fails the positive one. |
 | 2026-09-02 | **§7.6's "checksum verification" is implemented, three phases after the sentence was written** (objection O8, §7.6, §9 Phase 4 slice S1). `download_weights` pinned a revision and verified **no digest at all** — sixth instance in this project of a stated constraint the code did not honour, and the first found by a sentinel rather than by a failure. `PINNED_DIGESTS` records a SHA-256 per file per pinned revision, `verify_weights` re-hashes after download and **raises**, and `manu install` prints what it checked. Digests are recorded *by this project* from snapshots it holds: Hugging Face content-addresses its own LFS blobs, so checking a download against hub metadata verifies the hub against itself. A model with **no** recorded digest is reported unverified rather than passed — Moonshine and Parakeet arrive in Phase 4 in exactly that state, and a check that passes for a model it has no record of is a check that cannot fail. Both controls, both verified by sabotage: one wrong hex digit fails the positive control, and a `verify_weights` that always succeeds fails both negative controls. **Separately, writing the README first found a defect the gate would otherwise have spent itself on:** `src/amanuensis/assets/*.wav` is gitignored, so `manu install` fails on any fresh clone at the reference clip. Deliberate — §7.2 needs a clip that is not the user's voice and needs no microphone, and macOS `say` output has no clear redistribution grant — but nothing told the user. The README now generates it as its own step. The provenance is still open and still assigned to this phase. |
