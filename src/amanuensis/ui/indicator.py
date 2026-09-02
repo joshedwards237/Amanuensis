@@ -142,6 +142,30 @@ class RecordingIndicator:
                 return
         _main_queue().addOperationWithBlock_(lambda: self._draw(state))
 
+    def set_menu(self, menu: Any) -> None:
+        """Attach a menu to this status item. Safe from any thread.
+
+        Added in Phase 4 for `TrayApp`, and it lives here rather than there
+        because there must be exactly **one** `NSStatusItem` in this process:
+        two would put two glyphs in one menu bar, and §5.4's requirement is
+        that the user can read one state at a glance.
+
+        The glyph stays in the title regardless. §5.4 says recording state is
+        visible *without the menu open*, so a menu is an elaboration and never
+        the place the state lives.
+        """
+        with self._lock:
+            if self._item is None:
+                return
+        _main_queue().addOperationWithBlock_(lambda: self._attach(menu))
+
+    def _attach(self, menu: Any) -> None:
+        """Main thread only — see `set_menu`."""
+        item = self._item
+        if item is None:  # pragma: no cover — torn down between queue and run
+            return
+        item.setMenu_(menu)
+
     def run(self) -> None:
         """Run the AppKit loop. Blocks. Main thread only.
 

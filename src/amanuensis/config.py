@@ -52,6 +52,7 @@ __all__ = [
     "AudioConfig",
     "ConfigError",
     "EngineConfig",
+    "FeedbackConfig",
     "GuardConfig",
     "HistoryConfig",
     "HotkeyConfig",
@@ -223,6 +224,37 @@ class InjectionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class FeedbackConfig:
+    """§5.4's surfaces. The block existed in §5.4's prose and nowhere else.
+
+    `[feedback] sounds` has been cited by §5.4 since 2026-07-30 and there was
+    no `[feedback]` table in §5.3, no field here, and no code reading one — a
+    key specified and never built, which is `store_audio`'s shape a second
+    time. It is built now because Phase 4 owns §5.4.
+    """
+
+    #: The recording affordance with more presence than a glyph (§5.4, Phase 2b
+    #: finding 4). On: it is the deliverable the operator asked for after using
+    #: the glyph and finding it insufficient, and a privacy affordance that
+    #: ships off is one nobody sees. It is a key rather than a §5.3 bounded
+    #: exception because macOS's own microphone indicator carries §5.4's
+    #: *correctness* half regardless of what this product draws — so the
+    #: overlay is a confidence feature, and confidence is user-settable.
+    overlay: bool = True
+    #: Which screen edge. The panel must not cover the caret in the application
+    #: being dictated into, and which edge is safe depends on the user's
+    #: layout, so this cannot be hardcoded.
+    overlay_position: str = "bottom"
+    #: Audio cue on start and stop. Off, and quarantined under §5.3's rule that
+    #: off-by-default carries an obligation to measure: nothing has measured
+    #: how a cue on every dictation reads over a working day. §5.4 writes the
+    #: key as `sounds = true`, which is a key *and a value* rather than a
+    #: stated default — the two readings differ and the ambiguity is recorded
+    #: in §5.3 rather than resolved silently here.
+    sounds: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryConfig:
     #: Retention, *not* the write. §8's pre-injection write happens
     #: unconditionally; `retain = false` means the transcript never enters
@@ -242,6 +274,7 @@ class AppConfig:
     guard: GuardConfig = GuardConfig()
     postprocess: PostprocessConfig = PostprocessConfig()
     injection: InjectionConfig = InjectionConfig()
+    feedback: FeedbackConfig = FeedbackConfig()
     history: HistoryConfig = HistoryConfig()
 
 
@@ -394,6 +427,11 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "restore_delay_ms": _Rule((int,), _non_negative),
         "warn_on_clipboard_manager": _Rule((bool,)),
     },
+    "feedback": {
+        "overlay": _Rule((bool,)),
+        "overlay_position": _Rule((str,), _one_of("bottom", "top")),
+        "sounds": _Rule((bool,)),
+    },
     "history": {
         "retain": _Rule((bool,)),
         "retain_days": _Rule((int,), _non_negative),
@@ -409,6 +447,7 @@ _TOP_LEVEL_TABLES: Final = (
     "guard",
     "postprocess",
     "injection",
+    "feedback",
     "history",
 )
 
@@ -622,6 +661,9 @@ def load_config(path: Path | None = None) -> AppConfig:
         ),
         injection=InjectionConfig(
             **_collect("injection", raw.get("injection", {}), InjectionConfig)
+        ),
+        feedback=FeedbackConfig(
+            **_collect("feedback", raw.get("feedback", {}), FeedbackConfig)
         ),
         history=HistoryConfig(
             **_collect("history", raw.get("history", {}), HistoryConfig)

@@ -393,6 +393,34 @@ restore_clipboard = true
 restore_delay_ms = 150
 warn_on_clipboard_manager = true   # tray indicator when a manager is detected; see §7.3
 
+[feedback]                  # added 2026-09-02, Phase 4. §5.4 has referenced
+                            # `[feedback] sounds` since 2026-07-30 and no such
+                            # block existed; the key was specified and never
+                            # built. Second instance of that shape after
+                            # `store_audio`.
+overlay = true              # the §5.4 recording affordance with more presence
+                            # than a glyph. ON: it is the deliverable the
+                            # operator asked for after using the glyph and
+                            # finding it insufficient, and a privacy affordance
+                            # that ships off is one nobody sees. macOS's own
+                            # microphone indicator carries §5.4's *correctness*
+                            # half regardless, which is what makes this a key
+                            # rather than a §5.3 bounded exception.
+overlay_position = "bottom" # bottom | top. Where the panel sits. It must not
+                            # cover the caret in the application being dictated
+                            # into, and which edge is safe depends on the user's
+                            # layout, so this cannot be hardcoded.
+sounds = false              # audio cue on start and stop. OFF, and quarantined
+                            # under §5.3's own rule: nothing has measured how a
+                            # cue on every dictation reads over a working day,
+                            # and quarantine carries an obligation to measure.
+                            # §5.4 writes the key as `sounds = true`, which is
+                            # the key *and a value*, not a stated default —
+                            # recorded here because the two readings differ and
+                            # the ambiguity is three years old. §4's secondary
+                            # user is the reason this exists at all: a cue is
+                            # the one recording signal available without sight.
+
 [history]
 retain = true               # false: the transcript is still written before
                             # injection (§8, unconditional) and deleted once
@@ -455,6 +483,33 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   wrong, and §5.4's purpose is served by it regardless of what Amanuensis
   draws. That is a reason to build the richer affordance for *confidence*
   rather than for *correctness*.
+
+  **The confidence test, written 2026-09-02 before the overlay was built**
+  (choice-story #6, objection O10). The operator's decision sequences this —
+  `NSPanel` overlay now, a real `.app` bundle only if the overlay still fails —
+  which makes a large deferred item turn on a test. A criterion written after
+  the overlay is seen is a criterion written to pass, and this project has that
+  event on record: an earlier revision of the site spec picked its headline band
+  from five candidates by which read best, inside the section written to prevent
+  it. So the criterion is fixed here, in advance, and it is falsifiable:
+
+  > With a full-screen application focused and the menu bar auto-hidden, the
+  > user can answer **"is the microphone live right now?"** correctly, without
+  > moving the pointer, without keyboard input, and without waiting — on both a
+  > live and an idle daemon, three trials each, six of six.
+
+  Full-screen with the menu bar hidden is the condition, not a stress case: it
+  is where the Phase 2b glyph is not merely small but **absent**, and it is
+  ordinary for the writing and coding this product is for.
+
+  Two people judge it and the record carries both. The operator, because the
+  requirement came from his use and he is the one who reported the glyph
+  insufficient. And **the gate's second person**, as one question inside the
+  install observation — they are the only non-author user the phase contains,
+  and a first reaction cannot be had twice. If they disagree, the record says so
+  rather than averaging them.
+
+  **Failing it means the `.app` bundle**, which §9 already scopes.
 - **Clipboard exposure state** — when `strategy = "clipboard"` and a known
   clipboard manager is detected, the tray carries a persistent indicator that
   transcripts transit the system clipboard (§7.3, objection O12). Same
@@ -1379,6 +1434,7 @@ amanuensis/
 │   │   └── history.py            # HistoryStore
 │   └── ui/
 │       ├── indicator.py          # the minimum §5.4 surface (Phase 2b)
+│       ├── overlay.py            # the §5.4 recording affordance (Phase 4)
 │       └── tray.py               # TrayApp (Phase 4)
 ├── tests/
 │   └── fixtures/asr/             # desk-mic corpus + reference transcripts (§2, Phase 1)

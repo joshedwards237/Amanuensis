@@ -405,3 +405,58 @@ def test_retry_below_zero_is_accepted_as_never_retry(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[guard]\nretry_below_coverage = 0.0\n")
     assert load_config(path).guard.retry_below_coverage == 0.0
+
+
+# ---------------------------------------------------------------------------
+# [feedback] — §5.4's keys, specified 2026-07-30 and built 2026-09-02
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_defaults() -> None:
+    """§5.4 referenced `[feedback] sounds` for three phases with no such block.
+
+    `overlay` is on because it is the affordance the operator asked for after
+    finding the glyph insufficient, and a privacy affordance that ships off is
+    one nobody sees. `sounds` is off and quarantined under §5.3's rule: nothing
+    has measured how a cue on every dictation reads over a working day.
+    """
+    feedback = AppConfig().feedback
+    assert feedback.overlay is True
+    assert feedback.overlay_position == "bottom"
+    assert feedback.sounds is False
+
+
+def test_feedback_parses_from_toml(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[feedback]\noverlay = false\noverlay_position = "top"\nsounds = true\n'
+    )
+    feedback = load_config(path).feedback
+    assert feedback.overlay is False
+    assert feedback.overlay_position == "top"
+    assert feedback.sounds is True
+
+
+def test_feedback_rejects_an_unknown_position(tmp_path: Path) -> None:
+    """The overlay must not cover the caret, and "middle" has no meaning."""
+    path = tmp_path / "config.toml"
+    path.write_text('[feedback]\noverlay_position = "middle"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "overlay_position" in str(exc.value)
+
+
+def test_feedback_rejects_a_wrong_type(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[feedback]\noverlay = "yes"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "overlay" in str(exc.value)
+
+
+def test_feedback_rejects_an_unknown_key(tmp_path: Path) -> None:
+    """A typo that silently does nothing is how `store_audio` did nothing."""
+    path = tmp_path / "config.toml"
+    path.write_text("[feedback]\noverlays = true\n")
+    with pytest.raises(ConfigError):
+        load_config(path)

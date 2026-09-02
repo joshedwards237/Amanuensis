@@ -668,7 +668,7 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.injection.factory import UnsupportedPlatformError, create_injector
     from amanuensis.injection.macos import detect_clipboard_manager
     from amanuensis.storage.history import HistoryStore
-    from amanuensis.ui.indicator import RecordingIndicator
+    from amanuensis.ui.tray import TrayApp
 
     try:
         injector = create_injector(config.injection)
@@ -692,8 +692,9 @@ def _daemon(config: AppConfig) -> int:
             print(file=sys.stderr)
         return _EXIT_ERROR
 
+    exposure = detect_clipboard_manager()
     for warning in (
-        _clipboard_warning(config.injection, detect_clipboard_manager()),
+        _clipboard_warning(config.injection, exposure),
         _keystroke_warning(config.injection),
     ):
         if warning is not None:
@@ -741,7 +742,14 @@ def _daemon(config: AppConfig) -> int:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
-    indicator = RecordingIndicator()
+    # Phase 4: `TrayApp` composes the Phase 2b indicator rather than replacing
+    # it, so there is still exactly one status item — and the exposure the
+    # startup warning above prints to a terminal nobody is watching now has a
+    # persistent home (§5.4, §7.3).
+    tray = TrayApp()
+    tray.set_clipboard_exposure(
+        exposure if config.injection.warn_on_clipboard_manager else None
+    )
     controller = DictationController(
         config=config,
         engine=engine,
@@ -750,7 +758,7 @@ def _daemon(config: AppConfig) -> int:
         history=history,
         capture=capture,
         detector=detector,
-        on_state_change=indicator.set_state,
+        on_state_change=tray.set_state,
         vocabulary=vocabulary,
     )
 
@@ -758,7 +766,7 @@ def _daemon(config: AppConfig) -> int:
         # The listener's callbacks return nothing, deliberately: there is
         # nothing useful a callback could hand back to a thread that must not
         # wait for it (§6.3). The session is observed through history and the
-        # indicator, never through this return.
+        # tray, never through this return.
         controller.end_session()
 
     try:
@@ -769,20 +777,21 @@ def _daemon(config: AppConfig) -> int:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
-    signal.signal(signal.SIGINT, lambda *_: indicator.stop())
-    signal.signal(signal.SIGTERM, lambda *_: indicator.stop())
+    tray.set_on_quit(tray.stop)
+    signal.signal(signal.SIGINT, lambda *_: tray.stop())
+    signal.signal(signal.SIGTERM, lambda *_: tray.stop())
 
     print(
         f"listening — hold {config.hotkey.binding} to dictate. Ctrl-C to stop.",
         flush=True,
     )
-    indicator.show()
+    tray.show()
     try:
-        indicator.run()
+        tray.run()
     finally:
         # Whatever ended the loop, the microphone is released and the tap is
         # torn down. A daemon that exits still holding either is §5.4's
-        # failure with the indicator already gone.
+        # failure with the tray already gone.
         listener.stop()
         controller.shutdown()
         print("stopped.")
