@@ -626,3 +626,30 @@ def test_push_to_talk_is_unchanged_by_the_toggle_work(
 def test_toggle_is_accepted_by_the_listener() -> None:
     """It refused with "not built yet — Phase 2b is push_to_talk only"."""
     MacOSHotkeyListener(HotkeyConfig(mode="toggle"))
+
+
+def test_a_failed_start_does_not_desync_the_toggle(
+    toggle_listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    """Found by the stress pass, and it inverts the key for good.
+
+    The flip used to be committed before the callback ran. If `on_press`
+    raised — the controller refusing to start is the plausible case — the
+    listener believed a session was open when none was, so the *next* tap sent
+    a release for a session that never began and every tap after that was
+    inverted. The user's only repair would be pressing the key an odd number of
+    times without knowing why.
+    """
+    events: list[str] = []
+
+    def refuse() -> None:
+        events.append("press-attempt")
+        raise RuntimeError("controller refused to start")
+
+    toggle_listener.start(refuse, lambda: events.append("release"))
+
+    _tap(quartz)
+    _tap(quartz)
+
+    assert "release" not in events, "a release fired for a session that never started"
+    assert events == ["press-attempt", "press-attempt"]

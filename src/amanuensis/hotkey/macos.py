@@ -360,8 +360,12 @@ class MacOSHotkeyListener(HotkeyListener):
             return None
         if self._config.mode == "vad_auto":
             return self._on_press
-        self._session_open = not self._session_open
-        return self._on_press if self._session_open else self._on_release
+        # The flip is **not** committed here. If the callback raises — the
+        # controller refusing to start, most plausibly — a listener that had
+        # already flipped would send a `release` on the next tap for a session
+        # that never began, and every tap after that would be inverted. The
+        # caller commits on success; see `_on_event`.
+        return self._on_press if not self._session_open else self._on_release
 
     def _on_event(
         self, _proxy: Any, event_type: int, event: Any, _user_info: Any
@@ -406,5 +410,12 @@ class MacOSHotkeyListener(HotkeyListener):
                 # and then into CFRunLoop's C stack. It is not a traceback the
                 # user reads; it is a hotkey that stops working. The callbacks
                 # are the controller's, which reports its own errors.
-                pass
+                #
+                # It also leaves `toggle` where it was. A flip committed before
+                # the callback would invert every tap that followed a single
+                # failed start, and the user's only repair would be to press
+                # the key an odd number of times without knowing it.
+                return event
+            if self._config.mode == "toggle" and down:
+                self._session_open = not self._session_open
         return event

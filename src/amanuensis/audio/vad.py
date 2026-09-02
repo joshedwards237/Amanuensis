@@ -301,6 +301,15 @@ class SilenceWatcher:
         # because a long block of loud audio overflows float32's mantissa
         # before it overflows anything a microphone can produce.
         level = float(np.sqrt(np.mean(np.square(block.astype(np.float64)))))
+        if not np.isfinite(level):
+            # A device glitch producing NaN would otherwise end the session:
+            # `nan >= threshold` is False, so it routes straight into the
+            # silence accumulator and cuts the dictation short. The safe
+            # direction is the one that keeps the microphone open — ending
+            # early loses the user's words, and `max_seconds` is already the
+            # floor under never ending at all.
+            self._silent_samples = 0
+            return False
         if level >= self._config.threshold:
             self._heard_speech = True
             self._silent_samples = 0
@@ -310,6 +319,14 @@ class SilenceWatcher:
             return False
 
         self._silent_samples += block.size
+        # No floor on this, deliberately. `silence_ms = 0` computes zero and
+        # `max(1, ...)` was added here for a moment before a sabotage check
+        # showed it changed nothing: the comparison is only reached after
+        # `_silent_samples` has grown by at least one sample, because an empty
+        # block returns above. Zero and one are indistinguishable, so the guard
+        # was dead code with a test that could not fail. `silence_ms = 0`
+        # meaning "end at the first silence" is a coherent reading, and config
+        # validation rejects it anyway.
         needed = self._config.silence_ms * self._sample_rate // 1000
         if self._silent_samples >= needed:
             self._ended = True

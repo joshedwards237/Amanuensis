@@ -248,3 +248,25 @@ def test_an_empty_block_does_not_raise() -> None:
     """PortAudio can hand back a zero-length block on a device change."""
     watcher = SilenceWatcher(VadAutoConfig(), sample_rate=_RATE)
     assert watcher.feed(np.zeros(0, dtype=np.float32)) is False
+
+
+def test_non_finite_audio_is_not_treated_as_silence() -> None:
+    """A device glitch must not end the session (found by the stress pass).
+
+    `float("nan") >= threshold` is False, so NaN routed straight into the
+    silence accumulator and cut the dictation short — silently, and in the one
+    direction §8 exists to refuse. The safe direction is the one that keeps the
+    microphone open: ending early loses the user's words, and `max_seconds` is
+    already the floor under never ending at all.
+    """
+    watcher = SilenceWatcher(VadAutoConfig(silence_ms=300), sample_rate=_RATE)
+    assert _blocks(watcher, loud=True, ms=400) is False
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        watcher = SilenceWatcher(VadAutoConfig(silence_ms=300), sample_rate=_RATE)
+        _blocks(watcher, loud=True, ms=400)
+        ended = False
+        for _ in range(40):
+            block = np.full(_BLOCK, bad, dtype=np.float32)
+            ended = watcher.feed(block) or ended
+        assert ended is False, f"{bad} ended the session"
