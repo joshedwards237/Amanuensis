@@ -230,3 +230,28 @@ def test_record_captures_for_a_fixed_duration(
 
     assert len(audio) == 3 * fake_sd.streams[0]._blocksize
     assert capture.is_recording is False
+
+
+def test_the_microphone_guard_fires(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The positive control for `conftest._no_real_microphone`.
+
+    Without this, the guard is a fixture that could be silently removed and
+    every test would still pass — which is precisely how the situation it
+    guards against arose.
+    """
+    from amanuensis.audio import capture as capture_module
+    from conftest import MicrophoneOpenedInTestError
+
+    with pytest.raises(MicrophoneOpenedInTestError):
+        capture_module._sounddevice()
+
+
+def test_a_test_that_supplies_its_own_device_is_unaffected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative control. The guard must not break the fakes the capture
+    tests already install, or it would be a guard people rip out."""
+    from amanuensis.audio import capture as capture_module
+
+    monkeypatch.setattr(capture_module, "_sounddevice", lambda: "a fake device")
+    assert capture_module._sounddevice() == "a fake device"

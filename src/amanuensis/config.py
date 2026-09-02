@@ -59,6 +59,7 @@ __all__ = [
     "InjectionConfig",
     "LLMConfig",
     "PostprocessConfig",
+    "VadAutoConfig",
     "VadConfig",
     "default_config_path",
     "default_data_dir",
@@ -224,6 +225,34 @@ class InjectionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VadAutoConfig:
+    """§5.2's third capture mode: press to start, silence ends the session.
+
+    Separate from `VadConfig` on purpose. That one trims silence *before
+    transcription* and its defaults are the ones §7.2's latency figures were
+    measured under; this one decides *when to stop recording*. The two want
+    opposite windows — trimming wants a long one because cutting into speech
+    loses words, ending wants a short one because the window is dead time on
+    every dictation in the mode — so sharing them would mean a user tuning
+    responsiveness had silently moved the configuration every published G1
+    figure was measured under.
+    """
+
+    #: Trailing silence that ends a session.
+    silence_ms: int = 1200
+    #: RMS below this is silence. A plain level test rather than Silero: this
+    #: runs per block on the capture thread, and its failure modes are bounded
+    #: in a way a neural verdict's are not — too early costs the tail of a
+    #: sentence, too late costs a wait.
+    threshold: float = 0.02
+    #: Hard stop. §5.2 calls this "the mode most likely to misfire" and the
+    #: dangerous misfire is the one that never fires: a detector that misses
+    #: the end leaves the microphone open indefinitely, which is §5.4's failure
+    #: rather than an annoyance.
+    max_seconds: int = 120
+
+
+@dataclass(frozen=True, slots=True)
 class FeedbackConfig:
     """§5.4's surfaces. The block existed in §5.4's prose and nowhere else.
 
@@ -274,6 +303,7 @@ class AppConfig:
     guard: GuardConfig = GuardConfig()
     postprocess: PostprocessConfig = PostprocessConfig()
     injection: InjectionConfig = InjectionConfig()
+    vad_auto: VadAutoConfig = VadAutoConfig()
     feedback: FeedbackConfig = FeedbackConfig()
     history: HistoryConfig = HistoryConfig()
 
@@ -427,6 +457,11 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "restore_delay_ms": _Rule((int,), _non_negative),
         "warn_on_clipboard_manager": _Rule((bool,)),
     },
+    "vad_auto": {
+        "silence_ms": _Rule((int,), _positive),
+        "threshold": _Rule((float, int), _non_negative),
+        "max_seconds": _Rule((int,), _positive),
+    },
     "feedback": {
         "overlay": _Rule((bool,)),
         "overlay_position": _Rule((str,), _one_of("bottom", "top")),
@@ -447,6 +482,7 @@ _TOP_LEVEL_TABLES: Final = (
     "guard",
     "postprocess",
     "injection",
+    "vad_auto",
     "feedback",
     "history",
 )
@@ -661,6 +697,9 @@ def load_config(path: Path | None = None) -> AppConfig:
         ),
         injection=InjectionConfig(
             **_collect("injection", raw.get("injection", {}), InjectionConfig)
+        ),
+        vad_auto=VadAutoConfig(
+            **_collect("vad_auto", raw.get("vad_auto", {}), VadAutoConfig)
         ),
         feedback=FeedbackConfig(
             **_collect("feedback", raw.get("feedback", {}), FeedbackConfig)

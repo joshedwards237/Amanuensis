@@ -51,7 +51,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from amanuensis import __version__
 from amanuensis.config import AppConfig, ConfigError, InjectionConfig, load_config
@@ -655,9 +655,10 @@ def _daemon(config: AppConfig) -> int:
     microphone with no indicator to say so.
     """
     import signal
+    import threading
 
     from amanuensis.audio.capture import AudioCapture, DeviceNotFoundError
-    from amanuensis.audio.vad import VoiceActivityDetector
+    from amanuensis.audio.vad import SilenceWatcher, VoiceActivityDetector
     from amanuensis.controllers.dictation_controller import (
         DictationController,
         DictationState,
@@ -776,6 +777,33 @@ def _daemon(config: AppConfig) -> int:
         vocabulary=vocabulary,
     )
 
+    if config.hotkey.mode == "vad_auto":
+        # §5.2's third mode, and the half the listener structurally cannot do:
+        # it starts the session on the key press and nothing in the hotkey
+        # layer can see silence. The watcher runs on the PortAudio callback
+        # thread, so `end_session` is handed to the worker rather than done
+        # there — §6.3's rule that nothing blocks the capture thread.
+        watcher = SilenceWatcher(config.vad_auto, config.audio.sample_rate)
+
+        def _watch(block: Any) -> None:
+            if watcher.feed(block):
+                threading.Thread(
+                    target=controller.end_session,
+                    name="amanuensis-vad-auto-end",
+                    daemon=True,
+                ).start()
+
+        capture.set_observer(_watch)
+
+        def _start_session() -> None:
+            # Silence has to be re-earned every session, or the second
+            # dictation inherits the first one's trailing quiet and ends
+            # immediately.
+            watcher.reset()
+            controller.start_session()
+    else:
+        _start_session = controller.start_session
+
     def _on_release() -> None:
         # The listener's callbacks return nothing, deliberately: there is
         # nothing useful a callback could hand back to a thread that must not
@@ -785,7 +813,7 @@ def _daemon(config: AppConfig) -> int:
 
     try:
         controller.start()
-        listener.start(controller.start_session, _on_release)
+        listener.start(_start_session, _on_release)
     except (ModelNotAvailableError, DeviceNotFoundError, HotkeyPermissionError) as exc:
         controller.shutdown()
         print(f"manu daemon: {exc}", file=sys.stderr)

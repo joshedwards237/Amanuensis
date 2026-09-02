@@ -70,9 +70,14 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
-    from amanuensis.config import VadConfig
+    from amanuensis.config import VadAutoConfig, VadConfig
 
-__all__ = ["SUPPORTED_SAMPLE_RATES", "TrimResult", "VoiceActivityDetector"]
+__all__ = [
+    "SUPPORTED_SAMPLE_RATES",
+    "SilenceWatcher",
+    "TrimResult",
+    "VoiceActivityDetector",
+]
 
 #: 16 kHz only. Silero itself ships an 8 kHz head, but faster-whisper's wrapper
 #: hardcodes a 512-sample window, which is the 16 kHz frame size — feeding it
@@ -234,3 +239,79 @@ class VoiceActivityDetector:
             audio, options, sampling_rate=sample_rate
         )
         return segments
+
+
+class SilenceWatcher:
+    """When has the user stopped talking? §5.2's `vad_auto`, per audio block.
+
+    This is the half of `vad_auto` the hotkey listener structurally cannot do.
+    §5.2 is "press to start, silence detection ends the session": the finger
+    still opens the microphone and only the close is automatic, so the listener
+    starts the session and something watching the audio has to end it.
+
+    **It is a level test, not Silero, and that is a decision rather than a
+    shortcut.** It runs on the PortAudio callback thread for every block, where
+    a neural verdict would be both too slow and — more importantly — wrong in
+    an unbounded way. The failure modes of a level test are bounded and
+    opposite: too eager costs the tail of a sentence, too patient costs a wait.
+    The trimmer above still runs on the captured audio afterwards, so Silero's
+    judgement is not lost; it is applied where a mistake is recoverable.
+
+    **It never ends a session before it has heard speech.** A user presses the
+    key in a quiet room and draws breath; a watcher counting that silence would
+    end the session before they said anything, most reliably for the slowest
+    speakers, who are §4's secondary user. So silence only counts after speech.
+
+    **`max_seconds` is the floor under the mode's worst failure.** §5.2 calls
+    `vad_auto` the one most likely to misfire and the dangerous misfire is the
+    one that never fires: a detector that misses the end leaves the microphone
+    open indefinitely, which is §5.4's failure rather than an annoyance. It is
+    not a limit on how long you may dictate — it is the guarantee that the
+    microphone closes.
+    """
+
+    def __init__(self, config: VadAutoConfig, sample_rate: int) -> None:
+        self._config = config
+        self._sample_rate = sample_rate
+        self.reset()
+
+    def reset(self) -> None:
+        """Begin a fresh session. Silence must be re-earned by speech."""
+        self._heard_speech = False
+        self._silent_samples = 0
+        self._total_samples = 0
+        self._ended = False
+
+    def feed(self, block: NDArray[np.float32]) -> bool:
+        """Report whether this block ends the session.
+
+        Returns True **once**. The daemon calls `end_session` on that edge, and
+        a watcher that kept returning True would ask to end an already-ended
+        session on every block that followed.
+        """
+        if self._ended or block.size == 0:
+            return False
+
+        self._total_samples += block.size
+        if self._total_samples >= self._config.max_seconds * self._sample_rate:
+            self._ended = True
+            return True
+
+        # RMS over the block. float32 in, and the square is done in float64
+        # because a long block of loud audio overflows float32's mantissa
+        # before it overflows anything a microphone can produce.
+        level = float(np.sqrt(np.mean(np.square(block.astype(np.float64)))))
+        if level >= self._config.threshold:
+            self._heard_speech = True
+            self._silent_samples = 0
+            return False
+
+        if not self._heard_speech:
+            return False
+
+        self._silent_samples += block.size
+        needed = self._config.silence_ms * self._sample_rate // 1000
+        if self._silent_samples >= needed:
+            self._ended = True
+            return True
+        return False
