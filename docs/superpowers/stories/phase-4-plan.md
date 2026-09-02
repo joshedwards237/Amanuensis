@@ -57,8 +57,8 @@ stories:
   - id: 11
     lens: [consequences, defaults]
     title: spoken_commands stays off by never deciding
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: \"Exits 2 and 3 together: the default is flipped ON and the sunset clause is rewritten to a condition that can discriminate - retire it if it does not fire across 20 dictations in which the phrase was actually spoken. Deleting on the Phase 3 zero would have discarded the product's only structure mechanism on a measurement that could not have come out otherwise. Checking this found a third fact neither the clause nor the gate knew: _COMMAND_RE needs a terminator on BOTH sides, and S7.5's dominant defect is Whisper omitting exactly those marks - so the rule's trigger is defeated by the error class it sits next to. Recorded in S7.5 and pinned by a test, not fixed: loosening the anchors is the change that deleted three content words once."
   - id: 12
     lens: [alternatives, forces]
     title: The gate's second person, unnamed and single-use

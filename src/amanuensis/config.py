@@ -195,12 +195,19 @@ class PostprocessConfig:
     #: adds a content word, and undoing it costs one keystroke against the 70%
     #: of dictations that otherwise need one added.
     terminal_punctuation: bool = True
-    #: "new paragraph" -> a blank line. Off by default because the rule
-    #: **deletes content words** and nothing measures it — no take in either
-    #: corpus contains one. The processor counts what it *would* have done even
-    #: while disabled, so the Phase 3 gate reports a real firing rate rather
-    #: than the structural zero a disabled rule would otherwise produce.
-    spoken_commands: bool = False
+    #: "new paragraph" -> a blank line. **On from 2026-09-02** (§5.3, §7.5,
+    #: choice-story #11). It was off from Phase 3 under a sunset clause — "if it
+    #: changes nothing, the code goes" — and the Phase 3 gate returned zero over
+    #: a corpus containing no spoken command, which cannot tell a rule that does
+    #: nothing from a rule that was never invoked. Flipping costs nothing until
+    #: the phrase is spoken.
+    #:
+    #: It is still the one rule here that **deletes content words**, which is
+    #: why `_COMMAND_RE` fires only on a complete standalone sentence — and why
+    #: §7.5 records that those same anchors are the punctuation Whisper omits.
+    #: The processor counts what it *would* have done even while disabled, so a
+    #: gate reports a real firing rate rather than a structural zero.
+    spoken_commands: bool = True
     llm: LLMConfig = LLMConfig()
 
 

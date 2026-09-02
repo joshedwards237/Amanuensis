@@ -219,11 +219,44 @@ def test_the_default_configuration_neither_invents_nor_shrinks(text: str) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_spoken_commands_are_off_by_default() -> None:
-    """The rule deletes content words and nothing measures it — no take in
-    either corpus contains one."""
+def test_spoken_commands_are_on_by_default() -> None:
+    """On from 2026-09-02 (§5.3, §7.5, choice-story #11).
+
+    It was off from Phase 3 under a sunset clause — "if it changes nothing, the
+    code goes" — and the Phase 3 gate measured zero over a corpus containing no
+    spoken command, which cannot discriminate between a rule that does nothing
+    and a rule that was never invoked. Flipping costs nothing until the phrase
+    is spoken: the rule cannot fire on speech that does not contain it.
+    """
     text = "First point. New paragraph. Second point."
-    assert "new paragraph" in _processor().process(text, _session()).lower()
+    assert "new paragraph" not in _processor().process(text, _session()).lower()
+
+
+def test_the_command_anchors_need_a_terminator_on_both_sides() -> None:
+    """The trigger is defeated by §7.5's own dominant defect, and this pins it.
+
+    `_COMMAND_RE` requires start-of-transcript or `[.!?]` before the phrase and
+    `[.!?]` or end-of-transcript after. The Phase 3 gate measured 58 missing
+    sentence marks over ten dictations because Whisper supplies none at its own
+    segment ends — the same marks this rule anchors on.
+
+    These are the actual strings, not a description of them. The failing three
+    exist so that "fixing" this by loosening the trailing mark back to `[.!?]?`
+    turns them green and announces itself: that is the change that deleted three
+    content words from `Add a note. New line items are on order.`
+    """
+    processor = _processor()
+    fires = "First point. New paragraph. Second point."
+    assert "new paragraph" not in processor.process(fires, _session()).lower()
+
+    for survives in (
+        "That is the point New paragraph Second point",
+        "That is the point New paragraph. Second point",
+        "That is the point. New paragraph Second point",
+    ):
+        assert "new paragraph" in processor.process(survives, _session()).lower(), (
+            f"the anchors let this through unchanged today: {survives!r}"
+        )
 
 
 def test_spoken_commands_are_counted_even_while_disabled() -> None:
@@ -236,7 +269,7 @@ def test_spoken_commands_are_counted_even_while_disabled() -> None:
     constraint. So it detects and counts always, and transforms only when
     enabled: a real measurement at zero lossiness.
     """
-    processor = _processor()
+    processor = _processor(spoken_commands=False)
     text = "First point. New paragraph. Second point."
     out, fired = processor.process_traced(text, _session())
 
@@ -249,7 +282,9 @@ def test_spoken_commands_are_counted_even_while_disabled() -> None:
 def test_a_counted_candidate_is_not_reported_as_a_change() -> None:
     """The trace has to distinguish "fired" from "would have fired", or the gate
     reads a count of near-misses as a count of edits."""
-    _, fired = _processor().process_traced("First. New paragraph. Second.", _session())
+    _, fired = _processor(spoken_commands=False).process_traced(
+        "First. New paragraph. Second.", _session()
+    )
     assert "spoken_commands" not in fired
     assert "spoken_commands:candidate" in fired
 

@@ -372,11 +372,15 @@ terminal_punctuation = true # added 2026-08-08, Phase 3. Appends "." when the
                             # filename field. §7.3's own standard — "a tool that
                             # rewrites your punctuation has moved the problem" —
                             # is the argument for the key, not against the rule.
-spoken_commands = false     # added 2026-08-08, Phase 3. "new paragraph" -> \n\n.
-                            # Off by default because it DELETES content words and
-                            # nothing measures it: no take in either corpus
-                            # contains one. The Phase 3 gate reports its firing
-                            # rate; if it changes nothing, the code goes.
+spoken_commands = true      # added 2026-08-08 Phase 3, off; ON from 2026-09-02.
+                            # "new paragraph" -> \n\n. It DELETES content words,
+                            # so it fires only on a complete standalone sentence.
+                            # Retire it if it does not fire across 20 dictations
+                            # in which the phrase was actually spoken, with this
+                            # key on. The Phase 3 clause said "if it changes
+                            # nothing, the code goes" and measured zero over a
+                            # corpus containing no spoken command, which cannot
+                            # discriminate. See §7.5's note on the anchors.
 
 [postprocess.llm]
 enabled = false
@@ -1978,6 +1982,36 @@ over the same ten takes, **7 of 10** transcripts ended with no sentence-final
 punctuation and roughly ten spurious mid-sentence capitals appeared. Both are
 rule-shaped — which is the argument the next paragraph was already making.
 
+**`spoken_commands` is on from 2026-09-02, and its trigger is defeated by the
+defect this section is about.** `_COMMAND_RE` requires a terminator on **both**
+sides — start-of-transcript or `[.!?]` before the phrase, `[.!?]` or
+end-of-transcript after — because the trailing mark was once optional and
+`Add a note. New line items are on order.` lost three words to it. That
+tightening is correct and stays. But the Phase 3 gate measured **58 missing
+sentence marks over ten dictations**, root cause: Whisper supplies no mark at
+the end of its own segments. Those are the same marks the rule anchors on.
+Verified against the shipped regex:
+
+| transcript | fires |
+|---|---|
+| `That is the point. New paragraph. Second point.` | yes |
+| `That is the point New paragraph Second point` | no |
+| `That is the point New paragraph. Second point` | no |
+| `That is the point. New paragraph Second point` | no |
+
+So the Phase 3 firing rate of zero is **two facts stacked**, not one: the
+operator never said the phrase, and had he said it the anchors would most likely
+have been stripped before the rule saw them. The clause "if it changes nothing,
+the code goes" was written expecting the measurement to be about the rule; the
+corpus could not have produced any other number. §5.3's retirement condition is
+rewritten to one that can discriminate — twenty dictations in which the phrase
+was **actually spoken**, with the key on.
+
+Recorded rather than fixed. Loosening the anchors is the change that already
+deleted three content words once, and this is the one rule in the chain that
+deletes them. A user who says "new paragraph" and gets nothing has met this,
+and the README says so.
+
 Start with deterministic rules. They are debuggable, instant, and cover most of the value.
 
 A local LLM pass (Qwen3-0.6B or similar via llama.cpp) can do what rules cannot — reflowing
@@ -2930,6 +2964,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-02 | **`spoken_commands` is on by default, and the sunset clause that nearly deleted it could not have said anything else** (§5.3, §7.5, choice-story #11). Phase 3 shipped the rule off under "if it changes nothing, the code goes" and the gate returned **zero** — over a corpus that contains no spoken command, so the number measures the speaker's habit rather than the rule. The condition is rewritten to one that can discriminate: **twenty dictations in which the phrase was actually spoken, with the key on.** Flipping costs nothing until it is spoken, and it is the only paragraph mechanism the product has before Phase 5, which is unscheduled. Checking the flip found a third fact neither the clause nor the gate knew: **`_COMMAND_RE` requires a terminator on both sides of the phrase**, and §7.5's dominant defect is Whisper supplying no mark at its own segment ends — **58 missing marks over ten dictations**, the same marks the rule anchors on. Verified against the shipped regex; three of four realistic transcripts do not fire. The Phase 3 zero is therefore two facts stacked, and the rule's trigger is defeated by the error class it sits beside. **Recorded, not fixed** — loosening the trailing anchor back to `[.!?]?` is the change that deleted three content words from `Add a note. New line items are on order.`, and this is the one rule in the chain that deletes them. Pinned by a test carrying the actual strings. |
 | 2026-09-02 | **Three sentinels were run against the Phase 4 plan while it was still a sketch, and two of four operator decisions did not survive contact with the repository** (`docs/superpowers/{slices,objections,stories}/phase-4*`). Twelve objections, two critical. **The asynchronous clipboard restore was priced before it was built** and buys nothing: over 92 consecutive dictations spanning a month, **0 pairs** would have been helped — the nine that overlapped did so by ~5 s against a 0.155 s restore, and `injection/macos.py:132-137` already records that restoring without waiting for the paste is *a worse race than the clipboard-manager one and entirely self-inflicted*. **§11.3 is resolved as `manu install` invoked by first launch**, not as a fetch in the daemon: the phrase "at first run" would have put an HTTPS call inside the process whose silence G3 verifies, and `verify_g3.py:77-78` fails on one socket or one byte with no notion of permitted install traffic. **§7.2 freezes the Phase 4 default before the benchmark runs**, because a benchmark whose consequence is decided after the table is seen selects its own outcome — the site's headline band is the precedent — and the deliverable gains **deletion counts**, the axis ADR 0001 actually decided Moonshine on and the one `classify_edits` merges into `decoder_words`. Also found and unfixed: `download_weights` verifies **no digest** while §7.6 claims checksum verification (sixth instance of a stated constraint the code does not honour), and **§6.3's thread table has four rows and none serves a socket** — floor item 1's failure shape one component over, in the phase that adds the acceptor. |
 | 2026-09-02 | **G2's threshold is confirmed at 5% and the miss is carried as debt** (§2, §9, `docs/gates/phase-3.md`). §9 permits moving a missed threshold and requires the reason stated; the Phase 3 gate measured the reason — 95% of the 8.59% is decoder-side, 58% of *that* is one class no rule reaches — and left the number to the operator. Disposition: **do not move it.** A measured reason to move is not an obligation to, and `small.en` reaches 7.88% on the same corpus while being priced out only by G1's p95 — so relaxing the target before the engine question is settled would fix 8.59% as acceptable using evidence the Phase 4 gate may overturn. Revisited there. Also **§11.4 is resolved by observation rather than by decision**: the repository has been public since it was created on 2026-07-31, three phases before this section expected to answer the question, and every `.gitignore` argument about verbatim dictation was made in an interval this document still described as open. |
 | 2026-08-08 | **A code-mode review found §8 losing a transcript, and the fix for the same hazard three weeks earlier had closed one third of the window.** `_process` assigned `session.raw_transcript` *after* `_judge` returned, and `_judge` runs a second decode for §5.7's retry — so a raise there reached the handler with the decoder's words in a local variable and nothing persisted. Reproduced. The earlier disposition (objection O1) had guarded the post-processing chain and been recorded as restoring the guarantee; the window between "the words exist" and "the words are safe" still spanned a second decode and a guard evaluation. **Fixing an instance is not fixing a shape**, and this is the fifth time this project has recorded the specification asserting a guarantee the code did not honour. The transcript is now on the session the moment it exists, and the failure path writes it. |
