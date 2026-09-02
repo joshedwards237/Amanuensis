@@ -179,3 +179,83 @@ a replacement boundary.
   difference as an engine difference.
 - **Edit rate (G2) is untouched.** That is Phase 3, and it is the actual
   product goal.
+
+---
+
+## Reconsidered at the Phase 4 gate, 2026-09-02, and declined again
+
+§7.2 marked this decision open after the Phase 3 gate: the dominant error class
+turned out to be punctuation — 58 missing sentence marks and 41 stray capitals,
+99 of 171 edits — no faster-whisper model size fixed it, and neither Moonshine
+nor Parakeet had ever been benchmarked *for punctuation*. This ADR was declined
+on deletions and that axis had nothing to say about marks.
+
+`engines/moonshine.py` was written for this (§6.4 had declared it since Phase 0
+and it did not exist), and `scripts/bench_punctuation.py` ran it against the
+same ten takes and the same `classify_edits` the Phase 3 gate used. **The
+decision does not change, and the reason it does not change is new.**
+
+### 1. Moonshine reaches the network when a model loads
+
+Two `create_connection` attempts to `huggingface.co:443` per `load()`, observed
+directly with the socket layer blocked. It completes when blocked — it falls
+back to the local cache — but it *tries first*.
+
+Goal G3 is "no network at runtime", verified by packet capture, and
+`scripts/verify_g3.py` fails on **one socket or one byte**. faster-whisper
+cannot do this: `load()` resolves with `local_files_only=True` and a cold cache
+raises an error naming `manu install`, which `engines/faster_whisper.py` calls a
+*structural* property rather than a behaviour. Moonshine's is not structural.
+
+**This disqualifies it as a runtime dependency independently of accuracy.** It
+stays the `bench` optional dependency it already was. A fix exists in principle
+— pre-resolve the path with local-only semantics before constructing the model,
+mirroring what `faster_whisper.py` does — and nobody has written it.
+
+### 2. On real long-form dictation it collapses
+
+The same ten takes, 67–97 s each, through the shipped post-processing chain and
+the frozen dictionary:
+
+| engine | edit rate | missing marks | stray caps | **deletions** | p50 | p95 |
+|---|---|---|---|---|---|---|
+| `faster_whisper` / `tiny.en` (as shipped) | **8.59%** | 58 | 41 | **3** | — | — |
+| `moonshine/tiny` | 98.19% | 29 | 7 | **715** | 868 ms | 1174 ms |
+| `moonshine/base` | 130.94% | 9 | 4 | **866** | 1598 ms | 2246 ms |
+
+The harness reproduces the shipped baseline exactly — 8.59%, 58, 41 — which is
+the control that says it is measuring the right thing.
+
+**The apparently better punctuation columns are an artifact.** An edit rate
+above 100% means more edits than reference words; the engine produced so little
+correct text that there were fewer opportunities to miss a mark. `moonshine/tiny`
+degenerates into a repetition loop on a 97-second take — *"it works very very
+fast it works very very fast"* — which is the collapse class §5.7's guard
+exists for. This ADR's original finding, 12–14 deletions on short clips, becomes
+715 on long ones.
+
+### 3. What is still unmeasured, and is not being quietly dropped
+
+**Moonshine has not been fairly compared on short utterances**, which is the
+length it is designed for and the operator's ordinary case — the G1 corpus
+recorded the same day is 7.5–10.0 s.
+
+An attempt was made and **withdrawn as invalid**. It used the nine scripts the
+operator read as ground truth, and scored the *shipped* product at 54.09% —
+implausible against 8.59% on the Phase 3 corpus, so the instrument was wrong
+rather than the engines. The cause was immediate on inspection: the operator
+contracted naturally while reading ("I have started" → "I've started", "There is
+a box" → "There's a box"), and the alignment charged his own speech as decoder
+error. **A reference transcript has to be what the speaker said, not what they
+were asked to say** — which is why the Phase 3 method uses corrections the
+operator wrote against real output.
+
+Getting a valid answer needs ten short transcripts corrected the way the Phase 3
+corpus was. Until then the short-utterance punctuation question is **open and
+labelled open**, not closed by silence.
+
+### 4. Parakeet has never been benchmarked at all
+
+§7.2 names it and nothing in this project has ever run it. NVIDIA NeMo has no
+CoreML or Metal path on macOS. `registry.py` declares it unbuilt and says so
+when asked. Recorded as a gap in the Phase 4 gate rather than resolved.

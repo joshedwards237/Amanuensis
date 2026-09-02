@@ -1764,6 +1764,27 @@ Three things this settles and one it opens.
   rules chain has no rule that lowercases anything. This is structural, not a
   tuning parameter.
 
+**CLOSED 2026-09-02 at the Phase 4 gate, on network behaviour rather than
+accuracy** (ADR 0001's reconsideration note; `scripts/bench_punctuation.py`).
+Moonshine makes two connection attempts to `huggingface.co:443` every time a
+model loads. It falls back to the local cache when blocked, but G3 is verified
+by packet capture and `verify_g3.py` fails on one socket — faster-whisper's
+no-network property is structural and Moonshine's is not, so it is disqualified
+as a runtime dependency before accuracy is considered. On the Phase 3 corpus it
+also collapses: **715 and 866 deletions against faster-whisper's 3**, with
+`moonshine/tiny` degenerating into a repetition loop on a 97-second take.
+
+**One question inside this one stays open and is labelled open:** Moonshine has
+never been fairly compared on **short** utterances, which is the length it is
+built for and the operator's ordinary case. An attempt on 2026-09-02 was
+withdrawn as invalid — it used read scripts as ground truth and scored the
+*shipped* product at 54.09% against its real 8.59%, because the operator
+contracted naturally while reading and the alignment charged his own speech as
+decoder error. A reference transcript has to be what the speaker said, not what
+they were asked to say. **Parakeet has never been benchmarked at all.**
+
+The original note, which the above answers:
+
 **Open, and marked here deliberately: the model may be the constraint rather
 than the chain.** `small.en`'s 7.88% is the lowest edit rate this project has
 measured on real dictation, and it is unreachable only because of G1. If G1 is
