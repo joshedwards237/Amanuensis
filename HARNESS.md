@@ -146,6 +146,41 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
 - **Tool**: none yet
 - **Scope**: commit
 
+### A stored measurement carries the config that produced it
+
+- **Rule**: Every row in `history.db` records a digest of the configuration
+  that produced it, and a gate refuses a set whose rows do not share one.
+- **Enforcement**: unverified
+- **Tool**: none yet — needs a `config_sha256` column and a check in
+  `gate_phase3.py`
+- **Scope**: pr
+- **Notes**: Added 2026-09-02 at the Phase 3 gate. The 2026-08-18 corpus was
+  decoded under an `initial_prompt` cleared from `config.toml` **8m39s after
+  the last take**, and nothing in the database said so. It cost two weeks of an
+  invalid corpus, a gate scored against a dead configuration, and the operator
+  re-recording twenty minutes of dictation and rewriting ten transcripts of
+  corrections. It was found only because an unrelated investigation reached
+  `config.toml`'s mtime and compared it to the last `started_at` — nothing
+  about the discovery was systematic. Falsifiable: a row written after a config
+  edit produces a different digest, and the gate rejects a mixed set.
+
+### A gate's reject path has a control of its own
+
+- **Rule**: Every gate that can refuse must have a control demonstrating it
+  refusing for the reason it exists to refuse — not merely that its component
+  functions classify correctly.
+- **Enforcement**: unverified
+- **Tool**: none yet — a synthetic corrections set where chain-attributable
+  classes dominate, asserted to REJECT
+- **Scope**: pr
+- **Notes**: Added 2026-09-02. `classify_edits` has nine controls; the reject
+  clause built on top of it has none. §9's clause has fired exactly once in this
+  project's history, on a misattribution, and that firing was then removed by
+  fixing the misattribution. **A failing state observed only as an instrument
+  bug has not been observed.** This is objection O4 one level up: O4 checked
+  that the gate *could* fail and stopped at the classes, not at the decision
+  they feed.
+
 ### Sentinel index is not stale
 
 - **Rule**: PRD §14's sentinel-record index must match the actual disposition

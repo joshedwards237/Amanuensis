@@ -25,6 +25,30 @@
 
 ## GOTCHAS
 
+- **Audit the instrument when it agrees with you, not only when it does not.**
+  The Phase 3 gate returned REJECT, so `classify_edits` was audited and turned
+  out to be genuinely wrong — bucketing edits by the *shape* of a difference
+  where §9's clause is about *responsibility*, calling 107 of 171 edits
+  chain-attributable where the corrected split calls it 8. The rewrite survives
+  sabotage. But the trigger for looking was a verdict that displeased; a PASS
+  would not have been examined. The tell is procedural, not technical: if the
+  reason you opened the instrument was the outcome, the audit is downstream of
+  the outcome and cannot clear it. **Any instrument change that flips a verdict
+  is re-run against every prior corpus and the result stated** — including when
+  the prior corpus cannot tell the two instruments apart, which is what happened
+  here (August passes at 7.67% under both). "It passed both ways" is a finding
+  about the corpus's discriminating power and belongs next to the fix.
+
+- **Recall is not precision, and a rule is priced in the direction it runs.**
+  70% of the sentence marks the operator added sat on a Whisper segment
+  boundary — true, and nearly the basis for shipping a rule. The rule runs on
+  *boundaries*, of which there are 95 across ten takes, and only **31%** want a
+  mark. Measured end to end: 29 correct insertions against 66 invented, edit
+  rate 9.59% → 12.35%. The question a rule answers is "of the places I will
+  fire, how many should I" — never "of the places I should have fired, how many
+  did I reach". Both directions are one query apart; only one of them prices
+  the change.
+
 - **Verify a new test by breaking the code, not by reading it.** Phase 3 shipped
   two regression tests that could not fail — one passed the value under test as
   a literal argument, one asserted `>= 0.0` on a float defaulting to `0.0` — and
