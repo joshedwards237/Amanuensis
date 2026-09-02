@@ -7,16 +7,17 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: Phase 3 built 2026-08-08. **Gate not yet run — it needs the operator.**
+## Status: Phase 3 gate **PASSED** 2026-09-01. Phase 4 in progress.
 
 **The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
 your words appear at the cursor in whatever application has focus.
 
-Post-processing now runs: the rules pass fixes whitespace, sentence
-capitalisation and punctuation spacing, the dictionary is live on both
-mechanisms, and history retains and purges. What is *not* done is the **gate** —
-ten real dictations of ≥ 60 s judged on edit rate, which is dictation the
-operator has to do. Nothing below should be read as a gate result.
+The Phase 3 gate ran on ten real dictations of 67–97 s and **passed**: edit rate
+**8.59%**, of which 163 of 171 edits are the decoder's and 8 are the rules
+chain's. That misses goal G2's 5% and the threshold was **deliberately not
+moved** — the gap is carried as debt and revisited at the Phase 4 gate.
+[`docs/gates/phase-3.md`](docs/gates/phase-3.md) has the full record, including
+what the measurement cannot see.
 
 Working: model download and the install-time tier check (`manu install`), the
 global hotkey, the resident daemon, microphone capture, silence trimming,
@@ -78,6 +79,89 @@ binary — that is Phase 4.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
+
+---
+
+## Install
+
+macOS only (PRD §3) and Python **3.12 or later**. There is no packaged app, no
+installer and no signed binary yet — Phase 4 is where that lands. What follows is
+the whole path from nothing to a first dictation.
+
+**1. Get the source and install it.**
+
+```sh
+git clone https://github.com/joshedwards237/Amanuensis.git
+cd Amanuensis
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install .
+```
+
+**2. Download the model and measure this machine.**
+
+```sh
+manu install
+```
+
+This is **the only network access Amanuensis ever makes**, and it happens once.
+It fetches the ASR weights from Hugging Face over HTTPS at a pinned revision,
+then runs nine timed decodes on a reference clip to find out which speed tier
+your machine is in. Expect a few minutes — the download was measured at 185 s on
+the author's connection and yours will differ. It prints your tier and the p50
+and p95 it measured; those are your numbers, not ours.
+
+**3. Grant two macOS permissions.**
+
+The daemon needs **Accessibility** (to type into other applications) and **Input
+Monitoring** (to see the hotkey). They are separate panes in System Settings →
+Privacy & Security, and granting one does not grant the other.
+
+**The entry you are looking for carries your terminal's name, not "Amanuensis".**
+macOS attaches these grants to whatever launched the process, so look for
+Terminal, iTerm, Ghostty, or VS Code — whichever you ran `manu` from. This is a
+real wart and it goes away when Phase 4 ships an `.app` bundle. `manu daemon`
+names both permissions and tells you which is missing if you skip this step.
+
+**4. Dictate.**
+
+```sh
+manu daemon
+```
+
+Hold **right-option**, speak, release. The text appears at your cursor in
+whatever application has focus. A glyph appears in your menu bar while the daemon
+runs: `○` idle, `●` recording, `◐` transcribing. Stop the daemon with Ctrl-C.
+
+If you would rather check the pieces before binding a hotkey:
+
+```sh
+manu transcribe --seconds 10        # record and print, inject nothing
+```
+
+**5. Uninstall.**
+
+```sh
+manu history --purge                # transcripts, stored audio, and the database
+pip uninstall amanuensis
+rm -rf ~/Library/Application\ Support/amanuensis    # config, weights cache aside
+```
+
+The model weights live in the Hugging Face cache (`~/.cache/huggingface`) and are
+shared with anything else that uses them; delete that separately if you want the
+disk back. Revoke the two permissions in System Settings — uninstalling does not.
+
+### If it does not work
+
+- **Nothing happens when I hold right-option.** Input Monitoring is not granted
+  to the terminal you launched from. `manu daemon` says so on startup.
+- **The glyph goes `●` then nothing appears.** Accessibility is missing —
+  transcription worked, injection did not. `manu history --last` has your words.
+- **`⚠` after a dictation.** The collapse guard withheld the text because the
+  decoder stopped early. `manu history --last` has what it got.
+- **I said "new paragraph" and got the words instead of a break.** Known, and
+  the cause is documented in PRD §7.5: the rule fires only when the decoder
+  supplied sentence marks on both sides of the phrase, and it frequently does
+  not.
 
 ## What it will do
 
