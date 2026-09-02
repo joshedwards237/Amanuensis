@@ -14,6 +14,8 @@ row that §5.4 and §7.3 have both assigned to this phase.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from amanuensis.controllers.dictation_controller import DictationState
@@ -253,3 +255,99 @@ def test_show_creates_one_status_item_and_attaches_the_menu(
     titles = [row.title for row in item.menu.items]
     assert any("Accessibility permission was revoked" in t for t in titles)
     assert item.button().titles[-1] == "○", "the glyph must stay in the title"
+
+
+# ---------------------------------------------------------------------------
+# Found by the stress pass, not by the tests above
+# ---------------------------------------------------------------------------
+
+
+class _DeferredQueue:
+    """Records blocks instead of running them, which is what the real main
+    queue does. `_FakeMainQueue` runs them inline, and that is exactly why the
+    off-main-thread construction below passed every test until it was looked
+    for."""
+
+    def __init__(self) -> None:
+        self.blocks: list[Any] = []
+
+    def addOperationWithBlock_(self, block: Any) -> None:
+        self.blocks.append(block)
+
+    def drain(self) -> None:
+        for block in self.blocks:
+            block()
+        self.blocks.clear()
+
+
+def test_the_menu_is_built_on_the_main_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AppKit object creation is main-thread work.
+
+    `set_menu` dispatched the *attach*, which made this look right — while
+    `NSMenu.alloc()` and every `NSMenuItem` were constructed on whichever
+    thread reported the state change, i.e. the worker or the OS event tap.
+    `indicator.py`'s preamble names this as the single most likely thing to be
+    quietly removed, and it was quietly reintroduced one module over.
+    """
+    fake = _FakeAppKit()
+    allocated: list[int] = []
+
+    class _CountingMenu(_FakeMenu):
+        @classmethod
+        def alloc(cls) -> _CountingMenu:
+            allocated.append(1)
+            return cls()
+
+    fake.NSMenu = _CountingMenu  # type: ignore[attr-defined]
+    fake.NSMenuItem = _FakeMenuItem  # type: ignore[attr-defined]
+    queue = _DeferredQueue()
+    monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
+    monkeypatch.setattr(indicator_module, "_foundation", lambda: _FakeFoundation(queue))
+    monkeypatch.setattr(indicator_module, "_main_queue", lambda: queue)
+
+    tray = TrayApp()
+    tray.show()
+    queue.drain()
+    allocated.clear()
+
+    tray.set_error("built where?")
+    assert allocated == [], "an NSMenu was allocated off the main queue"
+    queue.drain()
+    assert allocated, "the menu was never built at all"
+
+
+def test_control_characters_never_reach_a_menu_row() -> None:
+    """`str.split()` handles whitespace and leaves NUL, BEL and escapes intact.
+
+    An exception message is arbitrary bytes from somewhere else, and a NUL
+    inside an NSString is not a cosmetic problem.
+    """
+    tray = TrayApp()
+    tray.set_error("bad\x00\x07\x1bthing")
+    row = next(i for i in tray.menu_items() if "bad" in i.title)
+    assert "\x00" not in row.title
+    assert "\x07" not in row.title
+    assert "\x1b" not in row.title
+    assert "badthing" in row.title
+
+
+def test_a_hostile_manager_name_cannot_break_the_row() -> None:
+    """The name is read from the running application (§7.3) — another
+    process's string, and treated like one."""
+    tray = TrayApp()
+    tray.set_clipboard_exposure(
+        ClipboardExposure(detected=True, manager="Evil\nApp\x00\n" + "x" * 500)
+    )
+    row = next(i for i in tray.menu_items() if "clipboard" in i.title.lower())
+    assert "\n" not in row.title
+    assert "\x00" not in row.title
+    assert len(row.title) < 300
+
+
+def test_a_whitespace_only_error_is_not_an_error() -> None:
+    """`_one_line` would reduce it to nothing and render a blank row, which
+    the user cannot tell from a rendering fault."""
+    tray = TrayApp()
+    before = len(tray.menu_items())
+    tray.set_error("   \t\n  ")
+    assert len(tray.menu_items()) == before

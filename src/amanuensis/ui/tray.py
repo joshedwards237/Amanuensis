@@ -61,8 +61,21 @@ class MenuItem:
 
 
 def _one_line(text: str) -> str:
-    """Flatten and bound an arbitrary message to something a menu can render."""
-    flattened = " ".join(text.split())
+    """Flatten and bound arbitrary text to something a menu can render.
+
+    Control characters are removed rather than escaped. `str.split()` handles
+    whitespace and leaves NUL, BEL and escape sequences intact — they reached
+    the menu unaltered until the stress pass looked, and a NUL inside an
+    `NSString` is not a cosmetic problem. Everything here can arrive from an
+    exception message or from another application's name, so none of it is
+    trusted.
+    """
+    stripped = "".join(
+        " " if ch.isspace() else ch
+        for ch in text
+        if ch.isprintable() or ch.isspace()
+    )
+    flattened = " ".join(stripped.split())
     if len(flattened) <= _MAX_ERROR_CHARS:
         return flattened
     return flattened[: _MAX_ERROR_CHARS - 1] + "…"
@@ -112,7 +125,10 @@ class TrayApp:
         An empty string is treated as no error: a blank menu row is worse than
         none, because the user cannot tell it from a rendering fault.
         """
-        self._error = message if message else None
+        # Whitespace-only is not an error either: `_one_line` would reduce it
+        # to nothing and render a blank row the user cannot tell from a
+        # rendering fault.
+        self._error = message if message and message.strip() else None
         self._refresh()
 
     def set_clipboard_exposure(self, exposure: ClipboardExposure | None) -> None:
@@ -137,7 +153,10 @@ class TrayApp:
 
         exposure = self._exposure
         if exposure is not None and exposure.detected:
-            manager = exposure.manager or "a clipboard manager"
+            # The name is read from the running application (§7.3), so it is
+            # another process's string and gets the same treatment as an
+            # exception message.
+            manager = _one_line(exposure.manager or "") or "A clipboard manager"
             items.append(
                 MenuItem(
                     f"{manager} is running — transcripts transit the clipboard"
@@ -180,11 +199,26 @@ class TrayApp:
         self._indicator.stop()
 
     def _refresh(self) -> None:
-        """Rebuild the rendered menu if there is one. Safe from any thread."""
+        """Rebuild the rendered menu if there is one. Safe from any thread.
+
+        **The build itself goes to the main queue.** `set_menu` already
+        dispatches the *attach*, which is what made this look correct — but
+        `NSMenu.alloc()` and every `NSMenuItem` were being constructed on
+        whichever thread reported the state change, which is the worker or the
+        OS event tap. AppKit object creation is main-thread work, and this is
+        the hazard `indicator.py`'s preamble names as the single most likely
+        thing to be quietly removed. Found by the stress pass, not by a unit
+        test: the fake main queue runs blocks inline, so every existing test
+        passed with the construction on the wrong thread.
+        """
         with self._lock:
             if self._menu is None:
                 return
-        self._indicator.set_menu(self._build_menu())
+        from amanuensis.ui.indicator import _main_queue
+
+        _main_queue().addOperationWithBlock_(
+            lambda: self._indicator.set_menu(self._build_menu())
+        )
 
     def _build_menu(self) -> Any:
         from amanuensis.ui.indicator import _appkit
