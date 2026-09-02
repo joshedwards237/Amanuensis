@@ -23,11 +23,12 @@ and a framing bug would be the only interesting failure mode available.
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import threading
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from amanuensis.ipc.base import (
     ControlRequestError,
@@ -36,7 +37,16 @@ from amanuensis.ipc.base import (
     Response,
 )
 
-__all__ = ["UnixSocketTransport"]
+__all__ = ["AlreadyRunningError", "UnixSocketTransport"]
+
+
+class AlreadyRunningError(Exception):
+    """Something is already listening on this socket (§5.4, §7.6).
+
+    Its own type because the situation has a specific remedy and a specific
+    cost: two daemons share one hotkey, so both inject and both persist every
+    dictation.
+    """
 
 #: A verb is a short word. Anything longer is a confused process, and reading
 #: it into memory before deciding that is how a local socket becomes a way to
@@ -57,11 +67,36 @@ _READ_TIMEOUT_S: Final = 1.0
 #: outright and reported as "the daemon is not running", which is the one
 #: answer §7.6 says must never be given wrongly.
 _BACKLOG: Final = 64
+#: A reply is a sentence for a human. This bounds a client's memory against a
+#: daemon that has gone wrong, which is the same courtesy the request limit
+#: extends in the other direction.
+_MAX_REPLY_BYTES: Final = 65536
 #: `sun_path` is 104 bytes on macOS, and the kernel's error for exceeding it is
 #: a bare `OSError: AF_UNIX path too long` with no mention of what is too long.
 #: The default path is nowhere near it; `$AMANUENSIS_DATA_DIR` pointed
 #: somewhere deep is, and so is any temporary directory a test invents.
 _MAX_PATH_BYTES: Final = 103
+
+
+def _recv_line(connection: socket.socket) -> bytes:
+    """Read until the newline the protocol terminates every reply with.
+
+    A single `recv` returns whatever one read yields, which for a reply longer
+    than the buffer is a truncated JSON document — reported to the user as "the
+    daemon sent something this client cannot read". `status`'s detail is short
+    today and is exactly the kind of string that grows.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = connection.recv(4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if chunk.endswith(b"\n") or total > _MAX_REPLY_BYTES:
+            break
+    return b"".join(chunks)
 
 
 class UnixSocketTransport(ControlTransport):
@@ -97,11 +132,33 @@ class UnixSocketTransport(ControlTransport):
         if self._server is not None:
             raise RuntimeError("this transport is already serving")
 
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        parent = self._path.parent
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # `mkdir(mode=...)` is ignored when the directory already exists, and
+        # the data directory predates this code by three phases. §7.6's whole
+        # argument is "0600 inside a 0700 directory", and a socket at 0600
+        # inside a 0755 directory is not that — the mode is set explicitly
+        # rather than hoped for.
+        parent.chmod(0o700)
         self._unlink_stale()
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self._path))
+        try:
+            server.bind(str(self._path))
+        except OSError as exc:
+            server.close()
+            if exc.errno == errno.EADDRINUSE:
+                # `_unlink_stale` already removed a dead socket, so reaching
+                # here means something is listening. Two daemons on one hotkey
+                # double-inject and double-persist; the bare `Errno 48 Address
+                # already in use` names none of that.
+                raise AlreadyRunningError(
+                    f"another Amanuensis daemon is already listening at "
+                    f"{self._path}. Two daemons share one hotkey and would "
+                    "both inject and both persist every dictation. Stop the "
+                    "other one first — `manu status` will answer from it."
+                ) from exc
+            raise
         # Between bind and chmod the socket exists at the umask's mode. The
         # window is real and unavoidable with AF_UNIX; the parent directory is
         # 0700, which is what actually keeps other users out during it.
@@ -153,10 +210,29 @@ class UnixSocketTransport(ControlTransport):
         connection.settimeout(_READ_TIMEOUT_S)
         raw = connection.recv(_MAX_REQUEST_BYTES)
         verb = raw.decode("utf-8", errors="replace").strip()
+        # `object`, not `Response`, and deliberately. `Handler` promises a
+        # `Response` and mypy believes it, which makes the check below
+        # unreachable to the type checker and entirely reachable at runtime:
+        # the handler is supplied by the daemon and Python enforces nothing.
+        # Without the check the failure is a `TypeError` inside `json.dumps`,
+        # after which the connection closes with nothing written and the client
+        # reports the daemon unreadable — the transport describing itself as
+        # broken when the caller is.
+        # `cast` rather than an annotation: mypy narrows straight back to
+        # `Response` from the call's own return type, which is the assumption
+        # under test.
+        result: object
         try:
-            response = handler(verb)
+            result = cast(object, handler(verb))
         except Exception as exc:
-            response = Response(ok=False, detail=f"the daemon failed: {exc}")
+            result = Response(ok=False, detail=f"the daemon failed: {exc}")
+        if isinstance(result, Response):
+            response = result
+        else:
+            response = Response(
+                ok=False,
+                detail=f"the daemon returned {type(result).__name__}, not a Response",
+            )
         payload = json.dumps({"ok": response.ok, "detail": response.detail})
         connection.sendall(payload.encode("utf-8") + b"\n")
 
@@ -183,7 +259,19 @@ class UnixSocketTransport(ControlTransport):
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.settimeout(_TIMEOUT_S)
                 client.connect(str(self._path))
-                client.sendall(verb.encode("utf-8") + b"\n")
+                encoded = verb.encode("utf-8")
+                if len(encoded) > _MAX_REQUEST_BYTES:
+                    # Refused here rather than sent. The daemon reads at most
+                    # `_MAX_REQUEST_BYTES`, answers the truncation and closes,
+                    # and the rest of the write then fails with EPIPE — which
+                    # this method would report as "the daemon is not running",
+                    # the one answer §7.6 says must never be given wrongly.
+                    return Response(
+                        ok=False,
+                        detail=f"that verb is {len(encoded)} bytes; the limit "
+                        f"is {_MAX_REQUEST_BYTES}",
+                    )
+                client.sendall(encoded + b"\n")
                 try:
                     client.shutdown(socket.SHUT_WR)
                 except OSError:
@@ -193,7 +281,7 @@ class UnixSocketTransport(ControlTransport):
                     # to report. Raising here turned every quick reply into
                     # "the daemon is not running".
                     pass
-                raw = client.recv(_MAX_REQUEST_BYTES)
+                raw = _recv_line(client)
         except OSError as exc:
             # ENOENT (no file) and ECONNREFUSED (stale file) are the same fact
             # to a user: the daemon is not running. §7.6 requires this be

@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from amanuensis.ipc.base import ControlRequestError, Response, make_handler
-from amanuensis.ipc.macos import UnixSocketTransport
+from amanuensis.ipc.macos import AlreadyRunningError, UnixSocketTransport
 
 
 @pytest.fixture
@@ -252,3 +252,89 @@ def test_an_overlong_socket_path_is_refused_with_a_reason() -> None:
     with pytest.raises(ValueError) as exc:
         UnixSocketTransport(deep)
     assert "AMANUENSIS_DATA_DIR" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Found by the stress pass
+# ---------------------------------------------------------------------------
+
+
+def test_a_second_daemon_is_refused_by_name(sock_dir: Path) -> None:
+    """The operator hit the two-daemon problem on 2026-09-02 — two status
+    items in his menu bar, both holding the microphone.
+
+    `bind` reports `[Errno 48] Address already in use`, which names neither
+    the product nor the consequence. Two daemons share one hotkey: both inject
+    and both persist every dictation.
+    """
+    ok = make_handler({"status": lambda: Response(ok=True)})
+    first = _serve(sock_dir / "d.sock", ok)
+    try:
+        second = UnixSocketTransport(first.path)
+        with pytest.raises(AlreadyRunningError) as exc:
+            second.serve(ok)
+        assert "already listening" in str(exc.value)
+        assert "manu status" in str(exc.value), "the error must name a next step"
+    finally:
+        first.stop()
+
+
+def test_the_socket_directory_is_tightened_even_when_it_already_exists(
+    sock_dir: Path,
+) -> None:
+    """§7.6's argument is "0600 inside a 0700 directory", and `mkdir(mode=...)`
+    is ignored when the directory already exists — which the data directory
+    does, by three phases. A 0600 socket inside a 0755 directory is not the
+    thing §7.6 argued for.
+    """
+    loose = sock_dir / "loose"
+    loose.mkdir(mode=0o755)
+    assert stat.S_IMODE(loose.stat().st_mode) == 0o755
+
+    ok = make_handler({"status": lambda: Response(ok=True)})
+    transport = _serve(loose / "d.sock", ok)
+    try:
+        assert stat.S_IMODE(loose.stat().st_mode) == 0o700
+    finally:
+        transport.stop()
+
+
+def test_a_reply_longer_than_one_read_arrives_whole(sock_dir: Path) -> None:
+    """A single `recv` truncates, and the client reports that as "the daemon
+    sent something this client cannot read" — the transport describing itself
+    as broken. `status`'s detail is short today and is exactly the kind of
+    string that grows."""
+    long_detail = "detail " * 2000
+    transport = _serve(
+        sock_dir / "d.sock",
+        make_handler({"status": lambda: Response(ok=True, detail=long_detail)}),
+    )
+    try:
+        reply = UnixSocketTransport(transport.path).request("status")
+        assert reply.detail == long_detail
+    finally:
+        transport.stop()
+
+
+def test_an_oversized_verb_is_refused_locally_not_reported_as_no_daemon(
+    transport: UnixSocketTransport,
+) -> None:
+    """The daemon reads a bounded amount, answers and closes; the rest of the
+    write then fails with EPIPE, which `request` reported as "the daemon is not
+    running" — the one answer §7.6 says must never be given wrongly."""
+    reply = UnixSocketTransport(transport.path).request("x" * 8192)
+    assert not reply.ok
+    assert "limit" in reply.detail
+
+
+def test_a_handler_returning_the_wrong_type_is_answered(sock_dir: Path) -> None:
+    """Without this the failure is a `TypeError` inside `json.dumps`, the
+    connection closes with nothing written, and the client calls the daemon
+    unreadable — describing the transport as broken when the caller is."""
+    transport = _serve(sock_dir / "d.sock", lambda verb: "not a Response")
+    try:
+        reply = UnixSocketTransport(transport.path).request("status")
+        assert not reply.ok
+        assert "not a Response" in reply.detail
+    finally:
+        transport.stop()
