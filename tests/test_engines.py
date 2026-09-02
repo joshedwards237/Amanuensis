@@ -39,6 +39,7 @@ from amanuensis.engines.faster_whisper import (
     FasterWhisperEngine,
     ModelNotAvailableError,
     WeightsDigestError,
+    download_weights,
     resolve_device,
     resolve_model_name,
     resolve_model_path,
@@ -546,3 +547,86 @@ def test_the_real_cached_weights_verify() -> None:
     result = verify_weights(directory, "tiny.en")
     assert result.verified is True
     assert result.files_checked == len(PINNED_DIGESTS["tiny.en"])
+
+
+def test_an_unreadable_file_is_refused_not_raised_through(tmp_path: Path) -> None:
+    """A file that cannot be read has not been verified (§7.6).
+
+    Found by the stress pass, not by the unit tests above: `_sha256` opened
+    without catching `OSError`, so a `chmod 000` weights file raised
+    `PermissionError` straight past `manu install`'s handler and out as a
+    traceback. Unreadable is a verification failure, not an internal error.
+    """
+    directory = _snapshot(tmp_path, "tiny.en")
+    target = directory / "model.bin"
+    target.chmod(0o000)
+    try:
+        with pytest.raises(WeightsDigestError) as exc:
+            verify_weights(directory, "tiny.en")
+        assert "model.bin" in str(exc.value)
+    finally:
+        target.chmod(0o644)
+
+
+def test_a_file_nobody_recorded_is_refused(tmp_path: Path) -> None:
+    """The record is complete by construction, so an extra file is an anomaly.
+
+    `scripts/record_weight_digests.py` records every file in a snapshot. A
+    verifier that only checks the files it knows about will pass a directory
+    someone has added to, which is a check that cannot fail in the one
+    direction an attacker controls.
+    """
+    directory = tmp_path / "extra"
+    directory.mkdir()
+    for name, digest in PINNED_DIGESTS["tiny.en"].items():
+        source = resolve_model_path("tiny.en") / name
+        if not source.is_file():
+            pytest.skip("no local tiny.en snapshot — run `manu install`")
+        (directory / name).write_bytes(source.read_bytes())
+        assert digest  # the copy is the real bytes, so the control is honest
+    assert verify_weights(directory, "tiny.en").verified is True
+
+    (directory / "payload.bin").write_bytes(b"anything")
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "payload.bin" in str(exc.value)
+
+
+def test_a_dotfile_does_not_fail_verification(tmp_path: Path) -> None:
+    """macOS writes `.DS_Store` into any directory opened in Finder.
+
+    A verification that fails because someone looked at a folder is one people
+    learn to bypass, so dotfiles are exempt from the unrecorded-file check —
+    deliberately, and this is where that decision is written down.
+    """
+    directory = tmp_path / "browsed"
+    directory.mkdir()
+    for name in PINNED_DIGESTS["tiny.en"]:
+        source = resolve_model_path("tiny.en") / name
+        if not source.is_file():
+            pytest.skip("no local tiny.en snapshot — run `manu install`")
+        (directory / name).write_bytes(source.read_bytes())
+    (directory / ".DS_Store").write_bytes(b"finder junk")
+    assert verify_weights(directory, "tiny.en").verified is True
+
+
+def test_download_weights_refuses_bad_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed. The verification lives inside the download, not beside it.
+
+    Without this, deleting the `verify_weights` call from `download_weights`
+    leaves every other test in this file green — the CLI's own check would
+    still print a refusal, but the function that hands weights to callers
+    would have handed them over first. That is the §7.6 guarantee, so it is
+    tested where it is made.
+    """
+    snapshot = _snapshot(tmp_path, "tiny.en")  # right shape, wrong bytes
+
+    import faster_whisper.utils
+
+    monkeypatch.setattr(
+        faster_whisper.utils, "download_model", lambda *a, **k: str(snapshot)
+    )
+    with pytest.raises(WeightsDigestError):
+        download_weights("tiny.en")

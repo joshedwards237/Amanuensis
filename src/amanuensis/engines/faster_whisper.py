@@ -318,8 +318,38 @@ def verify_weights(path: Path, model: str) -> WeightsVerification:
         candidate = path / name
         if not candidate.is_file():
             problems.append(f"{name}: missing")
-        elif (actual := _sha256(candidate)) != digest:
+            continue
+        try:
+            actual = _sha256(candidate)
+        except OSError as exc:
+            # A file that cannot be read has not been verified, and that is a
+            # verification failure rather than an internal error. Without this
+            # a `chmod 000` weights file raised PermissionError straight past
+            # every caller — found by the stress pass, not by the unit tests.
+            problems.append(f"{name}: unreadable ({exc.strerror})")
+            continue
+        if actual != digest:
             problems.append(f"{name}: expected {digest[:12]}…, got {actual[:12]}…")
+
+    # Files nobody recorded are not inert just because nothing loads them today.
+    # `record_weight_digests.py` records every file in a snapshot, so the record
+    # is complete by construction and anything extra is an anomaly worth
+    # refusing. Dotfiles are exempt: macOS writes `.DS_Store` into any directory
+    # the user opens in Finder, and a verification that fails because someone
+    # looked at a folder is a verification people learn to bypass.
+    if path.is_dir():
+        try:
+            unexpected = sorted(
+                entry.name
+                for entry in path.iterdir()
+                if entry.name not in expected and not entry.name.startswith(".")
+            )
+        except OSError as exc:
+            problems.append(f"{path}: cannot be listed ({exc.strerror})")
+        else:
+            problems.extend(
+                f"{name}: not in the recorded snapshot" for name in unexpected
+            )
 
     if problems:
         raise WeightsDigestError(
