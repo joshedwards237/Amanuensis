@@ -20,9 +20,12 @@ reject because 163 of 171 edits are decoder-side; the rules chain missed **8**
 and the frozen dictionary missed **0**. `postprocess_ms` p95 0.478 ms against a
 5 ms ceiling, `vocab_ms` p95 0.171 ms against 10 ms. Guard reported on all ten.
 
-**G2 is missed and was deliberately neither confirmed nor moved.** §9 allows
-moving it and requires the reason stated; the gate prints a NOTE and leaves the
-number to the operator. That sentence is still unwritten.
+**G2 is missed and the threshold stays at 5%** (operator disposition 2026-09-02).
+§9 allows moving it and requires the reason stated; the reason was measured and
+the number was deliberately not moved — `small.en` reaches 7.88% on the same
+corpus, so relaxing the target before the Phase 4 gate settles the engine
+question would ratify 8.59% on evidence that gate may overturn. Carried as debt,
+revisited at the Phase 4 gate.
 
 Four things to carry into Phase 4.
 
@@ -201,9 +204,9 @@ Red → green → refactor, strictly. No production code without a failing test 
 Never commit directly to `main`. Branch names are lowercase and
 hyphen-separated (`add-vad-trimming`, `fix-clipboard-restore`).
 
-> No git remote is configured yet, so the GitHub issue-per-task step and the
-> `gh pr checks` loop below do not apply until one exists. Revisit at the
-> Phase 4 gate — public repo timing is an open decision (PRD §11.4).
+> The remote is `origin` → `github.com/joshedwards237/Amanuensis`, **public since
+> 2026-07-31**. The `gh pr checks` loop below applies. PRD §11.4 was resolved by
+> action rather than by decision — see the note there.
 
 ### Commit messages
 

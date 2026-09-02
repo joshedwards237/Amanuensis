@@ -321,13 +321,21 @@ covered-vocabulary misses against 163 decoder-side, both latency ceilings met by
 an order of magnitude, the dictionary frozen and firing, the guard reporting on
 every dictation, `store_audio` on, and the short set recorded.
 
-**G2 is missed at 8.59% and is neither confirmed nor moved by this record.** §9
-says moving the threshold is a legitimate outcome and that moving it without
-stating the reason is not. The reason is now measurable — 95% of the gap is
-decoder-side and 58% of *that* is one unreachable class — but choosing the
-number is the operator's, and the gate prints a NOTE rather than deciding it.
+**G2 is missed at 8.59% and the threshold is deliberately not moved.** §9 says
+moving it is a legitimate outcome and that moving it without stating the reason
+is not. The reason is now measurable — 95% of the gap is decoder-side and 58% of
+*that* is one unreachable class — but a measured reason is a reason to move the
+number, not an obligation to.
 
-**Two open items carried out of this phase:**
+**Operator disposition, 2026-09-02: G2 stays at 5%, recorded as missed.** The
+gap is carried as debt, not written into the specification. The number is
+revisited at the Phase 4 gate, where the model question is settled — `small.en`
+reaches 7.88% and is priced out only by G1's p95, so the honest sequence is to
+learn whether the engine closes the gap before relaxing the target it missed.
+Moving the threshold now would fix 8.59% as acceptable using evidence that the
+next gate may overturn.
+
+**Three open items carried out of this phase:**
 
 1. **§5.7's guard has two blind spots**, both established here with controls:
    interior loss, and anything under two seconds of speech. Neither is fixed.

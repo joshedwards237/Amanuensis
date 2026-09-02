@@ -2793,7 +2793,15 @@ Resolve before or at the stated gate. Do not guess.
 2. **Settings UI** — tray menu is sufficient for v1. A React/Tauri settings panel is a
    post-v1 question and is not in §9.
 3. **Model distribution** — Hugging Face at first run vs. bundled installer. Phase 4.
-4. **Public repo timing** — before or after Phase 4.
+4. ~~**Public repo timing**~~ — **RESOLVED 2026-09-02, by observation: the
+   repository has been public since it was created on 2026-07-31.** The decision
+   was never taken; it was made by the act of creating the remote public, three
+   phases before this section expected to answer it. Recorded rather than
+   back-dated, because the interval in which this document described the
+   question as open is the interval in which `corrections*.json` and the
+   reference dictations were being written to a public repository's ignore list
+   on the strength of that answer. The `.gitignore` reasoning holds; the
+   sequence in which it was established does not.
 
 ---
 
@@ -2892,6 +2900,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-02 | **G2's threshold is confirmed at 5% and the miss is carried as debt** (§2, §9, `docs/gates/phase-3.md`). §9 permits moving a missed threshold and requires the reason stated; the Phase 3 gate measured the reason — 95% of the 8.59% is decoder-side, 58% of *that* is one class no rule reaches — and left the number to the operator. Disposition: **do not move it.** A measured reason to move is not an obligation to, and `small.en` reaches 7.88% on the same corpus while being priced out only by G1's p95 — so relaxing the target before the engine question is settled would fix 8.59% as acceptable using evidence the Phase 4 gate may overturn. Revisited there. Also **§11.4 is resolved by observation rather than by decision**: the repository has been public since it was created on 2026-07-31, three phases before this section expected to answer the question, and every `.gitignore` argument about verbatim dictation was made in an interval this document still described as open. |
 | 2026-08-08 | **A code-mode review found §8 losing a transcript, and the fix for the same hazard three weeks earlier had closed one third of the window.** `_process` assigned `session.raw_transcript` *after* `_judge` returned, and `_judge` runs a second decode for §5.7's retry — so a raise there reached the handler with the decoder's words in a local variable and nothing persisted. Reproduced. The earlier disposition (objection O1) had guarded the post-processing chain and been recorded as restoring the guarantee; the window between "the words exist" and "the words are safe" still spanned a second decode and a guard evaluation. **Fixing an instance is not fixing a shape**, and this is the fifth time this project has recorded the specification asserting a guarantee the code did not honour. The transcript is now on the session the moment it exists, and the failure path writes it. |
 | 2026-08-08 | **Four rules in `RuleBasedPostProcessor` corrupted ordinary English, and the tests written for two earlier defects in the same file could not see them.** `it was really really good` lost a word; `20 minutes left` became `20 Minutes left`; `the U.S. economy is fine` became `The U.S. Economy is fine.` — two rules compounding, because the space one inserted created a boundary the other acted on; and `Add a note. New line items are on order.` lost three words to the spoken-command rule. All four verified at a REPL. The repeat rule's guard was **inverted from a blocklist to an allowlist** of closed-class function words, which makes the no-deleted-content-word property structural instead of a thing a test has to remember to probe — the third defect in that one function, and the first fix to revisit its premise rather than add a conjunct to it. |
 | 2026-08-08 | **Two regression tests written for accepted dispositions could not fail, and were verified by sabotage rather than by review.** Reverting the objection-O3 fix and deleting the `vocab_ms` assignment left all 492 tests green: one test supplied the value under test as a literal argument, the other asserted `>= 0.0` on a field whose default is `0.0`. Both were written immediately after observing the bugs they were meant to pin, which is the trap — **a test written just after a fix feels verified because the failure was just witnessed, and that is a different event from the test having failed.** Both rewritten to run a full dictation; the same sabotage now fails against both. Sixth and seventh instances of a check that could not fail in this repository, and the first two written *after* the pattern was named in a gate record. |
