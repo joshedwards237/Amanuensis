@@ -501,16 +501,23 @@ def test_an_unsupported_binding_is_refused_by_name(quartz: _FakeQuartz) -> None:
     assert "right_option" in str(caught.value)
 
 
-def test_a_non_push_to_talk_mode_is_refused(quartz: _FakeQuartz) -> None:
-    """§9 Phase 2b is `push_to_talk` only; `toggle` and `vad_auto` are Phase 4.
+def test_a_mode_this_listener_does_not_implement_is_refused(
+    quartz: _FakeQuartz,
+) -> None:
+    """Accepting an unknown mode and behaving as push-to-talk would be a mode
+    that silently does something else.
 
-    Accepting the key and behaving as push-to-talk would be a mode that
-    silently does something else."""
+    Replaced 2026-09-02: this test used to assert that `toggle` and `vad_auto`
+    were refused as unbuilt, which was true for two phases and is the thing
+    Phase 4 changed. Config validation rejects unknown modes first, so reaching
+    here means a caller constructed `HotkeyConfig` directly — which the tests
+    do constantly.
+    """
     with pytest.raises(UnsupportedBindingError) as caught:
-        MacOSHotkeyListener(HotkeyConfig(mode="vad_auto"))
+        MacOSHotkeyListener(HotkeyConfig(mode="telepathy"))
 
-    assert "vad_auto" in str(caught.value)
-    assert "Phase 4" in str(caught.value)
+    assert "telepathy" in str(caught.value)
+    assert "push_to_talk" in str(caught.value), "the error must name what works"
 
 
 # ---------------------------------------------------------------------------
@@ -528,3 +535,94 @@ def test_factory_refuses_other_platforms() -> None:
         create_hotkey_listener(HotkeyConfig(), platform="linux")
 
     assert "linux" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# `toggle` — press to start, press again to stop (§5.2, Phase 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def toggle_listener(quartz: _FakeQuartz) -> Any:
+    made = MacOSHotkeyListener(HotkeyConfig(mode="toggle"))
+    yield made
+    if made.is_running:
+        made.stop()
+
+
+def _tap(quartz: _FakeQuartz) -> None:
+    """One complete physical press and release of the bound key."""
+    quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
+
+
+def test_toggle_starts_on_the_first_tap_and_stops_on_the_second(
+    toggle_listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    recorder = _Recorder()
+    toggle_listener.start(recorder.press, recorder.release)
+
+    _tap(quartz)
+    assert recorder.events == ["press"], "the first tap must start a session"
+    _tap(quartz)
+    assert recorder.events == ["press", "release"]
+
+
+def test_toggle_alternates_indefinitely(
+    toggle_listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    recorder = _Recorder()
+    toggle_listener.start(recorder.press, recorder.release)
+
+    for _ in range(5):
+        _tap(quartz)
+    assert recorder.events == ["press", "release", "press", "release", "press"]
+
+
+def test_toggle_ignores_the_physical_release(
+    toggle_listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    """The whole point of the mode. Letting go must not end the session —
+    that is `push_to_talk`, and a user who chose `toggle` chose it to be able
+    to let go."""
+    recorder = _Recorder()
+    toggle_listener.start(recorder.press, recorder.release)
+
+    quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
+    quartz.deliver(RIGHT_OPTION_KEYCODE, 0)  # a stray up-event
+
+    assert recorder.events == ["press"]
+
+
+def test_toggle_holding_the_key_does_not_stop_it(
+    toggle_listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    """Holding is how `push_to_talk` is used, and a user switching modes will
+    do it out of habit. Holding must not end the session, and releasing after
+    a long hold must not either."""
+    recorder = _Recorder()
+    toggle_listener.start(recorder.press, recorder.release)
+
+    quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
+
+    assert recorder.events == ["press"]
+
+
+def test_push_to_talk_is_unchanged_by_the_toggle_work(
+    listener: MacOSHotkeyListener, quartz: _FakeQuartz
+) -> None:
+    """The regression that would matter most: the default mode still ends on
+    release."""
+    recorder = _Recorder()
+    listener.start(recorder.press, recorder.release)
+
+    _tap(quartz)
+    assert recorder.events == ["press", "release"]
+
+
+def test_toggle_is_accepted_by_the_listener() -> None:
+    """It refused with "not built yet — Phase 2b is push_to_talk only"."""
+    MacOSHotkeyListener(HotkeyConfig(mode="toggle"))

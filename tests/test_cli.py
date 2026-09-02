@@ -288,18 +288,29 @@ def test_the_daemon_refuses_an_unsupported_binding(
 def test_the_daemon_refuses_a_mode_it_does_not_implement(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§9's Phase 2b is push-to-talk only. Accepting `vad_auto` and behaving as
-    push-to-talk would be a configured mode silently doing something else —
-    and §5.2 calls `vad_auto` the mode most likely to misfire."""
+    """Accepting an unknown mode and behaving as push-to-talk would be a
+    configured mode silently doing something else.
+
+    **Rewritten 2026-09-02, and the reason is worth keeping.** This test used
+    to pass `mode="toggle"` and assert the daemon refused it as unbuilt. Phase 4
+    built `toggle`, so the refusal it depended on went away — and the test did
+    not fail. It *hung*: `_daemon` ran on, loaded the model, opened the
+    microphone and blocked in the AppKit run loop, in a pytest process, on the
+    operator's machine.
+
+    A test written against a refusal becomes a test that exercises the thing
+    the moment the refusal is lifted, and it does not announce itself when it
+    does. The mode named here is one nothing will ever implement.
+    """
     from amanuensis.cli import _daemon
     from amanuensis.config import AppConfig, HotkeyConfig
 
-    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(mode="toggle")))
+    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(mode="telepathy")))
 
     assert exit_code != 0
     err = capsys.readouterr().err
-    assert "toggle" in err
-    assert "Phase 4" in err
+    assert "telepathy" in err
+    assert "push_to_talk" in err, "the error must name a mode that works"
 
 
 def test_the_daemon_reports_both_missing_permissions_at_once(

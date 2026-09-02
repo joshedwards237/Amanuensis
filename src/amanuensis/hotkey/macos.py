@@ -84,7 +84,9 @@ _BINDINGS: Final[dict[str, tuple[int, int]]] = {
 #: §5.2 calls `vad_auto` the mode most likely to misfire — accepting the key
 #: and behaving as push-to-talk would be a configured mode silently doing
 #: something else.
-_SUPPORTED_MODES: Final[frozenset[str]] = frozenset({"push_to_talk"})
+_SUPPORTED_MODES: Final[frozenset[str]] = frozenset(
+    {"push_to_talk", "toggle", "vad_auto"}
+)
 
 #: How long `start()` waits for the tap thread to install the tap. Generous —
 #: it covers a pyobjc import on a cold process, and the failure it guards
@@ -149,10 +151,10 @@ class MacOSHotkeyListener(HotkeyListener):
 
     def __init__(self, config: HotkeyConfig) -> None:
         if config.mode not in _SUPPORTED_MODES:
+            known = ", ".join(sorted(_SUPPORTED_MODES))
             raise UnsupportedBindingError(
-                f"hotkey.mode: {config.mode!r} is not built yet — Phase 2b is "
-                "push_to_talk only. `toggle` and `vad_auto` are Phase 4 "
-                "(PRD §9)."
+                f"hotkey.mode: {config.mode!r} is not a capture mode this "
+                f"listener implements. Known modes: {known} (PRD §5.2)."
             )
         if config.binding not in _BINDINGS:
             known = ", ".join(sorted(_BINDINGS))
@@ -166,6 +168,12 @@ class MacOSHotkeyListener(HotkeyListener):
 
         self._config = config
         self._keycode, self._flag_bit = _BINDINGS[config.binding]
+
+        #: `toggle` and `vad_auto` both start on a key-down and neither ends
+        #: on the matching key-up, so the listener carries whether a session is
+        #: open. `push_to_talk` never reads it — its transitions *are* the key
+        #: transitions, which is exactly what makes it the predictable default.
+        self._session_open = False
 
         self._on_press: HotkeyCallback | None = None
         self._on_release: HotkeyCallback | None = None
@@ -231,6 +239,7 @@ class MacOSHotkeyListener(HotkeyListener):
         self._on_press = on_press
         self._on_release = on_release
         self._is_down = False
+        self._session_open = False
         self._start_error.clear()
         self._ready.clear()
 
@@ -326,6 +335,34 @@ class MacOSHotkeyListener(HotkeyListener):
         self._ready.set()
         quartz.CFRunLoopRun()
 
+    def _callback_for(self, down: bool) -> HotkeyCallback | None:
+        """Which callback a key transition means, in this mode (§5.2).
+
+        `push_to_talk` — down starts, up ends. The guarantee is physical: your
+        finger is on the key, so you always know.
+
+        `toggle` — down alternates and up means nothing. A user who chose this
+        chose it to be able to let go, so ending on the physical release would
+        be the mode failing to be itself. Holding the key does nothing either,
+        which matters because a user switching from `push_to_talk` will hold it
+        out of habit.
+
+        `vad_auto` — down starts and **nothing here ever ends it**. §5.2 is
+        "press to start, silence detection ends the session": the finger still
+        opens the microphone, and only the close is automatic. The end comes
+        from the audio layer, which is the only place that can see silence.
+        That makes this the one mode where the listener cannot guarantee the
+        microphone ever closes, and why `[vad_auto] max_seconds` exists.
+        """
+        if self._config.mode == "push_to_talk":
+            return self._on_press if down else self._on_release
+        if not down:
+            return None
+        if self._config.mode == "vad_auto":
+            return self._on_press
+        self._session_open = not self._session_open
+        return self._on_press if self._session_open else self._on_release
+
     def _on_event(
         self, _proxy: Any, event_type: int, event: Any, _user_info: Any
     ) -> Any:
@@ -360,7 +397,7 @@ class MacOSHotkeyListener(HotkeyListener):
             return event
         self._is_down = down
 
-        callback = self._on_press if down else self._on_release
+        callback = self._callback_for(down)
         if callback is not None:
             try:
                 callback()
