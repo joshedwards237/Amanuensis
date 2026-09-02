@@ -74,19 +74,6 @@ _EXIT_OK = 0
 #: Verb -> the phase that makes it do something. Kept in one place so that
 #: `manu daemon` and the tests cannot disagree about what is built.
 #:
-#: `toggle` and `status` moved from Phase 2b to Phase 4 here (recorded at the
-#: Phase 2b gate). §9's Phase 2b names the listener, the controller and the
-#: indicator; it does not name these two, and both need the IPC transport §7.3
-#: lists as portability floor item 3 — which no phase ever scheduled. Phase 4
-#: is where they land because it is the phase that owns `toggle` mode and the
-#: tray, and because a floor item with no phase is a floor item that does not
-#: exist.
-_VERB_PHASES = {
-    "toggle": "Phase 4",
-    "status": "Phase 4",
-}
-
-
 def build_parser() -> argparse.ArgumentParser:
     """The full `manu` parser. Separate from `main` so tests can inspect it."""
     parser = argparse.ArgumentParser(
@@ -232,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install(config, skip_download=args.skip_download, clip=args.clip)
     if args.verb == "daemon":
         return _daemon(config)
+    if args.verb in ("toggle", "status"):
+        return _control(args.verb)
     if args.verb == "history":
         return _history(config, args)
     if args.verb == "vocab":
@@ -240,12 +229,44 @@ def main(argv: list[str] | None = None) -> int:
             return _EXIT_USAGE
         return _vocab_check(text=args.text, show_app=args.app)
 
-    print(
-        f"manu {args.verb}: not implemented yet — it is built in "
-        f"{_VERB_PHASES[args.verb]}.",
-        file=sys.stderr,
-    )
-    return _EXIT_ERROR
+    # Every verb the parser accepts is dispatched above. argparse rejects
+    # anything else before reaching here, so this is unreachable rather than a
+    # fallback — and it says so instead of pretending to handle a case.
+    raise AssertionError(f"unrouted verb {args.verb!r}")
+
+
+def _control(verb: str) -> int:
+    """`manu toggle` and `manu status` — one verb to a running daemon.
+
+    The transport is resolved through `ipc/factory.py`, and the unix socket
+    does not appear here: §7.3's floor item 3 says it "must not appear in the
+    CLI contract as though it were the interface", and this function is that
+    contract.
+
+    A daemon that is not running is reported as exactly that. §7.6 makes the
+    distinction a requirement — "nothing is listening" and "the daemon says it
+    is idle" are different facts, and reporting the first as the second is a
+    claim about the microphone nobody checked.
+    """
+    from amanuensis.ipc.base import ControlRequestError
+    from amanuensis.ipc.factory import UnsupportedPlatformError, create_transport
+
+    try:
+        transport = create_transport()
+    except (UnsupportedPlatformError, ValueError) as exc:
+        print(f"manu {verb}: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    try:
+        response = transport.request(verb)
+    except ControlRequestError as exc:
+        print(f"manu {verb}: {exc}", file=sys.stderr)
+        print("  Start one with `manu daemon`.", file=sys.stderr)
+        return _EXIT_ERROR
+
+    stream = sys.stdout if response.ok else sys.stderr
+    print(response.detail, file=stream)
+    return _EXIT_OK if response.ok else _EXIT_ERROR
 
 
 def _history(config: AppConfig, args: argparse.Namespace) -> int:
@@ -671,6 +692,8 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.hotkey.macos import HotkeyPermissionError, UnsupportedBindingError
     from amanuensis.injection.factory import UnsupportedPlatformError, create_injector
     from amanuensis.injection.macos import detect_clipboard_manager
+    from amanuensis.ipc.base import Response, make_handler
+    from amanuensis.ipc.factory import create_transport
     from amanuensis.storage.history import HistoryStore
     from amanuensis.ui.overlay import RecordingOverlay
     from amanuensis.ui.tray import TrayApp
@@ -819,6 +842,31 @@ def _daemon(config: AppConfig) -> int:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
+    # §7.3 floor item 3, and §7.6's authority model. The acceptor runs on its
+    # own thread and must not block: `toggle` returns as soon as the controller
+    # has been told, never when the dictation finishes.
+    def _status() -> Response:
+        # Deliberately no transcript content. §7.6 forbids it — a `status` that
+        # returned the last transcript would open an egress path G3's packet
+        # capture cannot see.
+        return Response(
+            ok=True,
+            detail=(
+                f"running: model {config.engine.model}, "
+                f"mode {config.hotkey.mode}, state {tray.state.value}"
+            ),
+        )
+
+    def _toggle() -> Response:
+        if tray.state is DictationState.RECORDING:
+            controller.end_session()
+            return Response(ok=True, detail="stopping")
+        _start_session()
+        return Response(ok=True, detail="recording")
+
+    control = create_transport()
+    control.serve(make_handler({"status": _status, "toggle": _toggle}))
+
     tray.set_on_quit(tray.stop)
     signal.signal(signal.SIGINT, lambda *_: tray.stop())
     signal.signal(signal.SIGTERM, lambda *_: tray.stop())
@@ -834,6 +882,7 @@ def _daemon(config: AppConfig) -> int:
         # Whatever ended the loop, the microphone is released and the tap is
         # torn down. A daemon that exits still holding either is §5.4's
         # failure with the tray already gone.
+        control.stop()
         listener.stop()
         controller.shutdown()
         # The panel says the microphone is live. It outlives neither.

@@ -1372,6 +1372,25 @@ synchronous service layer, an asynchronous I/O layer, and a queue between them. 
 | `HotkeyListener` | OS event tap; posts press/release into the controller |
 | `AudioCapture` | PortAudio callback thread, writing the ring buffer |
 | Transcription, post-processing, injection | one worker thread, draining sessions |
+| `ControlTransport` acceptor | its own thread, added 2026-09-02 |
+
+**The acceptor's thread is named here because the table had four rows and none
+of them served a socket** (choice-story #1). §7.3's floor item 1 exists because
+"a model that is never written down gets re-derived rather than ported", and
+the Phase 4 plan asserted threading was already settled while booking no work
+for the fifth concern it was adding — the same failure shape one component over.
+
+It is a dedicated thread rather than the alternatives, and both were real. A
+main-thread `CFSocket` source keeps the count at four and couples the transport
+to AppKit, which is the opposite of what floor item 3 asks for. Serving from
+the existing worker is free until the worker is mid-transcription, at which
+point `manu status` blocks behind a decode — a status command that hangs
+precisely when you most want to ask.
+
+The acceptor is a **third producer** into the controller, after the event tap
+and the tray. It obeys the same rule they do: it must not block, so `toggle`
+returns as soon as the controller has been told, never when the dictation
+finishes.
 
 **Two queues, not one** (corrected 2026-07-31, objection A6). An earlier revision
 said "§6.2's `AudioCapture` ring buffer is already that queue." It is not the same
@@ -1459,6 +1478,10 @@ amanuensis/
 │   │   ├── base.py
 │   │   ├── factory.py            # platform detection → listener (§7.3 floor)
 │   │   └── macos.py              # renamed from listener.py, 2026-08-03
+│   ├── ipc/                      # added 2026-09-02 at the Phase 4 gate
+│   │   ├── base.py               # ControlTransport ABC (§7.3 floor item 3)
+│   │   ├── factory.py            # platform detection → transport
+│   │   └── macos.py              # unix socket
 │   ├── storage/
 │   │   └── history.py            # HistoryStore
 │   └── ui/
@@ -2161,6 +2184,40 @@ auth. What does apply:
 
 - No telemetry, no crash reporting, no update check that phones home. If an update check
   is ever added it is opt-in and documented.
+- **Who may command the process that holds the microphone** (added 2026-09-02,
+  Phase 4, slicing record S4). §7.6 forbids interpreting a transcript as a
+  command and never asked the sibling question, which arrives with `manu
+  toggle`: the daemon holds the microphone permanently, and Phase 4 gives it a
+  socket that opens it.
+
+  **The boundary is filesystem permissions and nothing else.** The socket is a
+  unix domain socket at mode `0600` inside the data directory, which is
+  `0700`. Any process running as this user can send `toggle`; no process
+  running as another user can reach it, and nothing on the network can reach it
+  at all because it is not a network socket.
+
+  That is the correct level, and the argument is that it grants no authority a
+  same-user process does not already have. Such a process can synthesise the
+  hotkey through `CGEvent`, open the microphone itself, read the clipboard the
+  transcript transits, and read `history.db` directly. A socket that starts a
+  dictation is strictly less than any of those. Adding a token would move the
+  secret into a file with the same permissions as the socket, protecting the
+  socket from an attacker who by construction can read the token.
+
+  Three things follow and are requirements rather than notes:
+
+  1. **The transport carries no transcript content, ever.** `status` reports
+     daemon state — running, model, permissions, recording or not. It does not
+     report what was said. A `status` that returned the last transcript would
+     open a §7.6 egress path that G3's packet capture cannot see and that this
+     section spent a phase closing.
+  2. **Unknown verbs are refused, not ignored.** The daemon accepts exactly the
+     verbs it implements and answers anything else with an error naming them.
+  3. **A stale socket is not a running daemon.** The file outlives a crash, so
+     `manu status` distinguishes "nothing is listening" from "the daemon says
+     it is idle" — reporting the first as the second is a claim about the
+     microphone that nobody checked.
+
 - Model weights are downloaded once at install over HTTPS with checksum verification, from
   a pinned revision. Never at runtime.
 
@@ -3070,6 +3127,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-02 | **`manu status` and `manu toggle` ship, and §7.6 answers the question it never asked** (§6.3, §6.4, §7.3 floor item 3, §7.6, slicing record S4). The transport spent **two phases as a floor item with no phase**, which §7.3's own words call a floor item that does not exist. `ipc/` joins §6.4 on `hotkey/`'s pattern — `base.py`, `factory.py`, `macos.py` — and the unix socket does not appear in the CLI contract, which floor item 3 requires. **§7.6 gains the authority model.** It forbids interpreting a *transcript* as a command and never asked who may command the process that holds the microphone. The boundary is filesystem permissions and nothing else: `0600` inside a `0700` directory. That is the right level rather than a shortcut, because a same-user process can already synthesise the hotkey through `CGEvent`, open the microphone itself, read the clipboard the transcript transits, and read `history.db` — a socket that starts a dictation is strictly less than any of those, and a token would move the secret into a file with the same permissions as the socket. Three requirements follow: the transport **carries no transcript content ever** (a `status` returning the last transcript is an egress path the packet capture cannot see); unknown verbs are **refused, not ignored**, naming the ones that work; and a **stale socket is not a running daemon**, because reporting "nothing is listening" as "the daemon says it is idle" is a claim about the microphone nobody checked. **§6.3's thread table gains the acceptor's row** (choice-story #1). It had four rows and none served a socket, while the Phase 4 plan asserted threading was settled and booked no work for the fifth concern it was adding — floor item 1's failure shape one component over. A dedicated thread, because a main-thread `CFSocket` source couples the transport to AppKit and serving from the worker makes `manu status` block behind a decode. Found while building it: **`sun_path` is 104 bytes on macOS** and `$AMANUENSIS_DATA_DIR` can exceed it — pytest's own tmp tree does, at 129. Refused with a sentence naming the variable rather than the kernel's bare `AF_UNIX path too long`. |
 | 2026-09-02 | **`toggle` and `vad_auto` ship, and a refusal test opened the operator's microphone** (§5.2, §5.3, §9 Phase 4). `toggle` alternates on key-down and ignores the physical release; `vad_auto` starts on key-down and is ended by a new `SilenceWatcher` on the capture thread, because §5.2 is *press to start, silence ends the session* — the finger still opens the microphone and only the close is automatic. New **`[vad_auto]`** block rather than reusing `[vad]`: that block trims before transcription and its defaults are the ones §7.2's figures were measured under, this one decides when to stop recording, and the two want opposite windows. Sharing them would let a user tuning responsiveness silently move the configuration every published G1 figure was measured under. `max_seconds` is the floor under the mode's worst failure — §5.2 calls `vad_auto` the most likely to misfire and the dangerous misfire is the one that never fires, leaving the microphone open indefinitely. **The incident.** `test_the_daemon_refuses_a_mode_it_does_not_implement` passed `mode="toggle"` and asserted the daemon refused it as unbuilt. Building `toggle` removed the refusal, and the test did not fail — it **hung**, running `_daemon` for real: model loaded, microphone opened, AppKit run loop blocked inside pytest. Two such processes held the operator's microphone for **thirteen and ten minutes** and put two status items in his menu bar. He noticed; the suite did not. A test written against a refusal becomes a test that exercises the thing the moment the refusal is lifted, and it does not announce itself. `tests/conftest.py` gains an **autouse** `_no_real_microphone` guard — the same answer as the 2026-08-08 `_isolate_user_data` fixture, for the same species, because a guard each test must remember is a guard one test forgets. Positive and negative controls both present; removing the guard fails the positive one. |
 | 2026-09-02 | **§7.6's "checksum verification" is implemented, three phases after the sentence was written** (objection O8, §7.6, §9 Phase 4 slice S1). `download_weights` pinned a revision and verified **no digest at all** — sixth instance in this project of a stated constraint the code did not honour, and the first found by a sentinel rather than by a failure. `PINNED_DIGESTS` records a SHA-256 per file per pinned revision, `verify_weights` re-hashes after download and **raises**, and `manu install` prints what it checked. Digests are recorded *by this project* from snapshots it holds: Hugging Face content-addresses its own LFS blobs, so checking a download against hub metadata verifies the hub against itself. A model with **no** recorded digest is reported unverified rather than passed — Moonshine and Parakeet arrive in Phase 4 in exactly that state, and a check that passes for a model it has no record of is a check that cannot fail. Both controls, both verified by sabotage: one wrong hex digit fails the positive control, and a `verify_weights` that always succeeds fails both negative controls. **Separately, writing the README first found a defect the gate would otherwise have spent itself on:** `src/amanuensis/assets/*.wav` is gitignored, so `manu install` fails on any fresh clone at the reference clip. Deliberate — §7.2 needs a clip that is not the user's voice and needs no microphone, and macOS `say` output has no clear redistribution grant — but nothing told the user. The README now generates it as its own step. The provenance is still open and still assigned to this phase. |
 | 2026-09-02 | **`spoken_commands` is on by default, and the sunset clause that nearly deleted it could not have said anything else** (§5.3, §7.5, choice-story #11). Phase 3 shipped the rule off under "if it changes nothing, the code goes" and the gate returned **zero** — over a corpus that contains no spoken command, so the number measures the speaker's habit rather than the rule. The condition is rewritten to one that can discriminate: **twenty dictations in which the phrase was actually spoken, with the key on.** Flipping costs nothing until it is spoken, and it is the only paragraph mechanism the product has before Phase 5, which is unscheduled. Checking the flip found a third fact neither the clause nor the gate knew: **`_COMMAND_RE` requires a terminator on both sides of the phrase**, and §7.5's dominant defect is Whisper supplying no mark at its own segment ends — **58 missing marks over ten dictations**, the same marks the rule anchors on. Verified against the shipped regex; three of four realistic transcripts do not fire. The Phase 3 zero is therefore two facts stacked, and the rule's trigger is defeated by the error class it sits beside. **Recorded, not fixed** — loosening the trailing anchor back to `[.!?]?` is the change that deleted three content words from `Add a note. New line items are on order.`, and this is the one rule in the chain that deletes them. Pinned by a test carrying the actual strings. |

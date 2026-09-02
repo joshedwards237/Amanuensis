@@ -23,7 +23,7 @@ from amanuensis.cli import (
     build_parser,
     main,
 )
-from amanuensis.config import InjectionConfig
+from amanuensis.config import InjectionConfig, default_data_dir
 from amanuensis.models.results import ClipboardExposure
 
 
@@ -62,40 +62,71 @@ def test_no_subcommand_prints_usage_and_fails() -> None:
     assert main([]) != 0
 
 
-@pytest.mark.parametrize(
-    ("verb", "phase"),
-    [
-        # `daemon` left this table in Phase 2b — it does something now, and
-        # calling `main(["daemon"])` from a test would take the microphone and
-        # block in an AppKit run loop. Its paths are tested below, all of them
-        # ones that return before anything is opened.
-        ("toggle", "Phase 4"),
-        ("status", "Phase 4"),
-    ],
-)
-def test_each_verb_names_the_phase_that_builds_it(
-    verb: str, phase: str, capsys: pytest.CaptureFixture[str]
+@pytest.fixture
+def short_data_dir(monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A data directory short enough for `sun_path`.
+
+    `conftest` isolates `$AMANUENSIS_DATA_DIR` into pytest's tmp tree, which is
+    129 bytes deep — past the kernel's 104-byte limit for a unix socket. The
+    transport refuses that with a sentence rather than a bare `OSError`, which
+    is correct behaviour and not what these tests are about.
+    """
+    import shutil
+    import tempfile
+
+    made = Path(tempfile.mkdtemp(prefix="amn", dir="/tmp"))
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(made))
+    yield made
+    shutil.rmtree(made, ignore_errors=True)
+
+
+@pytest.mark.parametrize("verb", ["toggle", "status"])
+def test_a_verb_with_no_daemon_says_so_and_says_how(
+    verb: str, capsys: pytest.CaptureFixture[str], short_data_dir: Path
 ) -> None:
+    """Both verbs shipped in Phase 4, and this test replaces the one asserting
+    they were unbuilt.
+
+    §7.6's third requirement is the content: "nothing is listening" and "the
+    daemon says it is idle" are different facts, and reporting the first as the
+    second is a claim about the microphone nobody checked. So a missing daemon
+    is an error with a non-zero exit and a next step, not a shrug.
+
+    It runs against `$AMANUENSIS_DATA_DIR` in a temp directory — `conftest`
+    already redirects it — so it can never reach a daemon the operator has
+    running, and never starts one.
+    """
     exit_code = main([verb])
 
     assert exit_code != 0
-    assert phase in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "not running" in err.lower()
+    assert "manu daemon" in err, "the error must name the next step"
 
 
-def test_toggle_and_status_name_the_transport_they_are_waiting_on() -> None:
+def test_toggle_and_status_name_the_transport_they_are_waiting_on(
+    short_data_dir: Path,
+) -> None:
     """Recorded at the Phase 2b gate: §9's Phase 2b names the listener, the
     controller and the indicator, and does not name these two. Both need the
     IPC transport §7.3 lists as portability floor item 3, which no phase ever
     scheduled — so they move to Phase 4, which owns `toggle` mode and the tray.
 
     Asserted here rather than left as prose, because the previous value said
-    Phase 2b and this phase is the one that would have shipped the lie.
+    Phase 2b and this phase is the one that would have shipped the lie. The
+    assertion moved from a phase label to the transport itself once Phase 4
+    built them.
     """
-    from amanuensis.cli import _VERB_PHASES
+    from amanuensis.ipc.factory import create_transport
 
-    assert _VERB_PHASES["toggle"] == "Phase 4"
-    assert _VERB_PHASES["status"] == "Phase 4"
-    assert "daemon" not in _VERB_PHASES
+    # The socket is not in the CLI contract — §7.3 floor item 3 — so the thing
+    # asserted is that a transport resolves at all, not what kind it is.
+    transport = create_transport()
+    assert transport.path.name == "daemon.sock"
+    assert transport.path.parent == default_data_dir(), (
+        "the socket lives beside history.db so one $AMANUENSIS_DATA_DIR "
+        "override moves both; see choice-story #2"
+    )
 
 
 def test_a_bad_config_is_reported_as_an_error_not_a_traceback(
@@ -430,3 +461,18 @@ def test_history_last_says_so_when_there_is_nothing(
     assert main(["history", "--last"]) == 0
 
     assert "no transcripts" in capsys.readouterr().out.lower()
+
+
+def test_a_data_dir_too_deep_for_a_socket_is_a_sentence_not_a_traceback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`sun_path` is 104 bytes on macOS and the kernel's own error names
+    nothing. `$AMANUENSIS_DATA_DIR` is user-set and can easily exceed it —
+    pytest's own tmp tree does, which is how this was found.
+    """
+    exit_code = main(["status"])  # conftest's isolated data dir is 129 bytes
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "AMANUENSIS_DATA_DIR" in err
+    assert "Traceback" not in err
