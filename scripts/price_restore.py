@@ -26,8 +26,10 @@ No transcript text is read.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 
 DB = Path.home() / "Library/Application Support/amanuensis/history.db"
@@ -49,8 +51,6 @@ def nearest_rank(values: list[float], pct: float) -> float:
     if not values:
         raise ValueError("no values")
     ordered = sorted(values)
-    import math
-
     k = max(1, math.ceil(pct / 100.0 * len(ordered)))
     return ordered[k - 1]
 
@@ -68,7 +68,8 @@ def main() -> None:
         start = datetime.fromisoformat(r[0]).timestamp()
         duration = r[1]
         worker_ms = sum(r[2:])
-        parsed.append((start, duration, worker_ms, r[2 + WORKER_STAGES.index("restore_ms")]))
+        restore_ms = r[2 + WORKER_STAGES.index("restore_ms")]
+        parsed.append((start, duration, worker_ms, restore_ms))
 
     print(f"rows: {len(parsed)}")
     print(f"range: {rows[0][0][:19]} .. {rows[-1][0][:19]}")
@@ -82,7 +83,7 @@ def main() -> None:
     slacks: list[float] = []
     helped = 0
     busy_anyway = 0
-    for (s0, d0, w0, r0), (s1, d1, _w1, _r1) in zip(parsed, parsed[1:]):
+    for (s0, d0, w0, r0), (s1, d1, _w1, _r1) in pairwise(parsed):
         worker_finish = s0 + d0 + w0 / 1000.0
         worker_arrives = s1 + d1
         slack = worker_arrives - worker_finish
