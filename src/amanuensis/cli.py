@@ -658,7 +658,10 @@ def _daemon(config: AppConfig) -> int:
 
     from amanuensis.audio.capture import AudioCapture, DeviceNotFoundError
     from amanuensis.audio.vad import VoiceActivityDetector
-    from amanuensis.controllers.dictation_controller import DictationController
+    from amanuensis.controllers.dictation_controller import (
+        DictationController,
+        DictationState,
+    )
     from amanuensis.engines.faster_whisper import (
         FasterWhisperEngine,
         ModelNotAvailableError,
@@ -668,6 +671,7 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.injection.factory import UnsupportedPlatformError, create_injector
     from amanuensis.injection.macos import detect_clipboard_manager
     from amanuensis.storage.history import HistoryStore
+    from amanuensis.ui.overlay import RecordingOverlay
     from amanuensis.ui.tray import TrayApp
 
     try:
@@ -747,6 +751,16 @@ def _daemon(config: AppConfig) -> int:
     # startup warning above prints to a terminal nobody is watching now has a
     # persistent home (§5.4, §7.3).
     tray = TrayApp()
+    overlay = RecordingOverlay(config.feedback)
+
+    def _on_state_change(state: DictationState) -> None:
+        # Two surfaces, one state, and the fan-out lives here rather than in
+        # either of them: §6.2 makes the tray a status surface, and a tray that
+        # drove the overlay would be a tray that owned another component's
+        # lifetime.
+        tray.set_state(state)
+        overlay.set_state(state)
+
     tray.set_clipboard_exposure(
         exposure if config.injection.warn_on_clipboard_manager else None
     )
@@ -758,7 +772,7 @@ def _daemon(config: AppConfig) -> int:
         history=history,
         capture=capture,
         detector=detector,
-        on_state_change=tray.set_state,
+        on_state_change=_on_state_change,
         vocabulary=vocabulary,
     )
 
@@ -794,6 +808,8 @@ def _daemon(config: AppConfig) -> int:
         # failure with the tray already gone.
         listener.stop()
         controller.shutdown()
+        # The panel says the microphone is live. It outlives neither.
+        overlay.hide()
         print("stopped.")
     return _EXIT_OK
 
