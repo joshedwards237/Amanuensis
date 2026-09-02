@@ -619,6 +619,35 @@ def _check_coherence(config: AppConfig) -> None:
     forgets the model path should learn that at daemon start, not on the
     utterance where the pass silently does not happen.
     """
+    # A backend the daemon cannot construct is refused here rather than at
+    # first use, and the reason is sharper than "fail early". `[engine]
+    # backend` was read in exactly one place — to build the `engine` label on a
+    # history row — so an unbuildable value was accepted, the daemon ran
+    # faster-whisper anyway, and `history.db` recorded the row under the engine
+    # that did not produce it. A key that does nothing is inert; a key that
+    # mislabels the measurement record makes every figure derived from those
+    # rows a claim about the wrong engine.
+    from amanuensis.engines.registry import UnknownBackendError, resolve_engine
+
+    try:
+        engine_class = resolve_engine(config.engine.backend)
+        # Constructed, not merely resolved. Both engines validate the model
+        # name in `__init__` and load nothing there, and resolving the class
+        # alone left the mislabel reachable by a different route: `backend =
+        # "moonshine"` with `model = "tiny.en"` passed, and the row would still
+        # have been written as `moonshine:tiny.en`.
+        engine_class(config.engine)
+    except (NotImplementedError, UnknownBackendError) as exc:
+        raise ConfigError(f"engine.backend: {exc}") from exc
+    except ValueError as exc:
+        raise ConfigError(f"engine.model: {exc}") from exc
+    except ImportError as exc:
+        raise ConfigError(
+            f"engine.backend: {config.engine.backend!r} is built but its "
+            f"runtime is not installed ({exc}). Install it, or choose a "
+            "backend whose runtime is present."
+        ) from exc
+
     if config.postprocess.llm.enabled and not config.postprocess.llm.model_path:
         raise ConfigError(
             "postprocess.llm.model_path: required when "

@@ -143,6 +143,10 @@ files = ["src", "tests"]
 [[tool.mypy.overrides]]
 module = [
     "AppKit.*",
+    # Moonshine ships no py.typed. It is an alternative engine behind the
+    # TranscriptionEngine ABC (§7.2), and the ABC is where its shape is
+    # asserted — mypy cannot check a package that does not describe itself.
+    "moonshine_onnx.*",
     "ApplicationServices.*",
     "Quartz.*",
     "Foundation.*",

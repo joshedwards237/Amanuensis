@@ -630,3 +630,103 @@ def test_download_weights_refuses_bad_bytes(
     )
     with pytest.raises(WeightsDigestError):
         download_weights("tiny.en")
+
+
+# ---------------------------------------------------------------------------
+# The registry, and the label it was writing into history.db
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipping_backend_resolves() -> None:
+    """`resolve_engine` raised `NotImplementedError` for **every** backend
+    since Phase 0 — including the one that ships — while §6.4 describes the
+    module as "backend string → class, per config".
+
+    The daemon worked because `cli.py` imported `FasterWhisperEngine` by name
+    and never asked the registry, which is what let the dispatch stay dead for
+    four phases without anything noticing.
+    """
+    from amanuensis.engines.registry import resolve_engine
+
+    assert resolve_engine("faster_whisper") is FasterWhisperEngine
+
+
+def test_an_unbuilt_backend_still_names_its_phase() -> None:
+    from amanuensis.engines.registry import UnknownBackendError, resolve_engine
+
+    with pytest.raises(NotImplementedError) as exc:
+        resolve_engine("parakeet")
+    assert "parakeet" in str(exc.value)
+
+    with pytest.raises(UnknownBackendError):
+        resolve_engine("not-an-engine")
+
+
+def test_a_backend_the_daemon_will_not_run_is_refused_at_config_time() -> None:
+    """The defect this replaces, and it is worse than a key that does nothing.
+
+    `[engine] backend = "moonshine"` was accepted, the daemon constructed
+    `FasterWhisperEngine` regardless, and `history.db` recorded the row as
+    `moonshine:tiny.en` — because `backend` was read in exactly one place, to
+    build that label. A key that does nothing is inert; a key that mislabels
+    the measurement record makes every figure derived from those rows a claim
+    about the wrong engine.
+
+    Config validation now refuses a backend that cannot be constructed, so the
+    label and the engine cannot disagree.
+    """
+    import tempfile
+
+    from amanuensis.config import ConfigError, load_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.toml"
+        path.write_text('[engine]\nbackend = "parakeet"\n')
+        with pytest.raises(ConfigError) as exc:
+            load_config(path)
+        assert "parakeet" in str(exc.value)
+
+
+def test_a_backend_and_model_that_disagree_are_refused() -> None:
+    """The second route to the same mislabel, and it survived the first fix.
+
+    Resolving the class was not enough: `backend = "moonshine"` with
+    `model = "tiny.en"` still loaded, and the row would still have been written
+    `moonshine:tiny.en`. The engine is constructed rather than merely resolved
+    — both engines validate the model name in `__init__` and load nothing
+    there — so the label and the engine cannot disagree by any route.
+    """
+    import tempfile
+
+    from amanuensis.config import ConfigError, load_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.toml"
+        path.write_text('[engine]\nbackend = "moonshine"\nmodel = "tiny.en"\n')
+        with pytest.raises(ConfigError) as exc:
+            load_config(path)
+        assert "tiny.en" in str(exc.value)
+
+
+def test_the_moonshine_engine_satisfies_the_contract() -> None:
+    """§6.4 has listed `engines/moonshine.py` since Phase 0 and it did not
+    exist. An ABC with one implementation is a claim nobody has tested."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.base import TranscriptionEngine
+    from amanuensis.engines.moonshine import MoonshineEngine
+
+    engine = MoonshineEngine(EngineConfig(model="moonshine/tiny"))
+    assert isinstance(engine, TranscriptionEngine)
+    assert engine.model_name == "moonshine/tiny"
+    assert engine.is_loaded is False
+
+
+def test_moonshine_rejects_a_sample_rate_it_would_silently_mistranscribe() -> None:
+    """No resampling here, so a mismatch transcribes audio played at the wrong
+    speed rather than failing."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.moonshine import MoonshineEngine
+
+    engine = MoonshineEngine(EngineConfig(model="moonshine/tiny"))
+    with pytest.raises(ValueError, match="16000"):
+        engine.transcribe(np.zeros(16000, dtype=np.float32), 44_100)
