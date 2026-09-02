@@ -775,7 +775,11 @@ def _daemon(config: AppConfig) -> int:
     # startup warning above prints to a terminal nobody is watching now has a
     # persistent home (§5.4, §7.3).
     tray = TrayApp()
-    overlay = RecordingOverlay(config.feedback)
+    # An overlay failure reports through the tray rather than killing the
+    # daemon: it runs inside an NSBlockOperation, where an uncaught Python
+    # exception crosses the PyObjC bridge as an NSException and terminates
+    # the process — which it did on 2026-09-02, over a confidence feature.
+    overlay = RecordingOverlay(config.feedback, on_error=tray.set_error)
 
     def _on_state_change(state: DictationState) -> None:
         # Two surfaces, one state, and the fan-out lives here rather than in

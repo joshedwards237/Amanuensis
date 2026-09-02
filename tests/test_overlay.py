@@ -165,3 +165,54 @@ def test_rapid_state_changes_do_not_stack_panels(appkit: _FakeAppKit) -> None:
         overlay.set_state(DictationState.RECORDING)
         overlay.set_state(DictationState.IDLE)
     assert len(appkit.panels) == 1
+
+
+def test_the_real_nsrect_shape_is_what_the_fake_returns() -> None:
+    """The fake lied and a daemon paid for it.
+
+    `NSScreen.frame()` is an `NSRect`, which PyObjC unpacks as
+    `((x, y), (w, h))` — two elements. `test_overlay_fakes` returned a flat
+    4-tuple, so every overlay test passed while the product crashed on the
+    first state change with "not enough values to unpack (expected 4, got 2)",
+    inside an NSBlockOperation, taking the process with it.
+
+    Asserted against the fake here and against the framework in the daemon:
+    a fake whose shape nobody checked is a fake that can only confirm.
+    """
+    from test_overlay_fakes import install
+
+    class _Bare:
+        pass
+
+    fake = _Bare()
+    install(fake)
+    frame = fake.NSScreen.mainScreen().frame()  # type: ignore[attr-defined]
+    assert len(tuple(frame)) == 2, "NSRect is nested, not flat"
+    (x, y), (w, h) = frame
+    assert (x, y, w, h) == (0.0, 0.0, 1440.0, 900.0)
+
+
+def test_a_failing_panel_disables_the_overlay_and_reports_it(
+    appkit: _FakeAppKit,
+) -> None:
+    """§5.4 calls the overlay a confidence feature — macOS's own microphone
+    indicator carries correctness regardless. So a panel that raises costs the
+    panel, not the daemon holding the microphone, and it says so in words
+    through the surface this phase built for saying things in words."""
+    reported: list[str] = []
+
+    def explode() -> None:
+        raise RuntimeError("AppKit said no")
+
+    appkit.NSPanel = type("NSPanel", (), {"alloc": staticmethod(explode)})
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=reported.append)
+
+    overlay.set_state(DictationState.RECORDING)
+
+    assert reported, "the failure was swallowed silently"
+    assert "overlay" in reported[0].lower()
+
+    reported.clear()
+    overlay.set_state(DictationState.IDLE)
+    overlay.set_state(DictationState.RECORDING)
+    assert reported == [], "a failed overlay must not retry on every dictation"

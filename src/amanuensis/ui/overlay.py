@@ -36,6 +36,7 @@ one question.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any, Final
 
 from amanuensis.config import FeedbackConfig
@@ -91,8 +92,18 @@ def frame_for(
 class RecordingOverlay:
     """A borderless panel, shown while the microphone is open."""
 
-    def __init__(self, config: FeedbackConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: FeedbackConfig | None = None,
+        *,
+        on_error: Callable[[str], None] | None = None,
+    ) -> None:
         self._config = config if config is not None else FeedbackConfig()
+        #: Set once the panel has failed. A panel that raised once will raise
+        #: every time, and retrying it on every state change turns one defect
+        #: into a failure on every dictation.
+        self._failed = False
+        self._on_error = on_error
         self._panel: Any | None = None
         self._visible = False
         #: Guards `_panel` and `_visible`. Set from the event tap and the
@@ -105,7 +116,7 @@ class RecordingOverlay:
 
     def set_state(self, state: DictationState) -> None:
         """Safe from any thread, and safe before anything is shown."""
-        if not self._config.overlay:
+        if not self._config.overlay or self._failed:
             return
         wanted = should_show(state)
         with self._lock:
@@ -127,7 +138,29 @@ class RecordingOverlay:
         _main_queue().addOperationWithBlock_(lambda: self._render(False))
 
     def _render(self, wanted: bool) -> None:
-        """Main thread only — see `set_state`."""
+        """Main thread only — see `set_state`.
+
+        Wrapped, and the reason is not defensiveness in general. This runs
+        inside an `NSBlockOperation` on the main queue, where an uncaught
+        Python exception crosses the PyObjC bridge as an `NSException` and
+        **terminates the process** — which on 2026-09-02 it did, taking down a
+        daemon that was holding the microphone, over a panel that is a
+        confidence feature by §5.4's own account. macOS's own microphone
+        indicator carries the correctness half regardless.
+
+        So the overlay is disabled after a failure rather than retried, and the
+        failure is reported through `on_error` — which is `TrayApp.set_error`,
+        the surface built in this same phase for exactly this: saying what
+        happened in words.
+        """
+        try:
+            self._render_unguarded(wanted)
+        except Exception as exc:
+            self._failed = True
+            if self._on_error is not None:
+                self._on_error(f"the recording overlay failed and is off: {exc}")
+
+    def _render_unguarded(self, wanted: bool) -> None:
         panel = self._panel if self._panel is not None else self._build()
         if panel is None:  # pragma: no cover — AppKit returned nil
             return
@@ -141,7 +174,17 @@ class RecordingOverlay:
 
         appkit = _appkit()
         screen = appkit.NSScreen.mainScreen()
-        rect = frame_for(self._config.overlay_position, tuple(screen.frame()))
+        # `NSScreen.frame()` is an `NSRect`, which PyObjC unpacks as
+        # `((x, y), (width, height))` — two elements, nested. `tuple(...)` of
+        # it is therefore length 2, not 4, and this line read the framework's
+        # shape wrong until a daemon crashed on it: "not enough values to
+        # unpack (expected 4, got 2)", inside an NSBlockOperation, which takes
+        # the whole process with it.
+        (origin_x, origin_y), (width, height) = screen.frame()
+        rect = frame_for(
+            self._config.overlay_position,
+            (float(origin_x), float(origin_y), float(width), float(height)),
+        )
 
         panel = appkit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             appkit.NSMakeRect(*rect),

@@ -106,8 +106,14 @@ def install(fake: Any) -> None:
 
     class _Screen:
         @staticmethod
-        def frame() -> tuple[float, float, float, float]:
-            return (0.0, 0.0, 1440.0, 900.0)
+        def frame() -> tuple[tuple[float, float], tuple[float, float]]:
+            """The shape PyObjC actually returns for `NSRect`.
+
+            This fake returned a flat 4-tuple until 2026-09-02, when the real
+            one crashed a daemon: `NSRect` unpacks as `((x, y), (w, h))`, and
+            every overlay test passed against the invented shape.
+            """
+            return ((0.0, 0.0), (1440.0, 900.0))
 
     class NSScreen:
         @staticmethod
