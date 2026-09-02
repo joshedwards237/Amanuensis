@@ -34,11 +34,15 @@ from numpy.typing import NDArray
 from amanuensis.config import EngineConfig
 from amanuensis.engines.base import TranscriptionEngine
 from amanuensis.engines.faster_whisper import (
+    PINNED_DIGESTS,
+    PINNED_REVISIONS,
     FasterWhisperEngine,
     ModelNotAvailableError,
+    WeightsDigestError,
     resolve_device,
     resolve_model_name,
     resolve_model_path,
+    verify_weights,
 )
 from conftest import requires_corpus
 
@@ -456,3 +460,89 @@ def test_no_prompt_and_no_terms_is_none_rather_than_empty() -> None:
     from amanuensis.engines.faster_whisper import FasterWhisperEngine
 
     assert FasterWhisperEngine(EngineConfig(initial_prompt=""))._prompt(()) is None
+
+
+# ---------------------------------------------------------------------------
+# Checksum verification — §7.6, objection O8
+# ---------------------------------------------------------------------------
+
+
+def _snapshot(tmp_path: Path, model: str) -> Path:
+    """A snapshot with every file present and every file wrong.
+
+    Right shape, wrong bytes — so a verifier that only checks for presence
+    passes it and a verifier that hashes does not.
+    """
+    directory = tmp_path / model
+    directory.mkdir()
+    for name in PINNED_DIGESTS[model]:
+        (directory / name).write_bytes(b"not the real weights")
+    return directory
+
+
+def test_every_pinned_revision_has_a_recorded_digest() -> None:
+    """A pin with no digest is a revision nobody verifies (§7.6).
+
+    The two tables are maintained by hand and drift apart silently — this is
+    the assertion that notices.
+    """
+    assert set(PINNED_DIGESTS) == set(PINNED_REVISIONS)
+    for model, files in PINNED_DIGESTS.items():
+        assert files, f"{model} has an empty digest record"
+        assert "model.bin" in files, f"{model} records no digest for the weights"
+        for name, digest in files.items():
+            assert len(digest) == 64, f"{model}/{name} is not a sha256"
+            int(digest, 16)  # raises if it is not hex
+
+
+def test_tampered_weights_are_refused(tmp_path: Path) -> None:
+    """The negative control. Bytes that are not the recorded bytes must fail.
+
+    This is the objection O8 case: for three phases `download_weights` pinned a
+    revision and verified nothing, so this test could not have passed and no
+    test asked it to.
+    """
+    directory = _snapshot(tmp_path, "tiny.en")
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "model.bin" in str(exc.value)
+
+
+def test_a_missing_file_is_refused_not_skipped(tmp_path: Path) -> None:
+    """A digest record that silently ignores an absent file verifies nothing."""
+    directory = _snapshot(tmp_path, "tiny.en")
+    (directory / "model.bin").unlink()
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "model.bin" in str(exc.value)
+
+
+def test_a_model_with_no_recorded_digest_reports_unverified(tmp_path: Path) -> None:
+    """The other half of the shape §7.6 is amended to close.
+
+    Moonshine and Parakeet arrive in Phase 4 with no pin and no digest. A check
+    that passes for a model it has no record of is a check that cannot fail, so
+    the absence is reported rather than treated as success.
+    """
+    directory = tmp_path / "unpinned"
+    directory.mkdir()
+    (directory / "model.bin").write_bytes(b"anything at all")
+    result = verify_weights(directory, "moonshine/tiny")
+    assert result.verified is False
+    assert result.files_checked == 0
+
+
+def test_the_real_cached_weights_verify() -> None:
+    """The positive control, against bytes this project actually shipped on.
+
+    Without it the negative control above is passed by a function that refuses
+    everything. Skips rather than fails where the cache is cold — the digests
+    are the artefact under test, not the download.
+    """
+    try:
+        directory = resolve_model_path("tiny.en")
+    except ModelNotAvailableError:
+        pytest.skip("no local tiny.en snapshot — run `manu install`")
+    result = verify_weights(directory, "tiny.en")
+    assert result.verified is True
+    assert result.files_checked == len(PINNED_DIGESTS["tiny.en"])

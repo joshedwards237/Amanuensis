@@ -97,7 +97,23 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install .
 ```
 
-**2. Download the model and measure this machine.**
+**2. Generate the reference clip.**
+
+```sh
+scripts/make_tier_clip.sh
+```
+
+The install measures your machine against a ten-second speech clip, and **the
+repository does not ship one**. That is not an oversight: PRD §7.2 requires a
+clip that is not your voice and needs no microphone permission before first use,
+which leaves synthesised speech — and the redistribution grant for a macOS
+system voice is not clear enough to commit one. So you generate it locally with
+`say`. No microphone, no network. Settling this is an open Phase 4 item.
+
+If you are not on macOS-with-`say`, or you would rather use your own recording:
+`manu install --clip /path/to/ten-seconds.wav`.
+
+**3. Download the model and measure this machine.**
 
 ```sh
 manu install
@@ -105,12 +121,15 @@ manu install
 
 This is **the only network access Amanuensis ever makes**, and it happens once.
 It fetches the ASR weights from Hugging Face over HTTPS at a pinned revision,
-then runs nine timed decodes on a reference clip to find out which speed tier
-your machine is in. Expect a few minutes — the download was measured at 185 s on
-the author's connection and yours will differ. It prints your tier and the p50
-and p95 it measured; those are your numbers, not ours.
+then re-hashes every downloaded file against a SHA-256 this project recorded
+itself — a mismatch is refused, not warned about (§7.6). Then it runs nine timed
+decodes on the clip from step 2 to find which speed tier your machine is in.
 
-**3. Grant two macOS permissions.**
+Expect a few minutes; the download was measured at 185 s on the author's
+connection and yours will differ. It prints `checksums verified`, then your tier
+and the p50 and p95 it measured. Those are your numbers, not ours.
+
+**4. Grant two macOS permissions.**
 
 The daemon needs **Accessibility** (to type into other applications) and **Input
 Monitoring** (to see the hotkey). They are separate panes in System Settings →
@@ -122,7 +141,7 @@ Terminal, iTerm, Ghostty, or VS Code — whichever you ran `manu` from. This is 
 real wart and it goes away when Phase 4 ships an `.app` bundle. `manu daemon`
 names both permissions and tells you which is missing if you skip this step.
 
-**4. Dictate.**
+**5. Dictate.**
 
 ```sh
 manu daemon
@@ -138,7 +157,7 @@ If you would rather check the pieces before binding a hotkey:
 manu transcribe --seconds 10        # record and print, inject nothing
 ```
 
-**5. Uninstall.**
+**6. Uninstall.**
 
 ```sh
 manu history --purge                # transcripts, stored audio, and the database
@@ -158,6 +177,8 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   transcription worked, injection did not. `manu history --last` has your words.
 - **`⚠` after a dictation.** The collapse guard withheld the text because the
   decoder stopped early. `manu history --last` has what it got.
+- **`manu install` says the reference clip is missing.** Step 2 — the clip is
+  generated locally and is not in the repository.
 - **I said "new paragraph" and got the words instead of a break.** Known, and
   the cause is documented in PRD §7.5: the rule fires only when the decoder
   supplied sentence marks on both sides of the phrase, and it frequently does

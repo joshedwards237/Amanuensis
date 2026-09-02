@@ -50,7 +50,9 @@ up in a table as though it were an accelerator tier.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -66,12 +68,16 @@ if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
 
 __all__ = [
     "COMPUTE_TYPE",
+    "PINNED_DIGESTS",
     "PINNED_REVISIONS",
     "FasterWhisperEngine",
     "ModelNotAvailableError",
+    "WeightsDigestError",
+    "WeightsVerification",
     "resolve_device",
     "resolve_model_name",
     "resolve_model_path",
+    "verify_weights",
 ]
 
 #: §7.2's table specifies int8 for every CPU row.
@@ -104,6 +110,51 @@ PINNED_REVISIONS: Final[dict[str, str]] = {
     "small.en": "d1d751a5f8271d482d14ca55d9e2deeebbae577f",
 }
 
+#: SHA-256 per file of each pinned revision, §7.6. Recorded **by this project**
+#: from snapshots it holds, which is the entire point: Hugging Face already
+#: content-addresses its LFS blobs, so checking a download against the hub's own
+#: metadata verifies the hub against itself and catches nothing a compromised or
+#: re-pointed hub would do. A digest written down here catches it.
+#:
+#: For three phases §7.6 claimed "checksum verification" and `download_weights`
+#: verified nothing (objection O8) — the sixth instance in this project of a
+#: stated constraint the code did not honour. Regenerate with
+#: `scripts/record_weight_digests.py` after changing a pin; the two tables are
+#: hand-maintained and `test_every_pinned_revision_has_a_recorded_digest`
+#: is what notices when they drift apart.
+PINNED_DIGESTS: Final[dict[str, dict[str, str]]] = {
+    "tiny.en": {
+        "config.json":
+            "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5",
+        "model.bin":
+            "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+        "tokenizer.json":
+            "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+        "vocabulary.txt":
+            "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+    },
+    "base.en": {
+        "config.json":
+            "f3bc3821e9fc76a27bae538e11ae5b677dcdd352b4600429ce7951d398569aeb",
+        "model.bin":
+            "2a166925539a16005f14ff328359f9b9adb9dc4fb631bb3b227526862e93e2ef",
+        "tokenizer.json":
+            "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+        "vocabulary.txt":
+            "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+    },
+    "small.en": {
+        "config.json":
+            "666a9605530ac1f61fa8177f3702b4dacec9966749e42610839fcc32661d5fae",
+        "model.bin":
+            "62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a",
+        "tokenizer.json":
+            "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+        "vocabulary.txt":
+            "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+    },
+}
+
 #: Warm-up audio: one second of quiet, deterministic noise. Silence would be
 #: the obvious choice and is the wrong one — Whisper's decoder repetition-loops
 #: on silence (541 ms → 6,039 ms on the same model and sample, §7.2), so a
@@ -115,6 +166,31 @@ _WARMUP_SECONDS: Final = 1.0
 
 class ModelNotAvailableError(Exception):
     """Weights are not on disk, and this process will not go and get them."""
+
+
+class WeightsDigestError(Exception):
+    """Downloaded bytes are not the bytes this project recorded (§7.6).
+
+    Raised rather than warned. A digest mismatch on model weights is either a
+    corrupted download or a repository serving something other than the pinned
+    revision, and there is no version of "carry on with these" that is correct
+    for a product whose headline claim is that nothing leaves the machine.
+    """
+
+
+@dataclass(frozen=True)
+class WeightsVerification:
+    """What `verify_weights` actually checked, so a caller can say so.
+
+    `verified is False` with `files_checked == 0` is the honest report for a
+    model this project has no digests for — Moonshine and Parakeet arrive in
+    Phase 4 in exactly that state (§7.2). Returning a bare `True` there would be
+    a check that cannot fail, which is the shape §7.6 was amended to close.
+    """
+
+    model: str
+    verified: bool
+    files_checked: int
 
 
 def _cuda_device_count() -> int:
@@ -203,7 +279,7 @@ def download_weights(model: str, cache_dir: Path | None = None) -> Path:
     """
     from faster_whisper.utils import download_model
 
-    return Path(
+    path = Path(
         download_model(
             model,
             local_files_only=False,
@@ -211,6 +287,46 @@ def download_weights(model: str, cache_dir: Path | None = None) -> Path:
             revision=PINNED_REVISIONS.get(model),
         )
     )
+    # Fail closed, here rather than in the caller. A verification the CLI has to
+    # remember to call is a verification one code path forgets, and this one
+    # guards the only bytes that enter this machine from outside it.
+    verify_weights(path, model)
+    return path
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_weights(path: Path, model: str) -> WeightsVerification:
+    """Re-hash a snapshot against `PINNED_DIGESTS` (§7.6, objection O8).
+
+    Raises `WeightsDigestError` naming **every** file that is wrong, not the
+    first — a mismatch on one file and a mismatch on all four are different
+    events and the message should say which happened.
+    """
+    expected = PINNED_DIGESTS.get(model)
+    if expected is None:
+        return WeightsVerification(model=model, verified=False, files_checked=0)
+
+    problems: list[str] = []
+    for name, digest in sorted(expected.items()):
+        candidate = path / name
+        if not candidate.is_file():
+            problems.append(f"{name}: missing")
+        elif (actual := _sha256(candidate)) != digest:
+            problems.append(f"{name}: expected {digest[:12]}…, got {actual[:12]}…")
+
+    if problems:
+        raise WeightsDigestError(
+            f"{model} at {path} does not match the digests recorded for its "
+            f"pinned revision (§7.6):\n  " + "\n  ".join(problems)
+        )
+    return WeightsVerification(model=model, verified=True, files_checked=len(expected))
 
 
 class FasterWhisperEngine(TranscriptionEngine):

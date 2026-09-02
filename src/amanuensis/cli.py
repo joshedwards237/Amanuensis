@@ -925,9 +925,12 @@ def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
     """
     from amanuensis.engines.faster_whisper import (
         ModelNotAvailableError,
+        WeightsDigestError,
         download_weights,
         resolve_device,
         resolve_model_name,
+        resolve_model_path,
+        verify_weights,
     )
     from amanuensis.tier import (
         TIER_A_P50_MS,
@@ -949,10 +952,41 @@ def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
         print("makes, and it happens once (goal G3, §7.6).", flush=True)
         try:
             path = download_weights(model)
+        except WeightsDigestError as exc:
+            # Distinct from a failed download, and worth its own exit path: the
+            # bytes arrived and are not the bytes this project recorded.
+            print(f"manu install: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
         except Exception as exc:  # hub raises several unrelated types
             print(f"manu install: could not download {model}: {exc}", file=sys.stderr)
             return _EXIT_ERROR
         print(f"weights at {path}")
+    else:
+        try:
+            path = resolve_model_path(model)
+        except ModelNotAvailableError as exc:
+            print(f"manu install: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
+
+    # `download_weights` already refused a mismatch — this re-checks so the user
+    # is told the verification happened. Deliberate second hash: it costs about
+    # a fifth of a second on a one-time install, and an enforcement nobody can
+    # see is one a later refactor removes without anything noticing. It also
+    # covers `--skip-download`, where nothing verified the on-disk copy at all.
+    try:
+        verification = verify_weights(path, model)
+    except WeightsDigestError as exc:
+        print(f"manu install: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+    if verification.verified:
+        print(
+            f"checksums verified — {verification.files_checked} files match the "
+            f"digests recorded for this pinned revision (§7.6)"
+        )
+    else:
+        # Not a pass. §7.6: a model with no recorded digests is reported as
+        # unverified rather than silently accepted.
+        print(f"NOT verified — no digests are recorded for {model} (§7.6)")
 
     try:
         result = run_tier_check(config, clip_path=clip)
