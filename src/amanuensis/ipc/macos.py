@@ -121,16 +121,23 @@ class UnixSocketTransport(ControlTransport):
 
     # -- server ------------------------------------------------------------
 
-    def serve(self, handler: Handler) -> None:
-        """Bind, listen, and accept on a thread of its own (§6.3).
+    def claim(self) -> None:
+        """Bind and listen, with nothing accepting yet — §9's instance lock.
 
-        Its own thread rather than the worker's: serving from the worker is
-        free until the worker is mid-transcription, at which point `manu
-        status` blocks behind a decode — a status command that hangs precisely
-        when you most want to ask.
+        Split out of `serve` on 2026-09-03. `serve` needs a handler, which
+        needs the tray and the controller, so `cli.py` reached the bind only
+        after `create_hotkey_listener`, `AudioCapture` and `TrayApp`: the
+        second daemon had already taken the event tap, opened the microphone
+        and put a second glyph in the menu bar before it found out it should
+        not exist. §5.4 calls that state a privacy problem in its own right —
+        the indicator on one daemon reads *idle* while the other records.
+
+        The socket bound here is the one `serve` accepts on. Re-binding at
+        `serve` would reopen the window this closes: two daemons started
+        together would both pass a check and both bind. A lock is not a check.
         """
         if self._server is not None:
-            raise RuntimeError("this transport is already serving")
+            return  # idempotent: this transport already holds it
 
         parent = self._path.parent
         parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -167,6 +174,21 @@ class UnixSocketTransport(ControlTransport):
         server.settimeout(0.25)  # so `stop` is noticed without a wakeup pipe
         self._server = server
         self._stopping.clear()
+
+    def serve(self, handler: Handler) -> None:
+        """Start accepting, on a thread of its own (§6.3).
+
+        Its own thread rather than the worker's: serving from the worker is
+        free until the worker is mid-transcription, at which point `manu
+        status` blocks behind a decode — a status command that hangs precisely
+        when you most want to ask.
+
+        Claims first when the caller has not. A caller that forgets `claim` is
+        still single-instance; what it loses is only the early discovery.
+        """
+        if self._thread is not None:
+            raise RuntimeError("this transport is already serving")
+        self.claim()
 
         thread = threading.Thread(
             target=self._accept_loop, args=(handler,),

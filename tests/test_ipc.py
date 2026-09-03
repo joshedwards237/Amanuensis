@@ -183,6 +183,23 @@ def test_serving_over_a_stale_file_succeeds(sock_dir: Path) -> None:
         transport.stop()
 
 
+def test_claiming_over_a_stale_file_succeeds(sock_dir: Path) -> None:
+    """`_daemon` has three failure paths between `claim` and `serve` — the
+    model, the chain and the audio device — and a process dying on one of them
+    leaves the file bound by nobody. Recovery is the same path `serve` uses,
+    asserted for `claim` because that is now where the acquisition happens and
+    an untested branch of a lock is how the lock becomes a lockout.
+    """
+    path = sock_dir / "stale.sock"
+    dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    dead.bind(str(path))
+    dead.close()
+
+    transport = UnixSocketTransport(path)
+    transport.claim()  # must not raise AlreadyRunningError
+    transport.stop()
+
+
 def test_stop_removes_the_socket_file(sock_dir: Path) -> None:
     path = sock_dir / "daemon.sock"
     transport = _serve(path, lambda verb: Response(ok=True, detail=verb))
@@ -277,6 +294,79 @@ def test_a_second_daemon_is_refused_by_name(sock_dir: Path) -> None:
         assert "manu status" in str(exc.value), "the error must name a next step"
     finally:
         first.stop()
+
+
+def test_claim_refuses_a_second_daemon_before_anything_else_starts(
+    sock_dir: Path,
+) -> None:
+    """The lock has to be acquirable without a handler, or it binds too late.
+
+    `serve` needs `_status` and `_toggle`, which need the tray and the
+    controller, which is why `cli.py` bound the socket *after* opening the
+    microphone and putting a second glyph in the menu bar. `claim` is the same
+    acquisition with nothing accepting on it yet, so the daemon can find out it
+    is the second one before it takes anything.
+    """
+    first = UnixSocketTransport(sock_dir / "d.sock")
+    first.claim()
+    try:
+        second = UnixSocketTransport(first.path)
+        with pytest.raises(AlreadyRunningError) as exc:
+            second.claim()
+        assert "already listening" in str(exc.value)
+        assert "manu status" in str(exc.value), "the error must name a next step"
+    finally:
+        first.stop()
+
+
+def test_a_claimed_transport_serves_on_the_socket_it_already_holds(
+    sock_dir: Path,
+) -> None:
+    """Otherwise `claim` would be a check rather than a lock.
+
+    Re-binding at `serve` would reopen the window `claim` exists to close: two
+    daemons started together would both pass the check and both bind. The
+    socket acquired by `claim` is the one that ends up accepting.
+    """
+    transport = UnixSocketTransport(sock_dir / "d.sock")
+    transport.claim()
+    try:
+        transport.serve(
+            make_handler({"status": lambda: Response(ok=True, detail="up")})
+        )
+        assert transport.request("status").detail == "up"
+    finally:
+        transport.stop()
+
+
+def test_a_claim_that_never_served_is_released_by_stop(sock_dir: Path) -> None:
+    """A daemon that claims and then fails to start must not leave the lock
+    held. `stop` is the one teardown path and it covers both states."""
+    first = UnixSocketTransport(sock_dir / "d.sock")
+    first.claim()
+    first.stop()
+
+    second = UnixSocketTransport(first.path)
+    second.claim()  # must not raise
+    second.stop()
+
+
+def test_serve_still_claims_for_callers_that_never_call_claim(
+    sock_dir: Path,
+) -> None:
+    """The negative control on the pair above.
+
+    If `serve` stopped acquiring, `claim` would look correct while every caller
+    that does not use it — the tests above, any future one — served on nothing.
+    """
+    transport = UnixSocketTransport(sock_dir / "d.sock")
+    transport.serve(make_handler({"status": lambda: Response(ok=True, detail="up")}))
+    try:
+        other = UnixSocketTransport(transport.path)
+        with pytest.raises(AlreadyRunningError):
+            other.claim()
+    finally:
+        transport.stop()
 
 
 def test_the_socket_directory_is_tightened_even_when_it_already_exists(

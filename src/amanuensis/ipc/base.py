@@ -62,8 +62,28 @@ class ControlTransport(ABC):
         """Where the rendezvous point lives."""
 
     @abstractmethod
+    def claim(self) -> None:
+        """Acquire the rendezvous point without accepting on it yet.
+
+        This is §9's single-instance guard, separated from `serve` because of
+        *when* it has to run. `serve` needs a handler, the handler needs the
+        tray and the controller, and building those means opening the
+        microphone and adding a status item — so a daemon that discovered it
+        was the second one at `serve` had already taken both. `claim` is the
+        same acquisition with nothing listening, so the discovery happens
+        before anything is taken.
+
+        Raises the platform's already-running error when another daemon holds
+        it. Idempotent for the same transport; released by `stop`.
+        """
+
+    @abstractmethod
     def serve(self, handler: Handler) -> None:
-        """Start accepting. Returns once the transport is listening."""
+        """Start accepting. Returns once the transport is listening.
+
+        Claims the rendezvous point first if `claim` has not already been
+        called, so a caller that never claims is still single-instance.
+        """
 
     @abstractmethod
     def stop(self) -> None:

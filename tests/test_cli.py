@@ -12,6 +12,8 @@ decided by implementation order.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -372,6 +374,68 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
     err = capsys.readouterr().err
     assert "Accessibility" in err
     assert "Input Monitoring" in err
+
+
+def test_a_second_daemon_is_refused_before_it_takes_the_microphone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§9's single-instance guard, asserted at the position that makes it one.
+
+    The transport has refused a second bind since it was written; what was
+    wrong was *when* `_daemon` reached it. The bind lived at `control.serve`,
+    below `create_hotkey_listener`, `AudioCapture`, `TrayApp` and
+    `controller.start` — so the second daemon installed an event tap, opened
+    the microphone and added a second status item, and only then discovered it
+    should not exist. §5.4 calls that intermediate state a privacy problem on
+    its own: the indicator on one daemon reads *idle* while the other records.
+
+    So this asserts an ordering, not a return code. The autouse
+    `_no_real_microphone` guard raises if `AudioCapture` is ever constructed
+    for real, and `TrayApp` is monkeypatched to raise — either one firing means
+    the refusal came too late. A test that only checked the exit code would
+    have passed against the broken order, because the broken order also exits
+    non-zero, just after taking three things it should not have.
+    """
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig
+    from amanuensis.hotkey import macos as macos_hotkey
+    from amanuensis.injection import macos as macos_injection
+    from amanuensis.ipc import factory as ipc_factory
+    from amanuensis.ipc.macos import UnixSocketTransport
+    from amanuensis.ui import tray as tray_module
+
+    class _Granted:
+        def CGPreflightPostEventAccess(self) -> bool:
+            return True
+
+        def CGPreflightListenEventAccess(self) -> bool:
+            return True
+
+    monkeypatch.setattr(macos_injection, "_quartz", _Granted)
+    monkeypatch.setattr(macos_hotkey, "_quartz", _Granted)
+
+    def _too_late(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the tray was built before the guard refused")
+
+    monkeypatch.setattr(tray_module, "TrayApp", _too_late)
+
+    # A short path: sun_path is 104 bytes and pytest's tmp tree is 129.
+    holder_dir = Path(tempfile.mkdtemp(prefix="amn", dir="/tmp"))
+    incumbent = UnixSocketTransport(holder_dir / "d.sock")
+    incumbent.claim()
+    monkeypatch.setattr(
+        ipc_factory, "create_transport", lambda: UnixSocketTransport(incumbent.path)
+    )
+    try:
+        exit_code = _daemon(AppConfig())
+    finally:
+        incumbent.stop()
+        shutil.rmtree(holder_dir, ignore_errors=True)
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "already listening" in err
+    assert "manu status" in err, "the refusal must name a next step"
 
 
 # ---------------------------------------------------------------------------

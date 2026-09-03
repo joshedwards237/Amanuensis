@@ -695,6 +695,7 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.injection.macos import detect_clipboard_manager
     from amanuensis.ipc.base import Response, make_handler
     from amanuensis.ipc.factory import create_transport
+    from amanuensis.ipc.macos import AlreadyRunningError
     from amanuensis.storage.history import HistoryStore
     from amanuensis.ui.overlay import RecordingOverlay
     from amanuensis.ui.tray import TrayApp
@@ -719,6 +720,29 @@ def _daemon(config: AppConfig) -> int:
         for status in missing:
             print(f"manu daemon: {status.remediation}", file=sys.stderr)
             print(file=sys.stderr)
+        return _EXIT_ERROR
+
+    # §9's single-instance guard. A daemon started 2026-08-07 was still live
+    # when a second was started for the Phase 3 gate: both event taps saw the
+    # binding, both held the microphone, both decoded and both injected. Every
+    # row in `history.db` doubled, every transcript pasted twice, and
+    # `transcribe_ms` ran 3854-5236 ms against ~890 ms single-process. It
+    # survived two days because the only visible symptom was a double paste in
+    # one application.
+    #
+    # Position matters in both directions. It is claimed **before** anything is
+    # taken — the event tap, the microphone, the status item — rather than at
+    # `control.serve` below, which is where the bind used to happen and is
+    # three acquisitions too late; §5.4 calls the intermediate state a privacy
+    # problem in its own right, because the indicator on one daemon reads
+    # *idle* while the other is recording. And it is claimed **after** the
+    # binding and permission refusals above, which take nothing: being told
+    # your hotkey is unsupported should not require being the only daemon.
+    control = create_transport()
+    try:
+        control.claim()
+    except AlreadyRunningError as exc:
+        print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
     exposure = detect_clipboard_manager()
@@ -892,7 +916,7 @@ def _daemon(config: AppConfig) -> int:
         _start_session()
         return Response(ok=True, detail="recording")
 
-    control = create_transport()
+    # Already claimed at the top of `_daemon`; this only starts accepting.
     control.serve(make_handler({"status": _status, "toggle": _toggle}))
 
     # The hotkey picker (§5.3's `[hotkey] binding`, offered from the tray
