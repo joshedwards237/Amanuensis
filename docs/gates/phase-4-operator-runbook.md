@@ -1,170 +1,256 @@
-# Phase 4 — what only the operator can do
+# Phase 4 — your runbook
 
-Four things remain and none can be delegated. Each is written with its conduct
-fixed **in advance**, because each is `n = 1` or unrepeatable, and a criterion
-written afterwards is a criterion written to pass.
+Everything left needs you specifically. **Total: about 75 minutes of your time,
+plus 30 minutes of somebody else's.**
 
-Do them in this order. **1 and 2 are cheap and independent. 3 must come before
-4**, because 4 is the gate and 3 is one of its inputs.
+Each step says where to go, what to click, what you should see, and what to
+write down. Where a step has a pass/fail criterion, that criterion was fixed
+*before* the thing was built — a criterion written afterwards is a criterion
+written to pass.
 
 ---
 
-## 1. The overlay confidence test (§5.4) — 5 minutes
+## Timeline
 
-**Why you and not me:** the requirement exists because you used the Phase 2b
-glyph and reported it insufficient. §5.4 records that "a requirement met to the
-letter and reported as inadequate by its user is worth more than one argued
-into the spec." I can assert the AppKit flags are set; I cannot see the screen.
+| When | Step | Your time | Needs |
+|---|---|---|---|
+| Today, 5 min | **1. Check the daemon starts and stops** | 5 min | nothing |
+| Today, 10 min | **2. Judge the recording panel** (§5.4) | 10 min | a full-screen app |
+| Today, 15 min | **3. Run the network capture** (G3) | 15 min | terminal, `sudo` |
+| Today, 20 min | **4.** *Optional:* ten short corrections | 20 min | quiet room |
+| Whenever, 5 min | **5. Write the gate record** | 25 min | steps 1–4 done |
+| Book it | **6. The install gate** | watch only | **a second person**, 30 min |
 
-**The criterion, fixed 2026-09-02 before the overlay was built:**
+Steps 1–4 are independent. **5 needs 1–3. 6 is the gate and should be last** —
+its output is a defect list you may want to fix before anyone else sees it.
+
+---
+
+## Step 1 — the daemon starts and stops (5 minutes)
+
+New today, and it needs one real test before you rely on it.
+
+**Do this:**
+
+1. Go to your **Desktop**. Double-click **`Start Amanuensis.command`**.
+2. A Terminal window opens. macOS may say *"cannot be opened because it is from
+   an unidentified developer"* — if so: **System Settings → Privacy & Security**,
+   scroll to the bottom, click **Open Anyway**, then double-click again.
+
+**What you should see:**
+
+- The Terminal window prints `Amanuensis — hold RIGHT OPTION to dictate.`
+- Then `loading tiny.en (10 threads)...` and `listening —`
+- A **`○`** appears at the right end of your menu bar.
+
+**Now test the stop button, which is the point of this step:**
+
+3. Click the **`○`** in the menu bar. A menu opens.
+4. You should see a status line (*"Amanuensis — idle, the microphone is not
+   live"*) and **Quit Amanuensis** at the bottom.
+5. Click **Quit Amanuensis**.
+
+**What you should see:** the menu-bar icon disappears, and the Terminal window
+prints `stopped.`
+
+> **Why this step exists at all.** Until this morning that menu item rendered
+> and did nothing — it had no target and no action. With a desktop launcher and
+> no working quit, a daemon holding your microphone would have had no way to be
+> stopped except finding the Terminal window. If **Quit Amanuensis** does not
+> work, stop here and tell me; do not proceed to step 2.
+
+**Second escape hatch, so you always have one:** Ctrl-C in the Terminal window.
+
+**Write down:** whether the menu quit worked, first try.
+
+---
+
+## Step 2 — judge the recording panel (10 minutes)
+
+**This is a decision, not a check.** Its outcome decides whether Phase 4 also
+has to build a real `.app` bundle, which is days of work.
+
+**The criterion, written 2026-09-02 before the panel existed:**
 
 > With a full-screen application focused and the menu bar auto-hidden, you can
 > answer **"is the microphone live right now?"** correctly, without moving the
 > pointer, without keyboard input, and without waiting — on both a live and an
-> idle daemon, three trials each, **six of six**.
+> idle daemon, three trials each. **Six of six.**
 
-**Conduct.** Full-screen something with a lot of white (a document, a browser).
-Turn on *System Settings → Control Centre → Automatically hide and show the menu
-bar*. Start the daemon. Have someone else hold or release the hotkey out of your
-sight, or alternate blind yourself with a timer. Answer before looking anywhere
-else.
+**Set up the condition:**
 
-**Record the result either way**, in `docs/gates/phase-4.md`:
+1. **System Settings → Control Centre → Menu Bar Only** → set
+   **Automatically hide and show the menu bar** to **Always**.
+2. Open something full-screen with a lot of white — a document, a browser page.
+   Press the green button or `Ctrl-⌘-F`.
+3. Start the daemon (Desktop shortcut, step 1).
 
-- **Six of six** → §5.4 is discharged by the overlay and the `.app` bundle stays
-  deferred. Say so explicitly; that is the decision, not an omission.
-- **Anything less** → the bundle is built. §9 already scopes it, and objection
-  O9 notes it also carries the permission identity — the System Settings entry
-  currently shows your terminal's name, not Amanuensis, which the install gate
-  will meet head-on.
+**Run the trials:**
 
-Also worth one line: whether the panel's **position** is right. `[feedback]
-overlay_position` accepts `bottom` (default) and `top`, and it exists because
-the panel must not cover the caret.
+4. Six trials. In each, either hold right-option or don't — decide by coin flip,
+   or have someone else do it out of your sight.
+5. Each trial: **answer out loud "live" or "idle" before looking anywhere else.**
+   Do not move the mouse to reveal the menu bar. Do not wait to see if text
+   appears.
+6. Score six trials. Three should be live, three idle.
+
+**What to look for:** a `● RECORDING` panel near the bottom of the screen while
+the key is held, and nothing when it isn't.
+
+**Write down the score, and the decision it forces:**
+
+- **6 / 6** → §5.4 is discharged by the panel. The `.app` bundle **stays
+  deferred**, and that is a decision to record explicitly, not an omission.
+- **Anything less** → the bundle gets built. Note *how* it failed: invisible?
+  too small? too slow to appear? ambiguous? Each points somewhere different.
+
+**Also note two things while you are there:**
+
+- Is the panel in the way of your cursor? `[feedback] overlay_position` in
+  `~/Library/Application Support/amanuensis/config.toml` accepts `bottom`
+  (default) or `top`.
+- Turn the menu-bar auto-hide back off afterwards if you don't like it.
 
 ---
 
-## 2. The second G3 packet capture (§9, objection O5) — 15 minutes
+## Step 3 — the network capture (15 minutes)
 
-**Why now:** the Phase 1 capture verified a narrower system. Since then the tray,
-an `NSPanel`, a socket acceptor and the install path have all been added, and
-this is the last point before an audience.
+Goal G3 is "no network at runtime" and it is the product's headline claim. The
+last capture was Phase 1; since then the tray, a panel, a socket and the install
+path have all been added.
+
+**Do this, in a terminal:**
 
 ```sh
 cd /Users/joshuaedwards/Development/personal/worktrees/phase-4-tray-modes
 PYTHONPATH="$PWD/src" /Users/joshuaedwards/Development/personal/Amanuensis/.venv/bin/python scripts/verify_g3.py
 ```
 
-**Then the part the script does not cover.** §9 requires the capture run against
-*the assembled product* — tray running, install path exercised, model download
-performed. `verify_g3.py` observes a `manu transcribe` subprocess, so run it a
-second time with a daemon up and the tray drawn, and record both.
+It will likely ask for **`sudo`** — packet capture needs it.
 
-**Two things must be written into the record, not left implied** (choice-story
-#11 — an unqualified "G3 verified" is the failure objection O12 described):
+**What you should see:** a PASS with **0 sockets and 0 bytes** for the subject,
+and a non-zero control. If the control shows zero too, the instrument is broken
+and the PASS means nothing — that is the whole reason a control is there.
 
-1. The capture covers **Amanuensis's own sockets only**. It says nothing about
-   what else on the machine is talking.
-2. **Transcripts transit the system clipboard by default**, where another
-   process may capture them — measured against Maccy 2.7.0, which captured every
-   one. That is a transcript-egress path the capture structurally cannot see.
+**Then the part the script does not do.** §9 requires this against *the
+assembled product*. Start the daemon from the Desktop shortcut, leave the tray
+up, do one dictation, and run the capture again with that running. Record both
+results.
 
-**And one new fact for the record:** `MoonshineEngine.load()` makes two
-connection attempts to `huggingface.co:443`. Moonshine is **not** installed as a
-dependency and nothing in the shipped path imports it, so G3 is intact — but if
-that ever changes, it changes this result. ADR 0001's reconsideration note has
-the detail.
+**Write down, in the gate record, in these words or close to them:**
 
----
+1. "This capture covers **Amanuensis's own sockets only**." It says nothing
+   about anything else on the machine.
+2. "**Transcripts transit the system clipboard**, where another process may
+   capture them." Measured: Maccy 2.7.0 captured every one.
 
-## 3. Ten short corrected transcripts (§7.2's remaining open question) — 20 minutes
+Both are required. An unqualified "G3 verified" is the specific failure
+objection O12 was raised about.
 
-**Optional, and the only one that is.** Skip it and the Phase 4 gate records the
-short-utterance punctuation comparison as unmeasured, which is honest.
-
-The long-form comparison is done: Moonshine collapses at 67–97 s (715 and 866
-deletions against faster-whisper's 3). What is unmeasured is **short** utterances
-— the length Moonshine is built for and your ordinary case.
-
-**Do not use read scripts as the reference.** That was tried on 2026-09-02 and
-withdrawn: it scored the *shipped* product at 54.09% against its real 8.59%,
-because you contracted naturally while reading ("I have started" → "I've
-started") and the alignment charged your own speech as decoder error. A
-reference has to be what you *said*.
-
-**Conduct.** Dictate ten ordinary short things — 8 to 12 seconds, whatever you
-actually needed to write. Then:
-
-```sh
-PYTHONPATH="$PWD/src" .venv/bin/manu history --last     # for each, one at a time
-```
-
-and write a corrections file in the same shape as `corrections-2026-09-01.json`:
-`{"<row id>": {"started_at": ..., "seconds": ..., "injected": ..., "corrected": ...}}`,
-where `corrected` is what you meant. Then:
-
-```sh
-PYTHONPATH="$PWD/src" .venv/bin/python scripts/bench_punctuation.py \
-  --corrections corrections-short-2026-09-XX.json
-```
-
-**Do not run anything else while dictating.** That is what produced the 4014 ms
-p95 on 2026-09-02.
+**One new fact for that record:** `MoonshineEngine.load()` makes two connection
+attempts to `huggingface.co:443`. Moonshine is **not** installed as a dependency
+and nothing in the shipped path imports it, so G3 is intact — but note it, because
+if that ever changes this result changes with it.
 
 ---
 
-## 4. The gate: a second person installs from the README — 30 minutes of theirs
+## Step 4 — ten short corrections (20 minutes) — **optional**
 
-**This is the gate.** Everything above is an input to it.
+The only optional step. Skip it and the gate record says the short-utterance
+punctuation comparison is unmeasured, which is honest and fine.
 
-**Conduct, fixed by §9 in advance so the gate measures the README rather than the
-tester:**
+**What it answers:** whether a different ASR engine punctuates better at *your
+usual dictation length*. Long-form is already settled — Moonshine collapses at
+67–97 s. Short is not.
 
-- **Observe silently. No hints.** Not one, however painful.
-- **Stop at 30 minutes.**
-- **Write down every question they ask.** That list is the README's defect
-  report and is the actual output of this gate.
-- **Note their starting environment** — macOS version, whether Python 3.12 was
-  already there, whether Xcode command line tools were installed.
+**Do this:**
 
-**Choose the person deliberately and record which archetype they are**
-(choice-story #12). At `n = 1` the choice of subject *is* the sampling design. A
-developer produces a systematically shorter list and will route around a README
-gap the gate exists to find. §4's secondary user — the accessibility case — may
-not clear the two permission dialogs inside 30 minutes, and then the gate
-measures the permission model rather than the README.
+1. **Run nothing else on the machine.** No test suites, no builds. A previous
+   attempt was ruined this way.
+2. Start the daemon. Dictate **ten ordinary short things** — 8 to 12 seconds
+   each, whatever you actually needed to write today. Real work, not read aloud.
+3. For each one: `manu history --last` right after, and note the row id.
+4. Create `corrections-short-2026-09-XX.json` shaped like the existing
+   `corrections-2026-09-01.json`:
+   ```json
+   {"<row id>": {"started_at": "...", "seconds": 9.4,
+                 "injected": "<what appeared>", "corrected": "<what you meant>"}}
+   ```
+5. Then: `python scripts/bench_punctuation.py --corrections corrections-short-2026-09-XX.json`
 
-**What they will hit, and it is already known:** the System Settings entry
-carries *their terminal's* name, not "Amanuensis", because macOS attaches the
-grant to whatever launched the process. The README says so at step 4. Whether
-that is enough is exactly what this gate measures.
+> **Do not use a script you read aloud as the reference.** That was tried and
+> withdrawn: it scored the *shipped* product at 54.09% against its real 8.59%,
+> because you contract naturally when reading ("I have started" → "I've
+> started") and the comparison charged your own speech as decoder error. The
+> reference has to be **what you said**, corrected by you.
 
-**Ask them the overlay question too** (item 1). They are the only non-author
-user this phase contains and a first reaction cannot be had twice.
+---
+
+## Step 5 — write the gate record (25 minutes)
+
+Create `docs/gates/phase-4.md`. It carries what was built, what was verified,
+what was deferred, and what the phase revealed the PRD got wrong.
+
+**Results from steps 1–4**, plus this list, so none of it closes by silence:
+
+- [ ] **G2's revisit — and it is now actionable.** You deferred it on
+      2026-09-02 to "the Phase 4 gate, where the model question is settled". It
+      is settled: the engine is **not** the constraint. Moonshine is disqualified
+      on G3 grounds and collapses on long form, so the 8.59% belongs to the
+      decoder and the chain — and §7.5 records that 99 of 171 edits are a class
+      no rule reaches. **Confirm 5% again, or move it with the reason stated.**
+      §9 permits either; it does not permit silence.
+- [ ] **G1 at ten seconds: p50 312.4 ms / p95 344.5 ms.** Measured, with the
+      full chain, config digest recorded. See `g1-at-ten-seconds.md`, including
+      the contaminated first attempt.
+- [ ] **No Tier B machine has ever been measured.** Not a missed goal — an
+      unmeasured one. §2 gives Tier B a bar; nothing has run against it.
+- [ ] **Parakeet has never been benchmarked.** NeMo has no CoreML or Metal path
+      on macOS.
+- [ ] **§5.7's guard has two blind spots**, both fail open, both disclosed in
+      the README, neither fixed: interior loss invisible by construction, and
+      refusal unreachable below 2.00 s of speech.
+- [ ] **§5.5's retention cannot reach orphaned audio.** Found 2026-09-03.
+- [ ] **`config_sha256` is declared in `HARNESS.md` and unimplemented.** It is
+      the constraint that would have caught the 2026-09-02 contamination in the
+      data instead of by inspection.
+- [ ] **The `.app` bundle**, deferred or scheduled, per step 2's score.
+
+---
+
+## Step 6 — the install gate (30 minutes of someone else's time)
+
+**This is the gate.** Everything above feeds it.
+
+**Before they arrive:**
+
+1. Decide **who**, and write down which kind of user they are. At n = 1 the
+   choice of subject *is* the sampling design. A developer gives you a shorter
+   list and routes around the gaps this exists to find. A non-technical person
+   may spend the whole 30 minutes on the two permission dialogs — and then you
+   have measured the permission model, not the README.
+2. Note their **starting environment**: macOS version, whether Python 3.12 is
+   already installed, whether the Xcode command line tools are.
+3. Have them work on **their own machine** if at all possible. A fresh one is
+   the point.
+
+**During — the conduct, fixed by §9 in advance:**
+
+- **Say nothing.** No hints. Not one, however uncomfortable it gets.
+- **Stop at 30 minutes**, wherever they are.
+- **Write down every question they ask.** That list *is* the output of this
+  gate. It is the README's defect report.
+
+**Point them at:** the repository's `README.md`, section **Install**, and
+nothing else.
+
+**What they will hit, and it is already known:** at step 4 the System Settings
+entry carries **their terminal's name**, not "Amanuensis", because macOS
+attaches the grant to whatever launched the process. The README says so.
+Whether that is enough is precisely what this gate measures.
+
+**Also ask them step 2's overlay question.** They are the only non-author user
+this phase contains, and a first reaction cannot be had twice.
 
 **Rejects if:** they cannot reach a first successful dictation from the README
 alone, or they ask a question the README should have answered.
-
----
-
-## What the gate record must also carry
-
-Named here so none of it is closed by silence:
-
-- **G2 stays at 5% and 8.59% is still the measurement.** Your 2026-09-02
-  disposition deferred the revisit to this gate "where the model question is
-  settled". It is now settled: the engine is not the constraint — Moonshine is
-  disqualified on G3 grounds and collapses on long form. So the gap is the
-  chain's and the decoder's, and §7.5 records that 99 of 171 edits are a class
-  no rule reaches. **Confirm 5% again, or move it with the reason stated.**
-- **No Tier B machine has ever been measured.** The README says so. It is not a
-  missed goal, it is an unmeasured one, and §2 gives Tier B a bar to clear.
-- **Parakeet has never been benchmarked at all.** NeMo has no CoreML or Metal
-  path on macOS.
-- **§5.7's two guard blind spots** — interior loss invisible by construction,
-  refusal unreachable below 2.00 s of speech. Disclosed in the README, fixed in
-  neither. Both fail open.
-- **§5.5's retention cannot reach orphaned audio.** Found 2026-09-03.
-- **`config_sha256` is declared in `HARNESS.md` and unimplemented.** It is the
-  constraint that would have made the 2026-09-02 contamination visible in the
-  data rather than by inspection.
