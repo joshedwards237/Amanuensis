@@ -42,7 +42,12 @@ def read_wav(path: Path) -> tuple[NDArray[np.float32], int]:
         rate = handle.getframerate()
         frames = handle.readframes(handle.getnframes())
         channels = handle.getnchannels()
-    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    # 32767, matching what every writer in this project uses
+    # (storage/history.py, record_phase3_corpus.py, record_spontaneous.py).
+    # Reading back at 32768 applied a systematic 3.05e-5 gain error to every
+    # sample — half a least-significant bit, and small, but it meant no
+    # round-trip through stored audio was exact even in principle.
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
     return np.ascontiguousarray(samples, dtype=np.float32), rate
