@@ -48,10 +48,10 @@ Usage
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,6 +188,37 @@ def report(observation: Observation) -> None:
     print(f"  bytes in/out   {observation.bytes_in} / {observation.bytes_out}")
 
 
+def _manu_binary() -> str:
+    """Locate the `manu` this interpreter belongs to.
+
+    Was `REPO_ROOT / ".venv" / "bin" / "manu"`, which assumes the virtualenv
+    lives inside the checkout. It does not in a `git worktree`: the venv stays
+    in the original clone, `.venv` is gitignored so it never follows, and this
+    script died with `FileNotFoundError` in the phase whose gate it is.
+
+    `sys.executable` is the interpreter actually running, so its sibling is the
+    right console script whether that is a lobby checkout, a worktree, or a venv
+    somewhere else entirely. `shutil.which` is the fallback for a system
+    install, and a clear error beats a traceback if neither works — the point of
+    this script is to be runnable at a gate.
+    """
+    candidate = Path(sys.executable).parent / "manu"
+    if candidate.is_file():
+        return str(candidate)
+
+    found = shutil.which("manu")
+    if found:
+        return found
+
+    raise SystemExit(
+        f"cannot find the `manu` console script.\n"
+        f"  looked beside this interpreter: {candidate}\n"
+        f"  and on PATH.\n"
+        f"  Install the package (`pip install -e .`) into the environment you "
+        f"are running this with."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify_g3.py",
@@ -228,7 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("  resolve_model_path uses local_files_only=True, so a cold cache")
         print("  raises rather than fetching — there is no fetching code path.")
 
-    manu = str(REPO_ROOT / ".venv" / "bin" / "manu")
+    manu = _manu_binary()
     samples = max(4, int(args.seconds) + 6)
 
     print()
@@ -269,7 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
         print("  --tcpdump requested. Run this by hand; it needs root and this")
         print("  script will not ask for your password:")
-        print(f"    sudo /usr/sbin/tcpdump -ni any -c 200 &")
+        print("    sudo /usr/sbin/tcpdump -ni any -c 200 &")
         print(f"    {manu} transcribe --seconds {args.seconds:g}")
         print("  Interface-wide capture also sees every other process on the")
         print("  machine, which is why it is not the primary evidence here.")
