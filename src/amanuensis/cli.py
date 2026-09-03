@@ -804,6 +804,22 @@ def _daemon(config: AppConfig) -> int:
         vocabulary=vocabulary,
     )
 
+    # The waveform needs the audio while it is arriving, and so does
+    # `vad_auto`. `set_observer` holds one callback, so the fan-out lives here
+    # for the same reason `_on_state_change` does: neither component should own
+    # the other's lifetime, and this thread has a deadline.
+    observers: list[Any] = []
+
+    def _level_for_overlay(block: Any) -> None:
+        import numpy as np
+
+        if block.size:
+            overlay.set_level(
+                float(np.sqrt(np.mean(np.square(block.astype(np.float64)))))
+            )
+
+    observers.append(_level_for_overlay)
+
     if config.hotkey.mode == "vad_auto":
         # §5.2's third mode, and the half the listener structurally cannot do:
         # it starts the session on the key press and nothing in the hotkey
@@ -820,7 +836,7 @@ def _daemon(config: AppConfig) -> int:
                     daemon=True,
                 ).start()
 
-        capture.set_observer(_watch)
+        observers.append(_watch)
 
         def _start_session() -> None:
             # Silence has to be re-earned every session, or the second
@@ -830,6 +846,12 @@ def _daemon(config: AppConfig) -> int:
             controller.start_session()
     else:
         _start_session = controller.start_session
+
+    def _fan_out(block: Any) -> None:
+        for observer in observers:
+            observer(block)
+
+    capture.set_observer(_fan_out)
 
     def _on_release() -> None:
         # The listener's callbacks return nothing, deliberately: there is

@@ -513,6 +513,25 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   draws. That is a reason to build the richer affordance for *confidence*
   rather than for *correctness*.
 
+  **The affordance is a waveform pill, not a labelled panel** (2026-09-03,
+  second round of the same provenance). The first build was 220×44 with the
+  text "● RECORDING" in it. Its user's verdict, after step 1 of the runbook:
+  *tacky, too square, too big, and it should have no text.* Now 112×26 with a
+  fully round 13 px radius and seven bars driven by the live RMS of the audio
+  being captured.
+
+  Recorded because of *why* the words came out. §5.4 asks for **confidence**,
+  which is a glance — and a label you have to read is slower than motion you
+  cannot miss. A waveform also answers a question a label cannot: it shows the
+  microphone is *working*, not merely that the process believes it is open. The
+  bars never fall to zero, because a flat pill and a frozen pill look the same
+  and "is it live or is it stuck" is the ambiguity this whole section exists to
+  remove.
+
+  This is the second time this requirement has been improved by its user
+  finding the specified behaviour insufficient, which is the argument §5.4
+  already makes about where the requirement came from.
+
   **The confidence test, written 2026-09-02 before the overlay was built**
   (choice-story #6, objection O10). The operator's decision sequences this —
   `NSPanel` overlay now, a real `.app` bundle only if the overlay still fails —

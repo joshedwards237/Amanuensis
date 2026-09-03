@@ -18,7 +18,15 @@ import pytest
 from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
-from amanuensis.ui.overlay import RecordingOverlay, frame_for, should_show
+from amanuensis.ui.overlay import (
+    BAR_COUNT,
+    CORNER_RADIUS,
+    MAX_BAR_HEIGHT,
+    RecordingOverlay,
+    bar_heights,
+    frame_for,
+    should_show,
+)
 from test_indicator import _FakeAppKit, _FakeFoundation, _FakeMainQueue
 
 # ---------------------------------------------------------------------------
@@ -109,6 +117,11 @@ def appkit(monkeypatch: pytest.MonkeyPatch) -> _FakeAppKit:
     foundation = _FakeFoundation(_FakeMainQueue())
     monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
     monkeypatch.setattr(indicator_module, "_foundation", lambda: foundation)
+    # The bars are CALayers and Quartz is behind its own seam.
+    monkeypatch.setattr(
+        RecordingOverlay, "_calayer", staticmethod(lambda: fake.CALayer)
+    )
+    monkeypatch.setattr(RecordingOverlay, "_quartz", staticmethod(lambda: fake.Quartz))
     return fake
 
 
@@ -216,3 +229,74 @@ def test_a_failing_panel_disables_the_overlay_and_reports_it(
     overlay.set_state(DictationState.IDLE)
     overlay.set_state(DictationState.RECORDING)
     assert reported == [], "a failed overlay must not retry on every dictation"
+
+
+# ---------------------------------------------------------------------------
+# The waveform — a pill with bars, no text (operator request 2026-09-03)
+# ---------------------------------------------------------------------------
+
+
+def test_silence_still_shows_a_resting_line() -> None:
+    """A dead-flat pill is indistinguishable from a frozen one.
+
+    The panel's whole job is telling you the microphone is live. If silence
+    renders as nothing, a crashed overlay and a quiet room look identical —
+    which is the ambiguity §5.4 exists to remove, reintroduced as a visual.
+    """
+    heights = bar_heights([0.0] * BAR_COUNT)
+    assert len(heights) == BAR_COUNT
+    assert all(h > 0 for h in heights), "silence renders as nothing"
+    assert max(heights) < MAX_BAR_HEIGHT * 0.3, "silence looks like speech"
+
+
+def test_speech_is_visibly_taller_than_silence() -> None:
+    quiet = max(bar_heights([0.0] * BAR_COUNT))
+    loud = max(bar_heights([0.35] * BAR_COUNT))
+    assert loud > quiet * 2.5, f"speech {loud} is not clearly taller than {quiet}"
+
+
+def test_bars_are_clamped_to_the_pill() -> None:
+    """A bar taller than the panel draws outside it."""
+    for level in (1.0, 5.0, 1e9, float("inf")):
+        assert all(h <= MAX_BAR_HEIGHT for h in bar_heights([level] * BAR_COUNT))
+
+
+def test_non_finite_and_negative_levels_do_not_break_it() -> None:
+    """`_on_block` hands over whatever the device produced."""
+    for level in (float("nan"), float("-inf"), -1.0):
+        heights = bar_heights([level] * BAR_COUNT)
+        assert all(h > 0 and h <= MAX_BAR_HEIGHT for h in heights), level
+
+
+def test_the_newest_level_is_on_the_right() -> None:
+    """It should read as motion, which means a consistent direction."""
+    heights = bar_heights([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4])
+    assert heights[-1] == max(heights)
+
+
+def test_a_short_history_still_fills_the_pill() -> None:
+    """The first few blocks after the key goes down are all there is."""
+    heights = bar_heights([0.3])
+    assert len(heights) == BAR_COUNT
+    assert all(h > 0 for h in heights)
+
+
+def test_set_level_is_safe_before_anything_is_shown() -> None:
+    """Audio blocks arrive on the PortAudio thread from the moment capture
+    starts, which is before the panel exists."""
+    overlay = RecordingOverlay(FeedbackConfig())
+    for _ in range(50):
+        overlay.set_level(0.2)
+
+
+def test_the_pill_is_smaller_than_the_labelled_panel_was() -> None:
+    """The operator's words: too square, too big, and no text.
+
+    Asserted rather than left to taste so a later change cannot quietly grow
+    it back — the numbers are the request.
+    """
+    _x, _y, width, height = frame_for("bottom", (0.0, 0.0, 1440.0, 900.0))
+    assert width <= 130, f"{width} wide is not a pill"
+    assert height <= 30, f"{height} tall is not a pill"
+    assert width / height >= 3.0, "a pill is much wider than it is tall"
+    assert CORNER_RADIUS >= height / 2 - 0.51, "the ends must be fully round"

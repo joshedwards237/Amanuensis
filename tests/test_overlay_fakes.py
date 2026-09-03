@@ -76,6 +76,55 @@ class _FakeTextField:
         return lambda *a, **k: None
 
 
+class _FakeLayer:
+    """A `CALayer` stand-in. Records the frame, which is what the waveform
+    changes thirty times a second."""
+
+    def __init__(self) -> None:
+        self.frame_rect: Any = ((0.0, 0.0), (0.0, 0.0))
+        self.corner_radius = 0.0
+        self.background: Any = None
+        self.sublayers: list[_FakeLayer] = []
+
+    @classmethod
+    def layer(cls) -> _FakeLayer:
+        return cls()
+
+    def setFrame_(self, rect: Any) -> None:
+        self.frame_rect = rect
+
+    def frame(self) -> Any:
+        return self.frame_rect
+
+    def setCornerRadius_(self, value: float) -> None:
+        self.corner_radius = value
+
+    def setBackgroundColor_(self, value: Any) -> None:
+        self.background = value
+
+    def addSublayer_(self, layer: _FakeLayer) -> None:
+        self.sublayers.append(layer)
+
+
+class _FakeView:
+    def __init__(self) -> None:
+        self._layer = _FakeLayer()
+        self.wants_layer = False
+
+    @classmethod
+    def alloc(cls) -> _FakeView:
+        return cls()
+
+    def initWithFrame_(self, _rect: Any) -> _FakeView:
+        return self
+
+    def setWantsLayer_(self, value: bool) -> None:
+        self.wants_layer = value
+
+    def layer(self) -> _FakeLayer:
+        return self._layer
+
+
 def install(fake: Any) -> None:
     """Give an AppKit fake the panel surface the overlay needs."""
     fake.panels = []
@@ -89,6 +138,13 @@ def install(fake: Any) -> None:
 
     fake.NSPanel = NSPanel
     fake.NSTextField = _FakeTextField
+    fake.NSView = _FakeView
+    fake.CALayer = _FakeLayer
+    fake.Quartz = type(
+        "Quartz",
+        (),
+        {"CGColorCreateGenericGray": staticmethod(lambda _g, _a: "cgcolor")},
+    )
     fake.NSWindowStyleMaskBorderless = 0
     fake.NSWindowStyleMaskNonactivatingPanel = 128
     fake.NSBackingStoreBuffered = 2
@@ -97,11 +153,21 @@ def install(fake: Any) -> None:
     fake.NSWindowCollectionBehaviorStationary = 16
     fake.NSStatusWindowLevel = 25
     fake.NSMakeRect = staticmethod(lambda x, y, w, h: (x, y, w, h))
+    class _Color:
+        @staticmethod
+        def CGColor() -> str:
+            return "cgcolor"
+
     fake.NSColor = type(
         "NSColor",
         (),
-        {"clearColor": staticmethod(lambda: "clear"),
-         "whiteColor": staticmethod(lambda: "white")},
+        {
+            "clearColor": staticmethod(lambda: "clear"),
+            "whiteColor": staticmethod(lambda: "white"),
+            "colorWithCalibratedWhite_alpha_": staticmethod(
+                lambda _w, _a: _Color()
+            ),
+        },
     )
 
     class _Screen:
