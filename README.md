@@ -252,11 +252,13 @@ across lengths.**
 > rows that flatter. The accepted run carries the same control and shows
 > 1.29–1.76× with no outliers.
 >
-> Those contaminated rows are still in `history.db` and **the site's
-> eligibility rule cannot exclude them** — it drops rows sharing a timestamp
-> second, which catches parallel writes and not external load. Any band this
-> project publishes from stored rows should be read with that in mind until the
-> `config_sha256` provenance column exists.
+> Those rows were **removed on 2026-09-03**, after a backup, because the site's
+> eligibility rule provably cannot exclude them — it drops rows sharing a
+> timestamp second, which catches parallel writes and not external load. The
+> `≤ 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Until
+> a `config_sha256` provenance column exists, any band this project publishes
+> from stored rows depends on nobody having run anything heavy at the time,
+> which is not a property a database can attest to.
 
 That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
 so. But dictating a paragraph is the ordinary case, and the headline number says
