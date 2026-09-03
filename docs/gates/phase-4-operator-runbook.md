@@ -132,10 +132,24 @@ It will likely ask for **`sudo`** — packet capture needs it.
 and a non-zero control. If the control shows zero too, the instrument is broken
 and the PASS means nothing — that is the whole reason a control is there.
 
-**Then the part the script does not do.** §9 requires this against *the
-assembled product*. Start the daemon from the Desktop shortcut, leave the tray
-up, do one dictation, and run the capture again with that running. Record both
-results.
+**Then the part the default mode cannot do, and my earlier instruction here
+was wrong.** The default mode watches only the subprocess it spawns, so a daemon
+running alongside it is a different PID and **invisible** — running it "with the
+daemon up" produces an identical result that establishes nothing new. §9 asks for
+the capture against *the assembled product*, which needs a different mode:
+
+```sh
+# leave the daemon running, tray drawn, then:
+PYTHONPATH="$PWD/src" /Users/joshuaedwards/Development/personal/Amanuensis/.venv/bin/python \
+  scripts/verify_g3.py --daemon 20
+```
+
+**Dictate during the window.** It observes for 20 seconds and reports what the
+daemon actually did; if you sit still it is a reading of an idle process, and the
+script says so in its own output. Record which it was.
+
+It refuses to run if **two** daemons are up, because observing one while the
+other is also live would be a clean reading of half the product.
 
 **Write down, in the gate record, in these words or close to them:**
 
