@@ -59,8 +59,8 @@ __all__ = [
 #: and it should have no text". The words were doing no work: this thing answers
 #: one question and a moving waveform answers it faster than a label you have to
 #: read. §5.4 asks for *confidence*, which is a glance, not a sentence.
-_WIDTH: Final = 112.0
-_HEIGHT: Final = 26.0
+_WIDTH: Final = 72.0
+_HEIGHT: Final = 22.0
 #: Half the height, so the ends are fully round rather than rounded-off.
 CORNER_RADIUS: Final = _HEIGHT / 2.0
 #: Distance from the chosen screen edge.
@@ -69,15 +69,35 @@ _MARGIN: Final = 44.0
 #: Bars, newest on the right so it reads as motion in one direction.
 BAR_COUNT: Final = 7
 _BAR_WIDTH: Final = 3.0
-_BAR_GAP: Final = 4.0
+_BAR_GAP: Final = 3.0
 #: Never zero. A dead-flat pill is indistinguishable from a frozen one, and
 #: "is it live or is it broken" is the ambiguity §5.4 exists to remove.
-MIN_BAR_HEIGHT: Final = 3.0
+MIN_BAR_HEIGHT: Final = 2.0
 MAX_BAR_HEIGHT: Final = 16.0
-#: RMS that counts as full deflection. Ordinary speech at a desk microphone
-#: sits around 0.05-0.3 in this project's float32 capture, so a ceiling of 0.35
-#: keeps normal talking off the clip and leaves headroom for a shout.
-_FULL_SCALE: Final = 0.35
+#: Deflection is calibrated to **this operator's measured speech**, not to a
+#: guess. 8,684 blocks across ten of his own takes, 6,461 above the noise
+#: floor:
+#:
+#:     silence  p50  0.0028
+#:     speech   p50  0.0152    p90  0.0311    p95  0.0374    p99  0.0524
+#:
+#: The first version used 0.35 as full scale, which put his ordinary speech at
+#: 12% of the pill and looked dead — reported as wanting "more dynamics and
+#: amplitude". A second guess of 0.10 still only reached 39%. Sizing from the
+#: data instead: full scale is his **p95**, so median speech lands near the
+#: middle, the loud end of normal speech reaches the top, and roughly 5% of
+#: blocks clip — which is what headroom is for.
+_FULL_SCALE: Final = 0.0374
+#: Below this, no deflection at all. Without a gate the sqrt curve lifts his
+#: measured silence floor of 0.0028 to a quarter of the pill, so a quiet room
+#: would shimmer as though the microphone were hearing something. Set just
+#: above that floor and below the quietest speech.
+_NOISE_FLOOR: Final = 0.005
+#: Deflection curve. Linear RMS looks dead because loudness is perceived
+#: roughly logarithmically — a level at 20% of full scale reads as much louder
+#: than a fifth as tall. The square root spends more of the pill on the quiet
+#: end, where speech actually lives.
+_CURVE: Final = 0.5
 
 
 def should_show(state: DictationState) -> bool:
@@ -109,7 +129,8 @@ def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
     for level in padded:
         if not math.isfinite(level) or level < 0.0:
             level = 0.0
-        fraction = min(1.0, level / _FULL_SCALE)
+        above = max(0.0, level - _NOISE_FLOOR)
+        fraction = min(1.0, above / (_FULL_SCALE - _NOISE_FLOOR)) ** _CURVE
         heights.append(MIN_BAR_HEIGHT + span * fraction)
     return tuple(heights)
 

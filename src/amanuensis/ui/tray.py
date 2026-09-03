@@ -34,7 +34,7 @@ post-v1), history browsing (`manu history` owns that), and mode switching.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -42,7 +42,7 @@ from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.models.results import ClipboardExposure
 from amanuensis.ui.indicator import _TOOLTIPS, GLYPHS, RecordingIndicator
 
-__all__ = ["MenuItem", "TrayApp"]
+__all__ = ["HOTKEY_ACTION_PREFIX", "MenuItem", "TrayApp"]
 
 #: A menu row is one line. Errors in this project are multi-line by habit — the
 #: clipboard warning is five — and a traceback pasted into a menu makes an
@@ -58,6 +58,11 @@ class MenuItem:
     title: str
     action: str | None = None
     enabled: bool = False
+    #: Rows nested under this one. A flat list of nine hotkeys would bury the
+    #: two things the menu is actually for — reading the state and quitting.
+    submenu: tuple[MenuItem, ...] = ()
+    #: Drawn with a tick. Says which binding is live without opening anything.
+    checked: bool = False
 
 
 #: Built on first use, never at import. Subclassing `NSObject` requires
@@ -86,6 +91,17 @@ def _menu_target_class() -> Any:
 
         _TARGET_CLASS = _AmanuensisMenuTarget
     return _TARGET_CLASS
+
+
+#: Prefix distinguishing a hotkey row from every other verb. The binding name
+#: travels after it, so `activate` stays the one place a verb is interpreted.
+HOTKEY_ACTION_PREFIX: Final = "hotkey:"
+
+
+def _pretty_binding(name: str) -> str:
+    """`right_option` -> `Right Option`. The config's spelling is snake_case
+    because §5.3 says config keys are; a menu is not a config file."""
+    return name.replace("_", " ").title() if name else "not set"
 
 
 def _one_line(text: str) -> str:
@@ -117,9 +133,13 @@ class TrayApp:
         indicator: RecordingIndicator | None = None,
         *,
         on_quit: Callable[[], None] | None = None,
+        on_hotkey: Callable[[str], None] | None = None,
     ) -> None:
         self._indicator = indicator if indicator is not None else RecordingIndicator()
         self._on_quit = on_quit
+        self._on_hotkey = on_hotkey
+        self._hotkeys: tuple[str, ...] = ()
+        self._hotkey_current = ""
         self._state = DictationState.IDLE
         self._error: str | None = None
         self._exposure: ClipboardExposure | None = None
@@ -161,6 +181,25 @@ class TrayApp:
         self._error = message if message and message.strip() else None
         self._refresh()
 
+    def set_hotkey_options(
+        self, available: Sequence[str], current: str
+    ) -> None:
+        """Offer the bindings the listener recognises, and mark the live one.
+
+        The tray does not know what changing a hotkey involves — stopping an
+        event tap, writing a config file, starting a new tap — and §6.2 says it
+        must not. It renders a list and hands a name to `on_hotkey`, exactly as
+        `Quit` hands nothing to `on_quit`.
+
+        This exists because right-option double-tap fires another
+        application's shortcut on the operator's machine, which is not
+        something a config file the daemon reads once at startup can fix
+        comfortably.
+        """
+        self._hotkeys = tuple(available)
+        self._hotkey_current = current
+        self._refresh()
+
     def set_clipboard_exposure(self, exposure: ClipboardExposure | None) -> None:
         """§5.4 and §7.3 both assign this row to Phase 4.
 
@@ -193,8 +232,31 @@ class TrayApp:
                 )
             )
 
+        if self._hotkeys:
+            items.append(
+                MenuItem(
+                    f"Hotkey: {_pretty_binding(self._hotkey_current)}",
+                    enabled=True,
+                    submenu=tuple(
+                        MenuItem(
+                            _pretty_binding(name),
+                            action=f"{HOTKEY_ACTION_PREFIX}{name}",
+                            enabled=True,
+                            checked=name == self._hotkey_current,
+                        )
+                        for name in self._hotkeys
+                    ),
+                )
+            )
+
         items.append(MenuItem("Quit Amanuensis", action="quit", enabled=True))
         return tuple(items)
+
+    def set_on_hotkey(self, on_hotkey: Callable[[str], None]) -> None:
+        """Supply the binding-change handler after construction, as `on_quit`
+        is supplied — the daemon builds the tray before it can rebind an event
+        tap."""
+        self._on_hotkey = on_hotkey
 
     def set_on_quit(self, on_quit: Callable[[], None]) -> None:
         """Supply the quit handler after construction.
@@ -213,6 +275,11 @@ class TrayApp:
         in this file rather than a reason to kill a daemon holding the mic."""
         if action == "quit" and self._on_quit is not None:
             self._on_quit()
+            return
+        if action and action.startswith(HOTKEY_ACTION_PREFIX):
+            name = action[len(HOTKEY_ACTION_PREFIX) :]
+            if self._on_hotkey is not None and name in self._hotkeys:
+                self._on_hotkey(name)
 
     # -- AppKit ------------------------------------------------------------
 
@@ -273,6 +340,22 @@ class TrayApp:
             row = appkit.NSMenuItem.alloc().init()
             row.setTitle_(item.title)
             row.setEnabled_(item.enabled)
+            if item.checked:
+                row.setState_(1)  # NSControlStateValueOn
+            if item.submenu:
+                child = appkit.NSMenu.alloc().init()
+                for sub in item.submenu:
+                    sub_row = appkit.NSMenuItem.alloc().init()
+                    sub_row.setTitle_(sub.title)
+                    sub_row.setEnabled_(sub.enabled)
+                    if sub.checked:
+                        sub_row.setState_(1)
+                    if sub.action is not None:
+                        sub_row.setRepresentedObject_(sub.action)
+                        sub_row.setTarget_(target)
+                        sub_row.setAction_("amanuensisMenuAction:")
+                    child.addItem_(sub_row)
+                row.setSubmenu_(child)
             if item.action is not None:
                 # The verb travels on the item, so one target serves every row
                 # and `activate` stays the single place that decides what a

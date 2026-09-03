@@ -207,6 +207,8 @@ class _FakeMenuItem:
         self.target: Any = None
         self.action: str = ""
         self.represented: Any = None
+        self.state_value = 0
+        self.submenu: Any = None
 
     @classmethod
     def alloc(cls) -> _FakeMenuItem:
@@ -226,6 +228,12 @@ class _FakeMenuItem:
 
     def setAction_(self, value: str) -> None:
         self.action = str(value)
+
+    def setState_(self, value: int) -> None:
+        self.state_value = value
+
+    def setSubmenu_(self, menu: Any) -> None:
+        self.submenu = menu
 
     def setRepresentedObject_(self, value: Any) -> None:
         self.represented = value
@@ -424,3 +432,74 @@ def test_informational_rows_carry_no_action(monkeypatch: pytest.MonkeyPatch) -> 
     for row in rendered.items:
         if row.title != "Quit Amanuensis":
             assert row.target is None, f"{row.title!r} is wired to an action"
+
+
+def test_the_hotkey_submenu_offers_every_binding_and_marks_the_live_one() -> None:
+    """The operator's right-option double-tap fires another application's
+    shortcut, so the binding has to be changeable without editing a file."""
+    from amanuensis.hotkey.macos import available_bindings
+
+    tray = TrayApp()
+    tray.set_hotkey_options(available_bindings(), "right_option")
+
+    row = next(i for i in tray.menu_items() if i.title.startswith("Hotkey:"))
+    assert "Right Option" in row.title, "the live binding is not readable"
+    assert len(row.submenu) == len(available_bindings())
+    checked = [s for s in row.submenu if s.checked]
+    assert len(checked) == 1 and "Right Option" in checked[0].title
+
+
+def test_choosing_a_binding_hands_the_name_to_the_daemon() -> None:
+    """§6.2: the tray does not know what rebinding involves. It hands over a
+    name, exactly as Quit hands over nothing."""
+    chosen: list[str] = []
+    tray = TrayApp(on_hotkey=chosen.append)
+    tray.set_hotkey_options(("right_option", "fn"), "right_option")
+
+    row = next(i for i in tray.menu_items() if i.title.startswith("Hotkey:"))
+    fn_row = next(s for s in row.submenu if s.title == "Fn")
+    tray.activate(fn_row.action)
+    assert chosen == ["fn"]
+
+
+def test_a_binding_the_listener_does_not_know_is_ignored() -> None:
+    """AppKit hands back whatever tag it was given, and a name that is not on
+    the offered list is a bug here rather than a reason to rebind to nothing."""
+    chosen: list[str] = []
+    tray = TrayApp(on_hotkey=chosen.append)
+    tray.set_hotkey_options(("right_option",), "right_option")
+    tray.activate("hotkey:the_spacebar")
+    assert chosen == []
+
+
+def test_no_hotkey_row_before_the_options_are_supplied() -> None:
+    """`manu status` and the tests build a tray with no daemon behind it. An
+    empty submenu would offer a choice that goes nowhere."""
+    assert not any(i.title.startswith("Hotkey:") for i in TrayApp().menu_items())
+
+
+def test_the_submenu_rows_are_wired_to_appkit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The parent-menu quit item was inert for a day because nothing checked
+    the AppKit wiring. Submenu rows are a second place to make that mistake."""
+    fake = _FakeAppKit()
+    fake.NSMenu = _FakeMenu  # type: ignore[attr-defined]
+    fake.NSMenuItem = _FakeMenuItem  # type: ignore[attr-defined]
+    foundation = _FakeFoundation(_FakeMainQueue())
+    monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
+    monkeypatch.setattr(indicator_module, "_foundation", lambda: foundation)
+
+    chosen: list[str] = []
+    tray = TrayApp(on_hotkey=chosen.append)
+    tray.set_hotkey_options(("right_option", "fn"), "right_option")
+    tray.show()
+
+    parent = next(
+        r for r in fake.bar.items[0].menu.items if r.title.startswith("Hotkey:")
+    )
+    assert parent.submenu is not None, "the hotkey row has no submenu"
+    fn_row = next(r for r in parent.submenu.items if r.title == "Fn")
+    assert fn_row.target is not None, "a submenu row with no target does nothing"
+    getattr(fn_row.target, fn_row.action.replace(":", "_"))(fn_row)
+    assert chosen == ["fn"]

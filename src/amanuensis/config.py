@@ -37,6 +37,7 @@ preserved as the literal string through load and validation, and
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -66,6 +67,7 @@ __all__ = [
     "default_history_path",
     "load_config",
     "resolve_cpu_threads",
+    "write_hotkey_binding",
 ]
 
 _APP_NAME: Final = "amanuensis"
@@ -740,3 +742,75 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     _check_coherence(config)
     return config
+
+
+def write_hotkey_binding(path: Path, binding: str) -> None:
+    """Persist `[hotkey] binding` without disturbing anything else.
+
+    Added 2026-09-03 for the tray's hotkey picker: the operator's right-option
+    double-tap fires another application's shortcut, so the binding has to be
+    changeable without hand-editing a file.
+
+    **Text surgery rather than a TOML round-trip, and that is the whole point.**
+    This project's `config.toml` is mostly comments — every value carries the
+    argument for why it is that value, and §5.3 is built on that. `tomllib` is
+    read-only and every writer available would return the data and drop the
+    prose. So this rewrites one line and leaves every byte around it alone.
+
+    Three shapes, in order: the key exists under `[hotkey]` and is replaced in
+    place with its trailing comment intact; the table exists without the key and
+    the key is inserted immediately after the header; neither exists and both
+    are appended.
+
+    The value is validated **before** the file is opened. Writing a binding the
+    listener will reject leaves a daemon that cannot start and a config the user
+    did not hand-edit, which is a bad place to learn about a typo.
+    """
+    from amanuensis.hotkey.macos import available_bindings
+
+    known = available_bindings()
+    if binding not in known:
+        raise ConfigError(
+            f"hotkey.binding: {binding!r} is not a binding this listener "
+            f"recognises. Known: {', '.join(known)}"
+        )
+
+    text = path.read_text() if path.is_file() else ""
+    lines = text.splitlines(keepends=True)
+    new_line = f'binding = "{binding}"'
+
+    header = None
+    for index, line in enumerate(lines):
+        if line.strip() == "[hotkey]":
+            header = index
+            break
+
+    if header is None:
+        suffix = "" if not text or text.endswith("\n") else "\n"
+        text = f"{text}{suffix}\n[hotkey]\n{new_line}\n"
+    else:
+        # Only within this table: `binding` is a plausible key name elsewhere,
+        # and a file-wide match would rewrite another table's value and leave
+        # the hotkey exactly as it was.
+        end = len(lines)
+        for index in range(header + 1, len(lines)):
+            if lines[index].lstrip().startswith("["):
+                end = index
+                break
+
+        replaced = False
+        for index in range(header + 1, end):
+            match = re.match(r"(\s*)binding(\s*)=\s*\S+(.*)$", lines[index])
+            if match:
+                trailing = match.group(3)
+                comment = trailing[trailing.index("#") :] if "#" in trailing else ""
+                keep = f" {comment}" if comment else ""
+                lines[index] = f"{match.group(1)}{new_line}{keep}\n"
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(header + 1, f"{new_line}\n")
+        text = "".join(lines)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)

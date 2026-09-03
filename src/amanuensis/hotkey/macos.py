@@ -58,6 +58,7 @@ __all__ = [
     "HotkeyPermissionError",
     "MacOSHotkeyListener",
     "UnsupportedBindingError",
+    "available_bindings",
 ]
 
 #: Binding name -> (virtual key code, the device-dependent flag bit that is
@@ -126,6 +127,17 @@ class HotkeyPermissionError(Exception):
 
 class UnsupportedBindingError(Exception):
     """`[hotkey] binding` or `mode` names something this listener cannot do."""
+
+
+def available_bindings() -> tuple[str, ...]:
+    """Binding names this listener recognises, in declaration order.
+
+    Exported so the tray can offer them and `write_hotkey_binding` can refuse
+    anything else, rather than either duplicating the table. `_BINDINGS` is
+    keyed by name and carries the keycode and modifier bit, which is nobody
+    else's business.
+    """
+    return tuple(_BINDINGS)
 
 
 def _quartz() -> Any:

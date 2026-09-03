@@ -28,6 +28,7 @@ from amanuensis.config import (
     default_history_path,
     load_config,
     resolve_cpu_threads,
+    write_hotkey_binding,
 )
 
 # --------------------------------------------------------------------------
@@ -460,3 +461,88 @@ def test_feedback_rejects_an_unknown_key(tmp_path: Path) -> None:
     path.write_text("[feedback]\noverlays = true\n")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+# ---------------------------------------------------------------------------
+# Writing one key back — the tray's hotkey picker (2026-09-03)
+# ---------------------------------------------------------------------------
+
+
+def test_writing_the_binding_preserves_everything_else(tmp_path: Path) -> None:
+    """The operator's `config.toml` is hand-written and full of comments that
+    explain why each value is what it is. A round-trip through a TOML library
+    would drop every one of them, so this edits the line and nothing else."""
+    path = tmp_path / "config.toml"
+    original = (
+        "# my notes\n"
+        "[hotkey]\n"
+        'mode = "push_to_talk"\n'
+        'binding = "right_option"   # because it is under my thumb\n'
+        "\n"
+        "[engine]\n"
+        'model = "auto"\n'
+    )
+    path.write_text(original)
+
+    write_hotkey_binding(path, "right_shift")
+
+    after = path.read_text()
+    assert 'binding = "right_shift"' in after
+    assert "# my notes" in after
+    assert "# because it is under my thumb" in after, "the comment was lost"
+    assert 'mode = "push_to_talk"' in after
+    assert 'model = "auto"' in after
+    assert load_config(path).hotkey.binding == "right_shift"
+
+
+def test_writing_the_binding_adds_the_key_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[hotkey]\nmode = "toggle"\n')
+    write_hotkey_binding(path, "fn")
+    assert load_config(path).hotkey.binding == "fn"
+    assert load_config(path).hotkey.mode == "toggle"
+
+
+def test_writing_the_binding_adds_the_table_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[engine]\nmodel = "auto"\n')
+    write_hotkey_binding(path, "left_option")
+    assert load_config(path).hotkey.binding == "left_option"
+    assert load_config(path).engine.model == "auto"
+
+
+def test_writing_the_binding_creates_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "config.toml"
+    write_hotkey_binding(path, "right_command")
+    assert load_config(path).hotkey.binding == "right_command"
+
+
+def test_an_unknown_binding_is_refused_before_the_file_is_touched(
+    tmp_path: Path,
+) -> None:
+    """Writing a value the listener will reject leaves a daemon that cannot
+    start, and the user's only clue is a config file they did not hand-edit."""
+    path = tmp_path / "config.toml"
+    path.write_text('[hotkey]\nbinding = "right_option"\n')
+    with pytest.raises(ConfigError):
+        write_hotkey_binding(path, "the_spacebar")
+    assert 'binding = "right_option"' in path.read_text(), "the file was modified"
+
+
+def test_a_binding_in_a_later_table_is_not_mistaken_for_the_hotkey(
+    tmp_path: Path,
+) -> None:
+    """`binding` is a plausible key name elsewhere. A naive line match would
+    rewrite the wrong table's value and leave the hotkey untouched."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[engine]\n"
+        'model = "auto"\n'
+        "\n"
+        "[hotkey]\n"
+        'binding = "right_option"\n'
+    )
+    write_hotkey_binding(path, "fn")
+    text = path.read_text()
+    assert text.index("[hotkey]") < text.index('binding = "fn"')
+    assert load_config(path).hotkey.binding == "fn"

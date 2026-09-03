@@ -675,6 +675,7 @@ def _daemon(config: AppConfig) -> int:
     `NSApplication.run()`, so a plain Ctrl-C would leave a daemon holding the
     microphone with no indicator to say so.
     """
+    import dataclasses
     import signal
     import threading
 
@@ -893,6 +894,49 @@ def _daemon(config: AppConfig) -> int:
     control = create_transport()
     control.serve(make_handler({"status": _status, "toggle": _toggle}))
 
+    # The hotkey picker (§5.3's `[hotkey] binding`, offered from the tray
+    # because the operator's right-option double-tap fires another
+    # application's shortcut). The tray renders a list and hands back a name;
+    # everything that changing a binding actually involves lives here, which is
+    # §6.2's boundary.
+    from amanuensis.config import default_config_path, write_hotkey_binding
+    from amanuensis.hotkey.macos import available_bindings
+
+    listener_box = {"current": listener}
+
+    def _change_hotkey(name: str) -> None:
+        old = listener_box["current"]
+        try:
+            # Persist first. A binding that works this session and is gone
+            # after a restart is worse than one that never changed, because
+            # the user stops trusting the menu.
+            write_hotkey_binding(default_config_path(), name)
+            replacement = create_hotkey_listener(
+                dataclasses.replace(config.hotkey, binding=name)
+            )
+            old.stop()
+            replacement.start(_start_session, _on_release)
+        except Exception as exc:
+            tray.set_error(f"could not switch to {name}: {exc}")
+            # The old tap is already stopped in the failure window between
+            # `old.stop()` and a raise from `start`; restarting it is the only
+            # thing that leaves a usable daemon.
+            try:
+                if not old.is_running:
+                    old.start(_start_session, _on_release)
+            except Exception:
+                tray.set_error(
+                    f"the hotkey is not listening after failing to switch to "
+                    f"{name}. Restart the daemon."
+                )
+            return
+        listener_box["current"] = replacement
+        tray.set_error(None)
+        tray.set_hotkey_options(available_bindings(), name)
+        print(f"hotkey is now {name} (written to {default_config_path()})")
+
+    tray.set_on_hotkey(_change_hotkey)
+    tray.set_hotkey_options(available_bindings(), config.hotkey.binding)
     tray.set_on_quit(tray.stop)
     signal.signal(signal.SIGINT, lambda *_: tray.stop())
     signal.signal(signal.SIGTERM, lambda *_: tray.stop())
@@ -909,7 +953,7 @@ def _daemon(config: AppConfig) -> int:
         # torn down. A daemon that exits still holding either is §5.4's
         # failure with the tray already gone.
         control.stop()
-        listener.stop()
+        listener_box["current"].stop()
         controller.shutdown()
         # The panel says the microphone is live. It outlives neither.
         overlay.hide()

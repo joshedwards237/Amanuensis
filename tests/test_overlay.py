@@ -22,6 +22,7 @@ from amanuensis.ui.overlay import (
     BAR_COUNT,
     CORNER_RADIUS,
     MAX_BAR_HEIGHT,
+    MIN_BAR_HEIGHT,
     RecordingOverlay,
     bar_heights,
     frame_for,
@@ -300,3 +301,56 @@ def test_the_pill_is_smaller_than_the_labelled_panel_was() -> None:
     assert height <= 30, f"{height} tall is not a pill"
     assert width / height >= 3.0, "a pill is much wider than it is tall"
     assert CORNER_RADIUS >= height / 2 - 0.51, "the ends must be fully round"
+
+
+def test_the_pill_is_mostly_waveform_not_padding() -> None:
+    """Its user's second note: "cut down the padding outside the waveform".
+
+    Asserted as a ratio rather than a pixel count so a later change to the bar
+    geometry cannot quietly reintroduce the empty margins.
+    """
+    from amanuensis.ui.overlay import _BAR_GAP, _BAR_WIDTH, _WIDTH
+
+    span = BAR_COUNT * _BAR_WIDTH + (BAR_COUNT - 1) * _BAR_GAP
+    assert span / _WIDTH >= 0.5, (
+        f"the bars occupy {span / _WIDTH:.0%} of the pill; the rest is padding"
+    )
+
+
+def test_ordinary_speech_uses_most_of_the_range() -> None:
+    """"A little more dynamics and amplitude."
+
+    0.0152 is the operator's **measured** median speech level over 6,461
+    blocks, not a plausible-looking number. At the original full scale of 0.35
+    it reached 12% of the pill; a second guess of 0.10 reached 39%. The levels
+    here are his, so a future retune that flatters the curve while losing his
+    voice fails this.
+    """
+    median_speech = max(bar_heights([0.0152] * BAR_COUNT))
+    assert median_speech / MAX_BAR_HEIGHT >= 0.45, (
+        f"median speech reaches only {median_speech / MAX_BAR_HEIGHT:.0%}"
+    )
+    loud_speech = max(bar_heights([0.0311] * BAR_COUNT))  # his p90
+    assert loud_speech / MAX_BAR_HEIGHT >= 0.8
+
+
+def test_quiet_and_loud_are_still_distinguishable() -> None:
+    """A curve steep enough to make speech big can flatten everything into
+    'full'. Three levels must remain ordered and separated."""
+    # His measured quartiles, all inside the range rather than clipped.
+    quiet = max(bar_heights([0.008] * BAR_COUNT))
+    normal = max(bar_heights([0.0152] * BAR_COUNT))
+    loud = max(bar_heights([0.0311] * BAR_COUNT))
+    assert quiet < normal < loud
+    assert normal - quiet >= 2.0, "quiet and normal are visually the same"
+
+
+def test_a_quiet_room_does_not_shimmer() -> None:
+    """The operator's measured silence floor is 0.0028 RMS, and the sqrt curve
+    lifts that to a quarter of the pill without a noise gate — a still room
+    would look like the microphone was hearing something."""
+    for ambient in (0.0, 0.001, 0.0028, 0.004):
+        heights = bar_heights([ambient] * BAR_COUNT)
+        assert max(heights) <= MIN_BAR_HEIGHT + 0.01, (
+            f"ambient {ambient} deflects to {max(heights)}"
+        )

@@ -170,6 +170,37 @@ def find_daemons() -> list[int]:
     ]
 
 
+def daemon_is_serving() -> tuple[bool, str]:
+    """Ask the daemon a question and see whether it answers.
+
+    **The subject's own positive control, and the check was worthless without
+    it.** `lsof -p` on a dead PID prints nothing and `nettop -p` on a dead PID
+    reports nothing, so a process that has exited reads as 0 sockets and 0
+    bytes — a PASS. "The daemon was silent" and "there was no daemon" were the
+    same measurement.
+
+    It happened: the Phase 4 gate's own daemon observation returned PASS over a
+    PID that no longer existed, while the script's output claimed the tray was
+    drawn and the IPC acceptor was listening. Neither was checked and neither
+    was true.
+
+    `manu status` answering proves three things at once: the process is alive,
+    it is *this* product, and it has the Phase 4 IPC surface §9 wants observed.
+    A Phase 3 daemon would fail it, which is correct — that is not the
+    assembled product.
+    """
+    from amanuensis.ipc.base import ControlRequestError
+    from amanuensis.ipc.factory import create_transport
+
+    try:
+        response = create_transport().request("status")
+    except ControlRequestError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return response.ok, response.detail
+
+
 def observe_pid(label: str, pid: int, seconds: float, samples: int) -> Observation:
     """Watch a process this script did not start, for a fixed window.
 
@@ -368,8 +399,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     manu = _manu_binary()
     samples = max(4, int(args.seconds) + 6)
 
-    print()
-    print(f"2/3. Full transcribe cycle under observation ({args.seconds:g}s capture)")
     if args.daemon:
         pids = find_daemons()
         if len(pids) > 1:
@@ -387,7 +416,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "  Start one (the Desktop shortcut, or `manu daemon`), leave the\n"
                 "  tray up, then run this again and dictate during the window."
             )
+        # Before anything is measured: is there something there to measure?
+        serving, detail = daemon_is_serving()
+        if not serving:
+            raise SystemExit(
+                "the daemon did not answer `manu status`, so there is nothing "
+                "to observe.\n"
+                f"  {detail}\n"
+                "  A dead or Phase 3 daemon reads as 0 sockets and 0 bytes — "
+                "silence and\n"
+                "  absence are the same measurement — so this refuses rather "
+                "than passing.\n"
+                "  Start a Phase 4 daemon (the Desktop shortcut) and run this "
+                "again."
+            )
         print(f"\n2/3. The assembled daemon under observation (pid {pid})")
+        print(f"     Alive and serving: {detail}")
         print(f"     Watching for {args.daemon:g}s — **dictate now**, so the")
         print("     window covers a real hotkey press, decode and injection.")
         subject = observe_pid(
@@ -397,6 +441,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         for line in subject.sockets:
             print(f"                 {line}")
         print(f"  bytes in/out   {subject.bytes_in} / {subject.bytes_out}")
+
+        # And after: was it still there? A daemon that exited mid-window would
+        # have contributed silence for the remainder and read as compliance.
+        still, still_detail = daemon_is_serving()
+        print(f"  still serving  {'yes' if still else 'NO'} — {still_detail}")
+        if not still:
+            print()
+            print("=" * 70)
+            print("G3 (daemon): INCONCLUSIVE — the daemon stopped answering")
+            print("  during the window, so part of this reading is the silence")
+            print("  of a process that was not running.")
+            return 1
         print()
         print("  NOTE: this observes whatever the daemon did during the window.")
         print("  If you did not dictate, it is a reading of an idle process and")
@@ -436,6 +492,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("    every one. That path is invisible to packet capture.")
         return 0
 
+    print()
+    print(f"2/3. Full transcribe cycle under observation ({args.seconds:g}s capture)")
     subject = observe(
         "manu transcribe" + (" --inject" if args.inject else ""),
         [manu, "transcribe", "--seconds", str(args.seconds)]
