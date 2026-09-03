@@ -199,6 +199,39 @@ def test_invalid_enum_value_lists_the_permitted_ones(tmp_path: Path) -> None:
     assert "vad_auto" in message
 
 
+def test_a_negative_double_tap_window_is_refused_rather_than_read_as_off(
+    tmp_path: Path,
+) -> None:
+    """Two spellings of one behaviour is how a user concludes a key is inert.
+
+    A negative window is arithmetically indistinguishable from `0` everywhere
+    `hotkey/macos.py` reads it -- `held >= window` is true for any hold and any
+    tap -- so it would silently disable §5.2's latch while reading as a setting
+    that was chosen. §5.3 gives `0` that meaning explicitly and this refuses
+    the other route to it.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text("[hotkey]\ndouble_tap_ms = -1\n")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+
+    message = str(exc.value)
+    assert "hotkey.double_tap_ms" in message
+    assert "0 to disable" in message, "the refusal must name the way to turn it off"
+
+
+def test_zero_double_tap_window_is_accepted_as_the_documented_way_off(
+    tmp_path: Path,
+) -> None:
+    """The negative control on the check above. A refusal that also rejected
+    the documented value would be a check nobody could satisfy."""
+    path = tmp_path / "config.toml"
+    path.write_text("[hotkey]\ndouble_tap_ms = 0\n")
+
+    assert load_config(path).hotkey.double_tap_ms == 0
+
+
 def test_out_of_range_value_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[audio]\nsample_rate = 0\n")

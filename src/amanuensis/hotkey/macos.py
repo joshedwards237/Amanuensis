@@ -46,6 +46,8 @@ decide what a press means. It converts OS events into two callbacks.
 from __future__ import annotations
 
 import threading
+import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from amanuensis.hotkey.base import HotkeyCallback, HotkeyListener
@@ -168,6 +170,33 @@ def available_bindings() -> tuple[str, ...]:
     return tuple(_BINDINGS)
 
 
+def _monotonic() -> float:
+    """The clock the latch measures its window against.
+
+    Module-level and monkeypatchable for the same reason `_quartz` is: the
+    tests for §5.2's latch are about ordering around a deadline, and a suite
+    that sleeps for 350 ms per case is both slow and still racy on a loaded
+    machine. Monotonic rather than wall-clock — the window is a duration, and
+    a clock adjustment mid-gesture must not turn a tap into a hold.
+    """
+    return time.monotonic()
+
+
+def _schedule(delay: float, action: Callable[[], None]) -> Any:
+    """Run `action` after `delay` seconds; the result has `.cancel()`.
+
+    A `threading.Timer` per deferred release, created only for taps shorter
+    than `double_tap_ms` — so a normal dictation creates none. Deliberately a
+    plain timer rather than a shared scheduler thread: at most one is live at
+    a time, and the thing that would go wrong with a shared one is a queue
+    that outlives `stop()`.
+    """
+    timer = threading.Timer(delay, action)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 def _quartz() -> Any:
     """Import Quartz at the point of use, never at module import.
 
@@ -217,6 +246,32 @@ class MacOSHotkeyListener(HotkeyListener):
 
         self._on_press: HotkeyCallback | None = None
         self._on_release: HotkeyCallback | None = None
+        self._on_cancel: HotkeyCallback | None = None
+
+        #: §5.2's latch, and all four fields are touched only on the event-tap
+        #: thread or on the one timer it creates, never both at once — the
+        #: timer's only action cancels itself out of existence first.
+        #:
+        #: `_latched` is a hands-free session in progress. `_pressed_at` is
+        #: when the current physical press began, which is what separates a
+        #: tap from a hold. `_deferred` is the pending end of a tap, live only
+        #: between a short release and the window closing. `_swallow_release`
+        #: covers exactly one event: the latching press's own release, which is
+        #: a tap by every other rule here and would end the latch it opened.
+        self._latched = False
+        self._pressed_at = 0.0
+        self._deferred: Any | None = None
+        self._swallow_release = False
+        #: The deferral's identity. A timer that has already entered its
+        #: callback cannot be cancelled, so `cancel()` alone is not enough:
+        #: the press that cancels it and the timer that is firing can be on
+        #: two threads at the same instant. Bumping the token makes the loser
+        #: recognise itself and return, which `cancel()` cannot express.
+        self._deferred_token = 0
+        #: Guards the five fields above. Held for the decision only, never
+        #: across a callback — §6.3 forbids blocking the tap and the callbacks
+        #: reach the controller.
+        self._latch_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._loop: Any | None = None
         self._port: Any | None = None
@@ -260,8 +315,19 @@ class MacOSHotkeyListener(HotkeyListener):
             remediation=_REMEDIATION,
         )
 
-    def start(self, on_press: HotkeyCallback, on_release: HotkeyCallback) -> None:
+    def start(
+        self,
+        on_press: HotkeyCallback,
+        on_release: HotkeyCallback,
+        on_cancel: HotkeyCallback | None = None,
+    ) -> None:
         """Install the tap and begin listening. Returns once it is installed.
+
+        `on_cancel` means *throw the capture away, it was never a dictation*.
+        Only §5.2's latch emits it, and only for the first tap of a double-tap.
+        Optional because every other mode and every existing caller has no use
+        for it; a listener given none simply cannot latch, which is the same
+        state as `double_tap_ms = 0`.
 
         The permission is checked *before* the tap is attempted, so the error
         the user sees is the actionable one. `CGEventTapCreate` reports
@@ -278,8 +344,12 @@ class MacOSHotkeyListener(HotkeyListener):
 
         self._on_press = on_press
         self._on_release = on_release
+        self._on_cancel = on_cancel
         self._is_down = False
         self._session_open = False
+        self._cancel_deferred()
+        self._latched = False
+        self._swallow_release = False
         self._start_error.clear()
         self._ready.clear()
 
@@ -375,6 +445,120 @@ class MacOSHotkeyListener(HotkeyListener):
         self._ready.set()
         quartz.CFRunLoopRun()
 
+    # -- §5.2's double-tap latch -------------------------------------------
+
+    @property
+    def _latch_enabled(self) -> bool:
+        """`push_to_talk` only, a positive window, and somewhere to cancel to.
+
+        The mode restriction is §5.3's: `toggle` and `vad_auto` have their own
+        press semantics and a latch inside either would be two behaviours
+        competing for one press. The `on_cancel` requirement is not a
+        convenience — without it the first tap's fragment would reach the
+        decoder, which is the one outcome §5.2 rejects by name.
+        """
+        return (
+            self._config.mode == "push_to_talk"
+            and self._config.double_tap_ms > 0
+            and self._on_cancel is not None
+        )
+
+    def _cancel_deferred(self) -> None:
+        """Abandon a pending end. Safe to call when there is none."""
+        self._deferred_token += 1
+        pending, self._deferred = self._deferred, None
+        if pending is not None:
+            pending.cancel()
+
+    def _fire(self, callback: HotkeyCallback | None) -> bool:
+        """Call a callback and report whether it survived.
+
+        Same swallow as `_on_event`: an exception from here goes into a pyobjc
+        bridge and then CFRunLoop's C stack, where it is not a traceback anyone
+        reads — it is a hotkey that stops working. The boolean is what lets the
+        latch commit *after* the callback rather than before, which is the rule
+        `toggle` already follows for the same reason.
+        """
+        if callback is None:
+            return False
+        try:
+            callback()
+        except Exception:
+            return False
+        return True
+
+    def _on_deferred_end(self, token: int) -> None:
+        """The tap window closed with no second press: it was just a tap."""
+        with self._latch_lock:
+            if token != self._deferred_token:
+                return  # a press got here first and cancelled this
+            self._deferred = None
+        self._fire(self._on_release)
+
+    def _handle_latch(self, down: bool) -> None:
+        """The whole of §5.2's latch, on the event-tap thread.
+
+        Reads as a transition table on purpose. The states are: idle, holding,
+        *tap pending* (released early, watching for a second press), and
+        latched. The interesting edge is the only one that discards anything —
+        a press arriving while an end is pending means the capture from the
+        first tap is **still open**, so `on_cancel` reaches `abort_session`
+        and nothing was ever queued.
+        """
+        window = self._config.double_tap_ms / 1000.0
+        now = _monotonic()
+
+        if down:
+            with self._latch_lock:
+                self._pressed_at = now
+                latching = self._deferred is not None
+                if latching:
+                    self._cancel_deferred()
+                elif self._latched:
+                    return  # a press mid-latch decides nothing; its release does
+            if not latching:
+                self._fire(self._on_press)
+                return
+            # Discard first, then open the hands-free session. Order matters:
+            # both touch the capture, and starting before discarding would
+            # abort the session that was just started.
+            self._fire(self._on_cancel)
+            started = self._fire(self._on_press)
+            with self._latch_lock:
+                # Committed after the callback, never before. A press that
+                # failed leaves nothing recording, and a listener that had
+                # already latched would answer the next tap for a session that
+                # does not exist — `toggle` carries this rule for the same
+                # reason (see `_callback_for`).
+                self._latched = started
+                self._swallow_release = True
+            return
+
+        with self._latch_lock:
+            if self._swallow_release:
+                self._swallow_release = False
+                return
+            held = now - self._pressed_at
+            if self._latched:
+                if held >= window:
+                    return  # a hold during a latch is ignored (§5.2)
+                self._latched = False
+                ending = True
+            elif held >= window:
+                ending = True  # an ordinary dictation: straight through
+            else:
+                # A tap. Not yet distinguishable from the first half of a
+                # double-tap, so the end waits out the remainder of the window.
+                # Only taps pay this; no dictation anyone speaks is one.
+                self._deferred_token += 1
+                token = self._deferred_token
+                self._deferred = _schedule(
+                    max(window - held, 0.0), lambda: self._on_deferred_end(token)
+                )
+                return
+        if ending:
+            self._fire(self._on_release)
+
     def _callback_for(self, down: bool) -> HotkeyCallback | None:
         """Which callback a key transition means, in this mode (§5.2).
 
@@ -440,6 +624,10 @@ class MacOSHotkeyListener(HotkeyListener):
         if down == self._is_down:
             return event
         self._is_down = down
+
+        if self._latch_enabled:
+            self._handle_latch(down)
+            return event
 
         callback = self._callback_for(down)
         if callback is not None:

@@ -194,6 +194,9 @@ class _Recorder:
     def release(self) -> None:
         self.events.append("release")
 
+    def cancel(self) -> None:
+        self.events.append("cancel")
+
 
 @pytest.fixture
 def quartz(monkeypatch: pytest.MonkeyPatch) -> _FakeQuartz:
@@ -653,3 +656,270 @@ def test_a_failed_start_does_not_desync_the_toggle(
 
     assert "release" not in events, "a release fired for a session that never started"
     assert events == ["press-attempt", "press-attempt"]
+
+
+# ---------------------------------------------------------------------------
+# §5.2 — the push_to_talk double-tap latch (specified 2026-08-09, built
+# 2026-09-03)
+# ---------------------------------------------------------------------------
+#
+# Time is faked rather than waited on. A latch whose tests sleep for 350 ms is
+# a suite that sleeps for seconds and still races on a loaded machine, and the
+# question every test here asks is about *ordering around a deadline*, which a
+# real clock answers less clearly than a fake one.
+
+
+class _Clock:
+    """A monotonic clock the test moves by hand, plus the deferral it drives.
+
+    `_schedule` returns a handle with `cancel()`, matching `threading.Timer`
+    closely enough that production can use one and these tests never start a
+    thread.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.pending: list[dict[str, Any]] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def schedule(self, delay: float, action: Any) -> Any:
+        entry: dict[str, Any] = {"at": self.now + delay, "action": action,
+                                 "cancelled": False}
+        self.pending.append(entry)
+
+        class _Handle:
+            def cancel(self) -> None:
+                entry["cancelled"] = True
+
+        return _Handle()
+
+    def advance(self, seconds: float) -> None:
+        """Move time forward and run whatever came due, in order."""
+        self.now += seconds
+        due = [e for e in self.pending if not e["cancelled"] and e["at"] <= self.now]
+        self.pending = [e for e in self.pending if e not in due]
+        for entry in sorted(due, key=lambda e: e["at"]):
+            entry["action"]()
+
+    @property
+    def live(self) -> list[dict[str, Any]]:
+        return [e for e in self.pending if not e["cancelled"]]
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    made = _Clock()
+    monkeypatch.setattr(macos_hotkey, "_monotonic", made.monotonic)
+    monkeypatch.setattr(macos_hotkey, "_schedule", made.schedule)
+    return made
+
+
+@pytest.fixture
+def latch_listener(quartz: _FakeQuartz, clock: _Clock) -> Any:
+    # `clock` is requested for its monkeypatching, not for its value: without
+    # it the listener would read the real clock and the tests would race.
+    assert clock.now > 0
+    made = MacOSHotkeyListener(HotkeyConfig(double_tap_ms=350))
+    yield made
+    if made.is_running:
+        made.stop()
+
+
+def _down(quartz: _FakeQuartz) -> None:
+    quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+
+
+def _up(quartz: _FakeQuartz) -> None:
+    quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
+
+
+def _tap_at(quartz: _FakeQuartz, clock: _Clock, held: float = 0.08) -> None:
+    """One press-and-release shorter than any latch window: a tap."""
+    _down(quartz)
+    clock.advance(held)
+    _up(quartz)
+
+
+def _enter_latch(quartz: _FakeQuartz, clock: _Clock) -> None:
+    """Tap, pause inside the window, tap again — a double-tap."""
+    _tap_at(quartz, clock)
+    clock.advance(0.12)
+    _tap_at(quartz, clock)
+
+
+def test_a_hold_ends_immediately_and_schedules_nothing(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """G1's protection, and the reason the latch is affordable at all.
+
+    Every dictation a person actually speaks is a hold. If a hold were deferred
+    to watch for a second press, `double_tap_ms` would be added to the hotkey-
+    release-to-first-character measurement G1 gates, on every dictation. It is
+    not: the release is passed straight through and no deferral is created.
+    """
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _down(quartz)
+    clock.advance(4.0)  # a four-second dictation
+    _up(quartz)
+
+    assert recorder.events == ["press", "release"]
+    assert clock.live == [], "a hold must not defer anything"
+
+
+def test_a_tap_defers_its_end_until_the_window_closes(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """A tap is not yet distinguishable from the first half of a double-tap."""
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _down(quartz)
+    clock.advance(0.08)
+    _up(quartz)
+
+    assert recorder.events == ["press"], "the end must wait for the window"
+    clock.advance(0.35)
+    assert recorder.events == ["press", "release"], "and arrive when it closes"
+
+
+def test_a_second_press_inside_the_window_cancels_rather_than_ends(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """The whole difficulty §5.2 names: the first tap is already a complete
+    push-to-talk dictation, and its fragment must be discarded **before the
+    decoder**. `cancel` reaches `abort_session`, which discards a capture that
+    is still open -- so nothing is queued, nothing decodes, and §8 has nothing
+    to persist. A `release` here instead would queue it."""
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _down(quartz)
+    clock.advance(0.08)
+    _up(quartz)
+    clock.advance(0.12)
+    _down(quartz)
+
+    assert recorder.events == ["press", "cancel", "press"]
+    assert "release" not in recorder.events, "a release would queue the fragment"
+    assert clock.live == [], "the deferred end must be cancelled, not just ignored"
+
+
+def test_the_latching_press_does_not_end_on_its_own_release(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """Press two enters the latch and comes up 80 ms later, which is a tap by
+    every other rule here. Swallowed, or the latch ends on the gesture that
+    opened it and a double-tap is an elaborate no-op."""
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _down(quartz)
+    clock.advance(0.08)
+    _up(quartz)
+    clock.advance(0.12)
+    _down(quartz)
+    clock.advance(0.08)
+    _up(quartz)
+    clock.advance(1.0)
+
+    assert recorder.events == ["press", "cancel", "press"]
+
+
+def test_a_latched_session_ends_on_a_single_tap(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _enter_latch(quartz, clock)
+    clock.advance(30.0)  # a hands-free dictation
+    _tap_at(quartz, clock)  # the ending tap
+
+    assert recorder.events == ["press", "cancel", "press", "release"]
+
+
+def test_a_hold_during_a_latched_session_is_ignored(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """§5.2: the same gesture would mean "end the latch" to the code and
+    "begin dictating" to the hand, and one reading would be wrong every time."""
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _enter_latch(quartz, clock)
+    clock.advance(5.0)
+    _tap_at(quartz, clock, held=2.0)  # a hold, mid-latch
+    clock.advance(1.0)
+
+    assert recorder.events == ["press", "cancel", "press"], "the latch survives"
+
+
+def test_double_tap_ms_zero_disables_the_latch_and_the_deferral_together(
+    quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """§5.3: `0` is for a user who wants the hold gesture and nothing else
+    without giving up `push_to_talk`. It must also remove the tap deferral --
+    leaving that behind would charge the cost of a feature that is off.
+
+    **What this pins is the behaviour, not the branch, and the difference was
+    found by sabotage.** Removing `double_tap_ms > 0` from `_latch_enabled`
+    does not fail this test, because at a window of zero the latch path is
+    arithmetically identical to the plain one: `held >= 0` for every hold and
+    every tap, so nothing is ever deferred and no second press ever finds a
+    pending end. The guard is legibility and defence against a future window
+    of zero meaning something else -- it is not what makes `0` work. Said here
+    rather than left for someone to discover the assertion was decorative.
+
+    A *negative* window would also be arithmetically identical, which is a
+    second spelling of "off" that reads as a chosen setting. `config.py`
+    refuses it; that check has its own test and can fail."""
+    listener = MacOSHotkeyListener(HotkeyConfig(double_tap_ms=0))
+    recorder = _Recorder()
+    listener.start(recorder.press, recorder.release, recorder.cancel)
+    try:
+        _down(quartz)
+        clock.advance(0.08)
+        _up(quartz)
+        assert recorder.events == ["press", "release"], "no deferral when off"
+        assert clock.live == []
+
+        clock.advance(0.12)
+        _down(quartz)
+        clock.advance(0.08)
+        _up(quartz)
+        assert recorder.events == ["press", "release", "press", "release"], (
+            "a double-tap with the latch off is two ordinary dictations"
+        )
+    finally:
+        if listener.is_running:
+            listener.stop()
+
+
+@pytest.mark.parametrize("mode", ["toggle", "vad_auto"])
+def test_the_latch_is_inert_outside_push_to_talk(
+    mode: str, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """§5.3: `toggle` and `vad_auto` have their own press semantics, and a
+    latch inside either is two behaviours competing for one press. Asserted for
+    both rather than for one, because the key is read from the same config in
+    the same place and a check on one mode is a check the other mode skips."""
+    listener = MacOSHotkeyListener(HotkeyConfig(mode=mode, double_tap_ms=350))
+    recorder = _Recorder()
+    listener.start(recorder.press, recorder.release, recorder.cancel)
+    try:
+        _down(quartz)
+        clock.advance(0.08)
+        _up(quartz)
+
+        assert "cancel" not in recorder.events
+        assert clock.live == [], "no deferral outside push_to_talk"
+        assert recorder.events == ["press"], (
+            f"{mode} starts on the press and is unchanged by the latch"
+        )
+    finally:
+        if listener.is_running:
+            listener.stop()

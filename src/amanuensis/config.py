@@ -42,9 +42,9 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, get_type_hints
 
 import platformdirs
 
@@ -91,6 +91,19 @@ class ConfigError(Exception):
 class HotkeyConfig:
     mode: str = "push_to_talk"
     binding: str = "right_option"
+    #: §5.2's double-tap latch, restored to the spec 2026-09-03 and built the
+    #: same day. A key rather than a constant because it is a **motor**
+    #: threshold: how fast this user's hand taps, where the value that feels
+    #: instant to one person makes another's deliberate second press look like
+    #: a hold. macOS makes its own double-click interval user-settable for the
+    #: same reason. 350 is a starting default and is **UNMEASURED**.
+    #:
+    #: `0` disables the latch, and with it the tap deferral §5.2 describes —
+    #: a user who wants only the hold gesture pays nothing for a feature that
+    #: is off. Read only in `push_to_talk`; the other two modes have their own
+    #: press semantics and a latch inside either is two behaviours competing
+    #: for one press.
+    double_tap_ms: int = 350
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +430,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     "hotkey": {
         "mode": _Rule((str,), _one_of("push_to_talk", "toggle", "vad_auto")),
         "binding": _Rule((str,)),
+        "double_tap_ms": _Rule((int,)),
     },
     "audio": {
         "device": _Rule((str,)),
@@ -599,7 +613,27 @@ def _collect(table: str, raw: dict[str, Any], cls: type) -> dict[str, Any]:
     already built.
     """
     rules = _SCHEMA[table]
-    nested = {f.name for f in fields(cls)} - set(rules)
+    # A sub-table is a field whose type is itself a config dataclass. It used
+    # to be "every field this schema does not mention", which made a schema
+    # entry optional: adding `double_tap_ms` to `HotkeyConfig` and forgetting
+    # `_SCHEMA` parsed the key, skipped it, and left the default in place, so
+    # the setting read as accepted and did nothing. Same shape as the
+    # 2026-09-02 `[engine] backend` finding, one layer down. Now a field that
+    # is neither a rule nor a dataclass is a bug in *this* file and says so.
+    # `get_type_hints`, not `f.type`: `from __future__ import annotations`
+    # makes every field type a *string*, and `is_dataclass("LlmConfig")` is
+    # False for the same reason it is False for any other string — which
+    # would classify every sub-table as unschemad and refuse the config
+    # this function exists to load.
+    hints = get_type_hints(cls)
+    nested = {f.name for f in fields(cls) if is_dataclass(hints[f.name])}
+    unschemad = {f.name for f in fields(cls)} - set(rules) - nested
+    if unschemad:
+        raise ConfigError(
+            f"[{table}] has fields with no schema entry: "
+            f"{', '.join(sorted(unschemad))}. Add them to _SCHEMA — without a "
+            "rule the key parses, validates nothing, and is silently dropped."
+        )
 
     values: dict[str, Any] = {}
     for key, value in raw.items():
@@ -650,6 +684,18 @@ def _check_coherence(config: AppConfig) -> None:
             f"runtime is not installed ({exc}). Install it, or choose a "
             "backend whose runtime is present."
         ) from exc
+
+    if config.hotkey.double_tap_ms < 0:
+        # Found by sabotaging the latch's own tests: a negative window is
+        # arithmetically indistinguishable from `0` everywhere it is read
+        # (`held >= window` is true for any held), so it would silently mean
+        # "off" while reading as a setting the user chose. §5.3 gives `0` that
+        # meaning explicitly, and two spellings of one behaviour is how a user
+        # concludes the key does nothing.
+        raise ConfigError(
+            f"hotkey.double_tap_ms: {config.hotkey.double_tap_ms} is negative. "
+            "Use 0 to disable the double-tap latch (PRD §5.2, §5.3)."
+        )
 
     if config.postprocess.llm.enabled and not config.postprocess.llm.model_path:
         raise ConfigError(

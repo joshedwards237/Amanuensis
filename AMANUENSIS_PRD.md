@@ -348,6 +348,41 @@ resolutions were weighed and the ordering matters:
 - **Process the fragment normally** — rejected. Every hands-free session would be
   preceded by a stray word landing at the cursor.
 
+**How the fragment is actually discarded** (added 2026-09-03, at implementation).
+The section above says the fragment is dropped before the decoder and does not
+say *how*, and the two facts it sits between are in tension: `push_to_talk`
+hands the audio to the worker on the physical **release**, and the second press
+of a double-tap arrives after that release. By then the session is queued and
+the worker — blocked on `get()` — has it in microseconds. A cancel racing that
+is not a guarantee, it is a coin toss, and `abort_session` (choice-story #7)
+only discards a session that is *still recording*.
+
+Resolved by **discriminating a tap from a hold on the release**, which costs
+nothing because the two are already different gestures:
+
+- Released after `double_tap_ms` or more — a **hold**. Ends the session
+  immediately, exactly as today. Every ordinary dictation is a hold, so **G1 is
+  untouched**: no dictation anyone actually speaks is delayed by a millisecond.
+- Released inside `double_tap_ms` — a **tap**, which is not yet distinguishable
+  from the first half of a double-tap. The end is deferred until the window
+  expires. A second press inside it calls `abort_session` while the capture is
+  still open, which is the literal "before the decoder" the section asks for:
+  nothing was queued, nothing decoded, and §8 has nothing to persist.
+
+**The cost, stated rather than discovered later:** a deliberate push-to-talk
+utterance shorter than `double_tap_ms` has its *end* delayed by the remainder
+of the window. That is the price of the guarantee and it is paid only by
+utterances under 350 ms, which §5.7's guard cannot measure anyway — its
+numerator quantises to whole seconds below ~3 s. `double_tap_ms = 0` removes
+both the latch and this deferral together.
+
+Deferring the **start** remains rejected for the reason given above; this defers
+an end that no real dictation reaches.
+
+**The second press's own release is swallowed**, or the latch would end on the
+gesture that opened it: press-two enters the latch, and its release arriving
+80 ms later is a tap by every test above.
+
 **Ending a latched session is a single tap and nothing else.** A hold during
 latch is ignored rather than treated as the start of a new push-to-talk: the same
 physical gesture would mean "end the latch" to the code and "begin dictating" to
@@ -3333,6 +3368,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-03 | **The double-tap latch's "discard before the decoder" was a requirement with no mechanism, and the mechanism is a tap/hold split on the release** (§5.2, §5.3, §9 Phase 4 addition 5). The 2026-08-09 specification chose *capture then discard on latch* over deferring the start, and rejected processing the fragment — but `push_to_talk` queues the audio on the physical **release**, and the second press arrives after it. The worker is blocked on `get()`, so it holds the session within microseconds; `abort_session` discards only a session still recording. The stated guarantee was therefore unreachable by any cancel, and would have shipped as a race nobody had raced. **Resolved without touching G1**: a release after `double_tap_ms` is a hold and ends the session immediately, which is every dictation a person actually speaks; a release inside the window is a tap and its *end* is deferred until the window closes, so a second press finds the capture still open and `abort_session` is literal rather than hopeful. The cost is named in §5.2 rather than found later — a deliberate utterance under 350 ms has its end delayed by the remainder of the window, which is below the floor §5.7's guard can measure at all. The second press's own release is swallowed, or the latch would end on the gesture that opened it. |
 | 2026-09-03 | **Four commits of Phase 3 work were never on `main`, and one of them was a specification the assistant then declared had never existed.** `phase-3-postprocessing` was squash-merged as PR #9 on 2026-08-09 and had four more commits pushed to it on **2026-08-18**, nine days after its pull request closed: the **double-tap latch** specification (§5.2, §5.3, §9), the `initial_prompt` disabling and its length-not-content mechanism, §5.7's structural blindness to an interior drop, the `store_audio` gate clause that could not fail, the 492→458 correction, a **real audio defect** (`scripts/verify_guard.py`, `scripts/measure_long_audio.py` and `tests/conftest.py` divide by 32768 where every writer multiplies by 32767), and a sentinel record with twelve dispositions. A squash merge copies content rather than history, so nothing downstream of the merge point crossed and no tooling objected. The operator asked for the latch as an existing feature; a grep of the working tree found nothing and the assistant wrote **"There is no double-tap gesture, and there never was"** into §5.2 — a false statement, in the governing document, for about an hour. It is retracted in place rather than deleted, and the latch section is restored verbatim from `a34dfc6`. **A branch whose PR has merged is not a branch that is finished**, and this repository has five of them: `docs-close-2b-followup` (2 unmerged), `landing-page` (6), `phase-2b-hotkey` (9), `phase-3-postprocessing` (4), `site-redesign` (2). The Phase 3 close recorded that `git branch -d` refuses them all and treated that refusal as squash-merge bookkeeping. It was also a signal, and nobody read it as one. |
 | 2026-09-03 | **Ten contaminated rows removed from `history.db`, and audio outlives its row** (§5.5, operator authorisation). The 2026-09-02 22:31–22:33 batch was recorded while a test suite ran on the same machine: three of ten takes at 7.4×, 8.9× and 19.6× their idle re-decode cost. They were **in the product's own measurement record**, and the site's eligibility rule provably cannot exclude them — it drops rows sharing a `started_at` second, which catches parallel writes and not external load. The `<= 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Deleted after a `sqlite3 .backup` and with the audio moved to quarantine rather than unlinked, because the DB backup would not have recovered it. **Found in the doing: §5.5's retention sweep cannot reach orphaned audio.** It expires audio via the rows it belongs to, so a wav whose row is gone is never swept — ten orphans survived the delete and were only found by differencing the audio directory against the row ids. `manu history --purge` covers audio because it purges both; nothing covers a row removed any other way. Unfixed, and named here rather than left for the next person to find with a full disk. |
 | 2026-09-02 | **`[engine] backend` was mislabelling `history.db`, and the registry had been dead since Phase 0** (§6.4, §7.2, Phase 4 slice S6). `resolve_engine` raised `NotImplementedError` for **every** backend including `faster_whisper`, which ships — the daemon worked because `cli.py` imported the class by name and never asked. Four phases of dead dispatch behind a §6.4 entry describing the module as "backend string → class, per config". **The cost was not inertness.** `backend` was read in exactly one place, to build the `engine` label on a history row, so `backend = "moonshine"` was accepted, the daemon ran faster-whisper anyway, and the row was recorded as `moonshine:tiny.en`. A key that does nothing is inert; a key that mislabels the measurement record makes every figure derived from those rows a claim about the wrong engine — and this project derives G1 and edit rate from exactly those rows. `_check_coherence` now **constructs** the engine rather than resolving it, because resolving alone left a second route to the same lie: `backend = "moonshine"` with `model = "tiny.en"` passed. Both routes are refused at config load, and both are pinned by tests that fail when the check is reverted. **`engines/moonshine.py` exists at last** — §6.4 has listed it since Phase 0. It absorbs three contract differences rather than papering over them: no prompt so `biased=False` is honoured by already being true, `boost` accepted and dropped, and `decoded_seconds` **`None` rather than 0.0**, because §5.7 routes a `None` to its fallback and would read a zero as "the decoder stopped immediately" and refuse every transcript. **Parakeet is dropped and recorded as a gap**: NVIDIA NeMo has no CoreML or Metal path on macOS. ADR 0001 named it; nothing has ever benchmarked it. |

@@ -886,9 +886,20 @@ def _daemon(config: AppConfig) -> int:
         # tray, never through this return.
         controller.end_session()
 
+    def _on_cancel() -> None:
+        # §5.2's latch, and the reason it can promise "before the decoder".
+        # The first tap of a double-tap is a complete push-to-talk dictation,
+        # and this arrives while its capture is **still open** — so
+        # `abort_session` throws the audio away rather than queueing it, and
+        # §8 has nothing to persist because nothing was ever transcribed
+        # (choice-story #7). A `_on_release` here instead would hand the
+        # fragment to a worker that is blocked on `get()` and would have it in
+        # microseconds.
+        controller.abort_session()
+
     try:
         controller.start()
-        listener.start(_start_session, _on_release)
+        listener.start(_start_session, _on_release, _on_cancel)
     except (ModelNotAvailableError, DeviceNotFoundError, HotkeyPermissionError) as exc:
         controller.shutdown()
         print(f"manu daemon: {exc}", file=sys.stderr)
@@ -957,7 +968,7 @@ def _daemon(config: AppConfig) -> int:
                 )
             )
             old.stop()
-            replacement.start(_start_session, _on_release)
+            replacement.start(_start_session, _on_release, _on_cancel)
         except Exception as exc:
             tray.set_error(f"could not switch to {what}: {exc}")
             # The old tap is already stopped in the failure window between
@@ -965,7 +976,7 @@ def _daemon(config: AppConfig) -> int:
             # thing that leaves a usable daemon.
             try:
                 if not old.is_running:
-                    old.start(_start_session, _on_release)
+                    old.start(_start_session, _on_release, _on_cancel)
             except Exception:
                 tray.set_error(
                     f"the hotkey is not listening after failing to switch to "
