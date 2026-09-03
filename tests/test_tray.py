@@ -457,7 +457,7 @@ def test_choosing_a_binding_hands_the_name_to_the_daemon() -> None:
     tray.set_hotkey_options(("right_option", "fn"), "right_option")
 
     row = next(i for i in tray.menu_items() if i.title.startswith("Hotkey:"))
-    fn_row = next(s for s in row.submenu if s.title == "Fn")
+    fn_row = next(s for s in row.submenu if s.title.startswith("Fn"))
     tray.activate(fn_row.action)
     assert chosen == ["fn"]
 
@@ -499,7 +499,33 @@ def test_the_submenu_rows_are_wired_to_appkit(
         r for r in fake.bar.items[0].menu.items if r.title.startswith("Hotkey:")
     )
     assert parent.submenu is not None, "the hotkey row has no submenu"
-    fn_row = next(r for r in parent.submenu.items if r.title == "Fn")
+    fn_row = next(r for r in parent.submenu.items if r.title.startswith("Fn"))
     assert fn_row.target is not None, "a submenu row with no target does nothing"
     getattr(fn_row.target, fn_row.action.replace(":", "_"))(fn_row)
     assert chosen == ["fn"]
+
+
+def test_bindings_used_in_shortcuts_say_so() -> None:
+    """The menu offered nine bindings as equals and the operator picked Right
+    Command to dodge a double-tap conflict — which fires on every ⌘ shortcut.
+    A choice offered without its cost is how someone picks worse than default.
+    """
+    from amanuensis.hotkey.macos import COLLIDING_BINDINGS, available_bindings
+
+    tray = TrayApp()
+    tray.set_hotkey_options(available_bindings(), "right_option")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Hotkey:"))
+
+    for sub, name in zip(row.submenu, available_bindings(), strict=True):
+        if name in COLLIDING_BINDINGS:
+            assert "shortcuts" in sub.title, f"{name} carries no warning"
+        else:
+            assert "shortcuts" not in sub.title, f"{name} warns without cause"
+
+
+def test_the_default_binding_is_not_flagged() -> None:
+    """`right_option` is the default precisely because it is not used inside
+    ordinary shortcuts. If it ever gets flagged, the list is wrong."""
+    from amanuensis.hotkey.macos import COLLIDING_BINDINGS
+
+    assert "right_option" not in COLLIDING_BINDINGS

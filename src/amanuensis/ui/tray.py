@@ -104,6 +104,20 @@ def _pretty_binding(name: str) -> str:
     return name.replace("_", " ").title() if name else "not set"
 
 
+def _binding_label(name: str) -> str:
+    """A binding's menu title, with its cost attached.
+
+    A modifier used inside ordinary shortcuts makes a dictation hotkey fire on
+    every shortcut that uses it — bind Right Command and ⌘C starts and ends a
+    dictation. Offering nine bindings as equals is how a user picks a worse one
+    than the default, which happened.
+    """
+    from amanuensis.hotkey.macos import COLLIDING_BINDINGS
+
+    pretty = _pretty_binding(name)
+    return f"{pretty}  ⚠ used in shortcuts" if name in COLLIDING_BINDINGS else pretty
+
+
 def _one_line(text: str) -> str:
     """Flatten and bound arbitrary text to something a menu can render.
 
@@ -239,7 +253,7 @@ class TrayApp:
                     enabled=True,
                     submenu=tuple(
                         MenuItem(
-                            _pretty_binding(name),
+                            _binding_label(name),
                             action=f"{HOTKEY_ACTION_PREFIX}{name}",
                             enabled=True,
                             checked=name == self._hotkey_current,

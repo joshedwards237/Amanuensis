@@ -326,12 +326,12 @@ def test_ordinary_speech_uses_most_of_the_range() -> None:
     here are his, so a future retune that flatters the curve while losing his
     voice fails this.
     """
-    median_speech = max(bar_heights([0.0152] * BAR_COUNT))
-    assert median_speech / MAX_BAR_HEIGHT >= 0.45, (
-        f"median speech reaches only {median_speech / MAX_BAR_HEIGHT:.0%}"
-    )
-    loud_speech = max(bar_heights([0.0311] * BAR_COUNT))  # his p90
-    assert loud_speech / MAX_BAR_HEIGHT >= 0.8
+    # Both bounds, because this has been wrong in both directions: 12% read as
+    # dead, 62% read as aggressive. The band is the settled middle.
+    median_speech = max(bar_heights([0.0152] * BAR_COUNT)) / MAX_BAR_HEIGHT
+    assert 0.40 <= median_speech <= 0.60, f"median speech at {median_speech:.0%}"
+    loud_speech = max(bar_heights([0.0311] * BAR_COUNT)) / MAX_BAR_HEIGHT
+    assert 0.70 <= loud_speech <= 0.92, f"p90 speech at {loud_speech:.0%}"
 
 
 def test_quiet_and_loud_are_still_distinguishable() -> None:

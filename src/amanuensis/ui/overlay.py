@@ -87,7 +87,15 @@ MAX_BAR_HEIGHT: Final = 16.0
 #: data instead: full scale is his **p95**, so median speech lands near the
 #: middle, the loud end of normal speech reaches the top, and roughly 5% of
 #: blocks clip — which is what headroom is for.
-_FULL_SCALE: Final = 0.0374
+#:
+#: **Settled at 0.046 on 2026-09-03, deliberately between two measured
+#: extremes.** 0.35 put his median speech at 12% of the pill and read as dead;
+#: his p95 of 0.0374 put it at 62% and read as "a little aggressive". 0.046
+#: lands median speech at 50%, p90 at 80% and p95 at 89% — the loud end of
+#: normal speech near the top without ordinary talking pinned there. Recorded
+#: as a third point on the same measurement rather than a taste adjustment,
+#: because the next person to touch it should see all three.
+_FULL_SCALE: Final = 0.046
 #: Below this, no deflection at all. Without a gate the sqrt curve lifts his
 #: measured silence floor of 0.0028 to a quarter of the pill, so a quiet room
 #: would shimmer as though the microphone were hearing something. Set just

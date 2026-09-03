@@ -129,6 +129,29 @@ class UnsupportedBindingError(Exception):
     """`[hotkey] binding` or `mode` names something this listener cannot do."""
 
 
+#: Modifiers macOS and applications use inside ordinary keyboard shortcuts.
+#: A dictation hotkey on one of these fires on **every** shortcut that uses it:
+#: bind Right Command and ⌘C, ⌘V and ⌘Tab each start and end a dictation.
+#:
+#: Added 2026-09-03 because the tray offered all nine bindings as equals, the
+#: operator reasonably picked Right Command to avoid a double-tap conflict, and
+#: got a stream of fragment dictations instead. Offering a choice without its
+#: cost is how a user makes a worse one than the default.
+COLLIDING_BINDINGS: Final[frozenset[str]] = frozenset(
+    {
+        "left_command",
+        "right_command",
+        "left_control",
+        "left_shift",
+        "left_option",
+        # `fn` is not a shortcut modifier in the same way, but macOS binds
+        # double-tap Fn itself — to dictation or the emoji picker depending on
+        # the system settings — which is the same class of collision.
+        "fn",
+    }
+)
+
+
 def available_bindings() -> tuple[str, ...]:
     """Binding names this listener recognises, in declaration order.
 
