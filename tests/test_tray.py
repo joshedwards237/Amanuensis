@@ -203,6 +203,10 @@ class _FakeMenuItem:
     def __init__(self) -> None:
         self.title = ""
         self.enabled: bool | None = None
+        #: What AppKit needs in order to reach a handler at all.
+        self.target: Any = None
+        self.action: str = ""
+        self.represented: Any = None
 
     @classmethod
     def alloc(cls) -> _FakeMenuItem:
@@ -216,6 +220,20 @@ class _FakeMenuItem:
 
     def setEnabled_(self, value: bool) -> None:
         self.enabled = value
+
+    def setTarget_(self, value: Any) -> None:
+        self.target = value
+
+    def setAction_(self, value: str) -> None:
+        self.action = str(value)
+
+    def setRepresentedObject_(self, value: Any) -> None:
+        self.represented = value
+
+    def representedObject(self) -> Any:
+        """The getter. `NSMenuItem` has both and the fake had only the
+        setter — the NSRect shape again: invented, not checked."""
+        return self.represented
 
 
 class _FakeMenu:
@@ -351,3 +369,58 @@ def test_a_whitespace_only_error_is_not_an_error() -> None:
     before = len(tray.menu_items())
     tray.set_error("   \t\n  ")
     assert len(tray.menu_items()) == before
+
+
+def test_the_quit_item_is_reachable_from_appkit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A menu item with no target and no action renders and does nothing.
+
+    `test_quit_is_a_callback_not_a_decision` above called `tray.activate()`
+    directly and passed while the rendered item was inert — the same shape as
+    the NSRect fake: a test confirming what the author believed rather than
+    what the framework requires. This asserts the wiring AppKit actually needs.
+
+    It matters beyond tidiness. Once the daemon is launched from a desktop
+    shortcut there is no terminal to Ctrl-C, so an inert quit item is §5.4's
+    recorded failure — "the daemon could not be stopped" — with the escape
+    hatch removed again.
+    """
+    quit_calls: list[bool] = []
+    fake = _FakeAppKit()
+    fake.NSMenu = _FakeMenu  # type: ignore[attr-defined]
+    fake.NSMenuItem = _FakeMenuItem  # type: ignore[attr-defined]
+    monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
+    foundation = _FakeFoundation(_FakeMainQueue())
+    monkeypatch.setattr(indicator_module, "_foundation", lambda: foundation)
+
+    tray = TrayApp(on_quit=lambda: quit_calls.append(True))
+    tray.show()
+
+    rendered = fake.bar.items[0].menu
+    row = next(r for r in rendered.items if r.title == "Quit Amanuensis")
+    assert row.target is not None, "no target — clicking the quit item does nothing"
+    assert row.action, "the quit item has no action"
+
+    # Fire it the way AppKit would: the selector, on the target, with the item.
+    getattr(row.target, row.action.replace(":", "_"))(row)
+    assert quit_calls == [True], "the action did not reach on_quit"
+
+
+def test_informational_rows_carry_no_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row that does nothing must also look like it does nothing."""
+    fake = _FakeAppKit()
+    fake.NSMenu = _FakeMenu  # type: ignore[attr-defined]
+    fake.NSMenuItem = _FakeMenuItem  # type: ignore[attr-defined]
+    monkeypatch.setattr(indicator_module, "_appkit", lambda: fake)
+    foundation = _FakeFoundation(_FakeMainQueue())
+    monkeypatch.setattr(indicator_module, "_foundation", lambda: foundation)
+
+    tray = TrayApp()
+    tray.set_error("something failed")
+    tray.show()
+
+    rendered = fake.bar.items[0].menu
+    for row in rendered.items:
+        if row.title != "Quit Amanuensis":
+            assert row.target is None, f"{row.title!r} is wired to an action"

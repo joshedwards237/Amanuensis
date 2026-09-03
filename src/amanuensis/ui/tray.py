@@ -60,6 +60,34 @@ class MenuItem:
     enabled: bool = False
 
 
+#: Built on first use, never at import. Subclassing `NSObject` requires
+#: Foundation, and this module's whole import discipline is that `manu --help`
+#: does not load the Objective-C runtime.
+_TARGET_CLASS: Any | None = None
+
+
+def _menu_target_class() -> Any:
+    """An `NSObject` subclass exposing one selector for menu items to call.
+
+    Defined in a function and cached, because defining it twice would register
+    two Objective-C classes with the same name and PyObjC raises on that.
+    """
+    global _TARGET_CLASS
+    if _TARGET_CLASS is None:
+        from Foundation import NSObject
+
+        class _AmanuensisMenuTarget(NSObject):  # type: ignore[misc]
+            def amanuensisMenuAction_(self, sender: Any) -> None:
+                handler = getattr(self, "handler", None)
+                if handler is None:  # pragma: no cover — target outlived tray
+                    return
+                verb = sender.representedObject()
+                handler(None if verb is None else str(verb))
+
+        _TARGET_CLASS = _AmanuensisMenuTarget
+    return _TARGET_CLASS
+
+
 def _one_line(text: str) -> str:
     """Flatten and bound arbitrary text to something a menu can render.
 
@@ -99,6 +127,8 @@ class TrayApp:
         #: the worker and the event tap — the same shape as the indicator's.
         self._lock = threading.Lock()
         self._menu: Any | None = None
+        #: The Objective-C action target, built lazily and kept alive here.
+        self._target: Any | None = None
 
     # -- state -------------------------------------------------------------
 
@@ -221,15 +251,48 @@ class TrayApp:
         )
 
     def _build_menu(self) -> Any:
+        """Data to `NSMenuItem`s, **including the target and action**.
+
+        Setting only title and enabled renders a menu whose items do nothing,
+        which is what this did until 2026-09-03. It passed a test that called
+        `activate()` directly — the method AppKit was never wired to reach —
+        so the test confirmed the author's model of the framework rather than
+        the framework.
+
+        It is not a cosmetic gap. Once the daemon is launched from a desktop
+        shortcut there is no terminal to Ctrl-C, and an inert quit item is
+        §5.4's recorded failure ("the daemon could not be stopped") with the
+        escape hatch removed a second time.
+        """
         from amanuensis.ui.indicator import _appkit
 
         appkit = _appkit()
+        target = self._action_target()
         menu = appkit.NSMenu.alloc().init()
         for item in self.menu_items():
             row = appkit.NSMenuItem.alloc().init()
             row.setTitle_(item.title)
             row.setEnabled_(item.enabled)
+            if item.action is not None:
+                # The verb travels on the item, so one target serves every row
+                # and `activate` stays the single place that decides what a
+                # verb means.
+                row.setRepresentedObject_(item.action)
+                row.setTarget_(target)
+                row.setAction_("amanuensisMenuAction:")
             menu.addItem_(row)
         with self._lock:
             self._menu = menu
         return menu
+
+    def _action_target(self) -> Any:
+        """The Objective-C object AppKit sends the action to.
+
+        Held on `self` because PyObjC does not retain it for us: a target that
+        is garbage collected leaves a menu item pointing at freed memory, which
+        is a crash rather than a dead click.
+        """
+        if self._target is None:
+            self._target = _menu_target_class().alloc().init()
+            self._target.handler = self.activate
+        return self._target
