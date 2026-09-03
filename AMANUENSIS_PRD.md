@@ -3321,15 +3321,19 @@ same day.
 |---|---|---|
 | Slicing — `amanuensis-prd` | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
 | Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 4 accepted, 1 merged |
+| Slicing — `phase-4-tray-modes` | `docs/superpowers/slices/phase-4-tray-modes.md` | 8 slices — **all accepted** |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Objections — `collapse-guard` | `docs/superpowers/objections/collapse-guard.md` | 8 objections — 7 accepted, 1 deferred |
 | Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — **all accepted** |
+| Objections — `phase-3-gate-recommendations-code` | `docs/superpowers/objections/phase-3-gate-recommendations-code.md` | 12 objections — 10 accepted, 1 accepted-and-closed, 1 accepted-not-implemented |
 | Objections — `phase-3-postprocessing-code` | `docs/superpowers/objections/phase-3-postprocessing-code.md` | 12 objections — **all accepted** |
 | Objections — `phase-3-postprocessing` | `docs/superpowers/objections/phase-3-postprocessing.md` | 12 objections — **all accepted** |
+| Objections — `phase-4-plan` | `docs/superpowers/objections/phase-4-plan.md` | 12 objections — 10 accepted, 2 deferred |
 | Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — **all accepted** |
 | Choice stories — `phase-3-postprocessing` | `docs/superpowers/stories/phase-3-postprocessing.md` | 10 stories — 9 accepted, 1 revisit |
+| Choice stories — `phase-4-plan` | `docs/superpowers/stories/phase-4-plan.md` | 12 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 
