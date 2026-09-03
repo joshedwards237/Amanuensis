@@ -821,32 +821,33 @@ def _daemon(config: AppConfig) -> int:
 
     observers.append(_level_for_overlay)
 
-    if config.hotkey.mode == "vad_auto":
-        # §5.2's third mode, and the half the listener structurally cannot do:
-        # it starts the session on the key press and nothing in the hotkey
-        # layer can see silence. The watcher runs on the PortAudio callback
-        # thread, so `end_session` is handed to the worker rather than done
-        # there — §6.3's rule that nothing blocks the capture thread.
-        watcher = SilenceWatcher(config.vad_auto, config.audio.sample_rate)
+    # §5.2's third mode. The watcher is built and fed **always**, and consults
+    # the live mode before acting — rather than being wired only when the
+    # daemon happens to start in `vad_auto`. That is what makes the mode
+    # switchable from the tray: conditional wiring at start-up would mean
+    # choosing `vad_auto` from a menu produced a mode with nothing ending it.
+    hotkey_state = {"mode": config.hotkey.mode, "binding": config.hotkey.binding}
+    watcher = SilenceWatcher(config.vad_auto, config.audio.sample_rate)
 
-        def _watch(block: Any) -> None:
-            if watcher.feed(block):
-                threading.Thread(
-                    target=controller.end_session,
-                    name="amanuensis-vad-auto-end",
-                    daemon=True,
-                ).start()
+    def _watch(block: Any) -> None:
+        if hotkey_state["mode"] != "vad_auto":
+            return
+        if watcher.feed(block):
+            # Handed to a thread rather than done here: this is the PortAudio
+            # callback and §6.3 forbids blocking it.
+            threading.Thread(
+                target=controller.end_session,
+                name="amanuensis-vad-auto-end",
+                daemon=True,
+            ).start()
 
-        observers.append(_watch)
+    observers.append(_watch)
 
-        def _start_session() -> None:
-            # Silence has to be re-earned every session, or the second
-            # dictation inherits the first one's trailing quiet and ends
-            # immediately.
-            watcher.reset()
-            controller.start_session()
-    else:
-        _start_session = controller.start_session
+    def _start_session() -> None:
+        # Silence has to be re-earned every session, or the second dictation
+        # inherits the first one's trailing quiet and ends immediately.
+        watcher.reset()
+        controller.start_session()
 
     def _fan_out(block: Any) -> None:
         for observer in observers:
@@ -899,25 +900,42 @@ def _daemon(config: AppConfig) -> int:
     # application's shortcut). The tray renders a list and hands back a name;
     # everything that changing a binding actually involves lives here, which is
     # §6.2's boundary.
-    from amanuensis.config import default_config_path, write_hotkey_binding
-    from amanuensis.hotkey.macos import available_bindings
+    from amanuensis.config import (
+        default_config_path,
+        write_hotkey_binding,
+        write_hotkey_mode,
+    )
+    from amanuensis.hotkey.macos import available_bindings, available_modes
 
     listener_box = {"current": listener}
 
-    def _change_hotkey(name: str) -> None:
+    def _rebuild_listener(what: str, **changes: str) -> bool:
+        """Swap the event tap for one built from `changes`. True on success.
+
+        Shared by the binding and mode pickers: the delicate part is the window
+        between stopping one tap and starting another, where a raise leaves a
+        daemon with no hotkey at all, and two copies of that would drift.
+        """
         old = listener_box["current"]
         try:
-            # Persist first. A binding that works this session and is gone
+            # Persist first. A setting that works this session and is gone
             # after a restart is worse than one that never changed, because
             # the user stops trusting the menu.
-            write_hotkey_binding(default_config_path(), name)
+            if "binding" in changes:
+                write_hotkey_binding(default_config_path(), changes["binding"])
+            if "mode" in changes:
+                write_hotkey_mode(default_config_path(), changes["mode"])
             replacement = create_hotkey_listener(
-                dataclasses.replace(config.hotkey, binding=name)
+                dataclasses.replace(
+                    config.hotkey,
+                    binding=changes.get("binding", hotkey_state["binding"]),
+                    mode=changes.get("mode", hotkey_state["mode"]),
+                )
             )
             old.stop()
             replacement.start(_start_session, _on_release)
         except Exception as exc:
-            tray.set_error(f"could not switch to {name}: {exc}")
+            tray.set_error(f"could not switch to {what}: {exc}")
             # The old tap is already stopped in the failure window between
             # `old.stop()` and a raise from `start`; restarting it is the only
             # thing that leaves a usable daemon.
@@ -927,16 +945,29 @@ def _daemon(config: AppConfig) -> int:
             except Exception:
                 tray.set_error(
                     f"the hotkey is not listening after failing to switch to "
-                    f"{name}. Restart the daemon."
+                    f"{what}. Restart the daemon."
                 )
-            return
+            return False
         listener_box["current"] = replacement
+        hotkey_state.update(changes)
         tray.set_error(None)
-        tray.set_hotkey_options(available_bindings(), name)
-        print(f"hotkey is now {name} (written to {default_config_path()})")
+        print(f"{what} (written to {default_config_path()})")
+        return True
+
+    def _change_hotkey(name: str) -> None:
+        if _rebuild_listener(f"hotkey is now {name}", binding=name):
+            tray.set_hotkey_options(available_bindings(), name)
+
+    def _change_mode(name: str) -> None:
+        if _rebuild_listener(f"mode is now {name}", mode=name):
+            # A mode switch mid-session would leave a capture nothing ends.
+            watcher.reset()
+            tray.set_mode_options(available_modes(), name)
 
     tray.set_on_hotkey(_change_hotkey)
+    tray.set_on_mode(_change_mode)
     tray.set_hotkey_options(available_bindings(), config.hotkey.binding)
+    tray.set_mode_options(available_modes(), config.hotkey.mode)
     tray.set_on_quit(tray.stop)
     signal.signal(signal.SIGINT, lambda *_: tray.stop())
     signal.signal(signal.SIGTERM, lambda *_: tray.stop())

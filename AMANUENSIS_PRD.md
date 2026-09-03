@@ -290,6 +290,24 @@ Config-selectable, one active at a time:
 - **`vad_auto`** — press to start, silence detection ends the session.
   Requires VAD (§7.4). Ship behind a flag; it is the mode most likely to misfire.
 
+**All three are selectable from the tray** (added 2026-09-03), alongside
+`[hotkey] binding`. §5.3 already made both config-selectable; what the menu adds
+is that the difference between hold-to-talk and press-to-start is something a
+user tries rather than decides, and editing a TOML file to try it is a barrier
+that keeps two of these three modes unused.
+
+The menu shows each mode's behaviour rather than its config spelling —
+`vad_auto` in a menu is a puzzle, not a choice — and carries this section's own
+warning on it. Changing either setting persists to `config.toml` and rebinds the
+event tap live; there is no restart.
+
+**There is no double-tap gesture, and there never was** (recorded 2026-09-03
+because it was asked for as an existing feature). The three modes above are the
+whole of §5.2. `"double_tap"` appears in this repository only as the canonical
+*invalid* mode string in `tests/test_config.py` and `tests/test_cli.py`, which
+is very likely where the memory came from. Adding one would be a fourth mode
+and an amendment here, not a repair.
+
 ### 5.3 Configuration
 
 Single TOML file at the platform config directory, resolved through `platformdirs`

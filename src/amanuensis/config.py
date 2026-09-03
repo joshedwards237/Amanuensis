@@ -68,6 +68,7 @@ __all__ = [
     "load_config",
     "resolve_cpu_threads",
     "write_hotkey_binding",
+    "write_hotkey_mode",
 ]
 
 _APP_NAME: Final = "amanuensis"
@@ -744,6 +745,18 @@ def load_config(path: Path | None = None) -> AppConfig:
     return config
 
 
+def write_hotkey_mode(path: Path, mode: str) -> None:
+    """Persist `[hotkey] mode`. See `write_hotkey_binding` for the mechanics.
+
+    Offered from the tray beside the binding, because the difference between
+    hold-to-talk and press-to-start is the kind of thing a user tries rather
+    than decides, and §5.2 says all three modes are config-selectable.
+    """
+    from amanuensis.hotkey.macos import available_modes
+
+    _write_hotkey_key(path, "mode", mode, available_modes(), "hotkey.mode")
+
+
 def write_hotkey_binding(path: Path, binding: str) -> None:
     """Persist `[hotkey] binding` without disturbing anything else.
 
@@ -768,16 +781,32 @@ def write_hotkey_binding(path: Path, binding: str) -> None:
     """
     from amanuensis.hotkey.macos import available_bindings
 
-    known = available_bindings()
-    if binding not in known:
+    _write_hotkey_key(
+        path, "binding", binding, available_bindings(), "hotkey.binding"
+    )
+
+
+def _write_hotkey_key(
+    path: Path,
+    key: str,
+    value: str,
+    known: tuple[str, ...],
+    label: str,
+) -> None:
+    """One key under `[hotkey]`, rewritten in place.
+
+    Shared by the two public writers rather than duplicated: the delicate part
+    is the table scoping, and two copies of it would drift.
+    """
+    if value not in known:
         raise ConfigError(
-            f"hotkey.binding: {binding!r} is not a binding this listener "
-            f"recognises. Known: {', '.join(known)}"
+            f"{label}: {value!r} is not one this listener recognises. "
+            f"Known: {', '.join(known)}"
         )
 
     text = path.read_text() if path.is_file() else ""
     lines = text.splitlines(keepends=True)
-    new_line = f'binding = "{binding}"'
+    new_line = f'{key} = "{value}"'
 
     header = None
     for index, line in enumerate(lines):
@@ -789,9 +818,9 @@ def write_hotkey_binding(path: Path, binding: str) -> None:
         suffix = "" if not text or text.endswith("\n") else "\n"
         text = f"{text}{suffix}\n[hotkey]\n{new_line}\n"
     else:
-        # Only within this table: `binding` is a plausible key name elsewhere,
-        # and a file-wide match would rewrite another table's value and leave
-        # the hotkey exactly as it was.
+        # Only within this table: these are plausible key names elsewhere, and
+        # a file-wide match would rewrite another table's value and leave the
+        # hotkey exactly as it was.
         end = len(lines)
         for index in range(header + 1, len(lines)):
             if lines[index].lstrip().startswith("["):
@@ -800,7 +829,7 @@ def write_hotkey_binding(path: Path, binding: str) -> None:
 
         replaced = False
         for index in range(header + 1, end):
-            match = re.match(r"(\s*)binding(\s*)=\s*\S+(.*)$", lines[index])
+            match = re.match(rf"(\s*){key}(\s*)=\s*\S+(.*)$", lines[index])
             if match:
                 trailing = match.group(3)
                 comment = trailing[trailing.index("#") :] if "#" in trailing else ""

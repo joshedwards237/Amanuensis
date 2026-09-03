@@ -42,7 +42,12 @@ from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.models.results import ClipboardExposure
 from amanuensis.ui.indicator import _TOOLTIPS, GLYPHS, RecordingIndicator
 
-__all__ = ["HOTKEY_ACTION_PREFIX", "MenuItem", "TrayApp"]
+__all__ = [
+    "HOTKEY_ACTION_PREFIX",
+    "MODE_ACTION_PREFIX",
+    "MenuItem",
+    "TrayApp",
+]
 
 #: A menu row is one line. Errors in this project are multi-line by habit — the
 #: clipboard warning is five — and a traceback pasted into a menu makes an
@@ -104,6 +109,32 @@ def _pretty_binding(name: str) -> str:
     return name.replace("_", " ").title() if name else "not set"
 
 
+#: Prefix distinguishing a capture-mode row. Same scheme as the hotkey rows.
+MODE_ACTION_PREFIX: Final = "mode:"
+
+#: §5.2's one-line description of each mode. The names are config spellings and
+#: mean nothing on their own — "vad_auto" in a menu is a puzzle, not a choice.
+_MODE_LABELS: Final[dict[str, str]] = {
+    "push_to_talk": "Hold to talk",
+    "toggle": "Press to start, press to stop",
+    "vad_auto": "Press to start, silence ends it",
+}
+
+
+def _pretty_mode(name: str) -> str:
+    return _MODE_LABELS.get(name, name.replace("_", " ").title() or "not set")
+
+
+def _mode_label(name: str) -> str:
+    """A mode's menu title, with §5.2's warning attached where it applies."""
+    label = _pretty_mode(name)
+    if name == "vad_auto":
+        # §5.2: "the mode most likely to misfire". A user picking it from a
+        # menu deserves the same sentence the spec gives an implementer.
+        return f"{label}  ⚠ may cut you off"
+    return label
+
+
 def _binding_label(name: str) -> str:
     """A binding's menu title, with its cost attached.
 
@@ -148,12 +179,16 @@ class TrayApp:
         *,
         on_quit: Callable[[], None] | None = None,
         on_hotkey: Callable[[str], None] | None = None,
+        on_mode: Callable[[str], None] | None = None,
     ) -> None:
         self._indicator = indicator if indicator is not None else RecordingIndicator()
         self._on_quit = on_quit
         self._on_hotkey = on_hotkey
         self._hotkeys: tuple[str, ...] = ()
         self._hotkey_current = ""
+        self._on_mode = on_mode
+        self._modes: tuple[str, ...] = ()
+        self._mode_current = ""
         self._state = DictationState.IDLE
         self._error: str | None = None
         self._exposure: ClipboardExposure | None = None
@@ -214,6 +249,20 @@ class TrayApp:
         self._hotkey_current = current
         self._refresh()
 
+    def set_mode_options(self, available: Sequence[str], current: str) -> None:
+        """Offer §5.2's capture modes and mark the live one.
+
+        Same shape as the hotkey picker and for the same reason: hold-to-talk
+        versus press-to-start is something a user tries rather than decides,
+        and §5.2 already calls all three config-selectable.
+        """
+        self._modes = tuple(available)
+        self._mode_current = current
+        self._refresh()
+
+    def set_on_mode(self, on_mode: Callable[[str], None]) -> None:
+        self._on_mode = on_mode
+
     def set_clipboard_exposure(self, exposure: ClipboardExposure | None) -> None:
         """§5.4 and §7.3 both assign this row to Phase 4.
 
@@ -263,6 +312,23 @@ class TrayApp:
                 )
             )
 
+        if self._modes:
+            items.append(
+                MenuItem(
+                    f"Mode: {_pretty_mode(self._mode_current)}",
+                    enabled=True,
+                    submenu=tuple(
+                        MenuItem(
+                            _mode_label(name),
+                            action=f"{MODE_ACTION_PREFIX}{name}",
+                            enabled=True,
+                            checked=name == self._mode_current,
+                        )
+                        for name in self._modes
+                    ),
+                )
+            )
+
         items.append(MenuItem("Quit Amanuensis", action="quit", enabled=True))
         return tuple(items)
 
@@ -289,6 +355,11 @@ class TrayApp:
         in this file rather than a reason to kill a daemon holding the mic."""
         if action == "quit" and self._on_quit is not None:
             self._on_quit()
+            return
+        if action and action.startswith(MODE_ACTION_PREFIX):
+            name = action[len(MODE_ACTION_PREFIX) :]
+            if self._on_mode is not None and name in self._modes:
+                self._on_mode(name)
             return
         if action and action.startswith(HOTKEY_ACTION_PREFIX):
             name = action[len(HOTKEY_ACTION_PREFIX) :]

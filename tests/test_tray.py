@@ -529,3 +529,61 @@ def test_the_default_binding_is_not_flagged() -> None:
     from amanuensis.hotkey.macos import COLLIDING_BINDINGS
 
     assert "right_option" not in COLLIDING_BINDINGS
+
+
+def test_the_mode_submenu_describes_each_mode_rather_than_naming_it() -> None:
+    """`vad_auto` in a menu is a puzzle, not a choice. §5.2 already has a
+    one-line description of each mode and those are what a user needs."""
+    from amanuensis.hotkey.macos import available_modes
+
+    tray = TrayApp()
+    tray.set_mode_options(available_modes(), "push_to_talk")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Mode:"))
+
+    assert "Hold to talk" in row.title
+    titles = [s.title for s in row.submenu]
+    assert len(titles) == len(available_modes())
+    assert not any("_" in t for t in titles), f"config spellings leaked: {titles}"
+    assert sum(s.checked for s in row.submenu) == 1
+
+
+def test_vad_auto_carries_the_warning_the_spec_gives_implementers() -> None:
+    """§5.2 calls it "the mode most likely to misfire". A user picking it from
+    a menu deserves the same sentence."""
+    from amanuensis.hotkey.macos import available_modes
+
+    tray = TrayApp()
+    tray.set_mode_options(available_modes(), "push_to_talk")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Mode:"))
+    vad = next(s for s in row.submenu if "silence" in s.title)
+    assert "⚠" in vad.title
+
+
+def test_choosing_a_mode_hands_the_name_to_the_daemon() -> None:
+    chosen: list[str] = []
+    tray = TrayApp(on_mode=chosen.append)
+    tray.set_mode_options(("push_to_talk", "toggle"), "push_to_talk")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Mode:"))
+    toggle_row = next(s for s in row.submenu if "press to stop" in s.title)
+    tray.activate(toggle_row.action)
+    assert chosen == ["toggle"]
+
+
+def test_a_mode_action_does_not_fire_the_hotkey_handler() -> None:
+    """Both prefixes are checked in one `activate`. A `mode:` verb reaching
+    `on_hotkey` would rebind the key to a mode name."""
+    hotkeys: list[str] = []
+    modes: list[str] = []
+    tray = TrayApp(on_hotkey=hotkeys.append, on_mode=modes.append)
+    tray.set_hotkey_options(("right_option",), "right_option")
+    tray.set_mode_options(("push_to_talk", "toggle"), "push_to_talk")
+
+    tray.activate("mode:toggle")
+    assert modes == ["toggle"] and hotkeys == []
+
+    tray.activate("hotkey:right_option")
+    assert hotkeys == ["right_option"] and modes == ["toggle"]
+
+
+def test_no_mode_row_before_the_options_are_supplied() -> None:
+    assert not any(i.title.startswith("Mode:") for i in TrayApp().menu_items())

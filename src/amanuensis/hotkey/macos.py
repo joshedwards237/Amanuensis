@@ -152,6 +152,11 @@ COLLIDING_BINDINGS: Final[frozenset[str]] = frozenset(
 )
 
 
+def available_modes() -> tuple[str, ...]:
+    """Capture modes this listener implements (§5.2), default first."""
+    return ("push_to_talk", "toggle", "vad_auto")
+
+
 def available_bindings() -> tuple[str, ...]:
     """Binding names this listener recognises, in declaration order.
 
