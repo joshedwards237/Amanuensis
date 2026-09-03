@@ -281,6 +281,44 @@ def classify_edits(
     return EditResult(reference_words=len(right), edits=edits, classes=classes)
 
 
+#: `Vocabulary.apply` tags what it fired `replace:<key>`
+#: (`postprocess/vocabulary.py`); the rules pass tags its rules bare; and
+#: `HistorySession.to_row` joins the two with ", " into one column. The prefix
+#: is therefore the only thing in the record that distinguishes the dictionary
+#: from everything else in the chain.
+REPLACE_PREFIX = "replace:"
+
+
+def replace_entries_fired(rows: list[dict[str, Any]]) -> bool:
+    """Did the *dictionary* act — as opposed to the rules pass acting near it?
+
+    This was `any((row["fired_entries"] or "").strip() for row in rows)` until
+    2026-08-18, which is to say it was satisfied by `collapse_whitespace`.
+    That rule fires on every transcript faster-whisper has ever produced,
+    because the decoder prepends a leading space to all of them. Measured on
+    this machine's own `history.db`: `collapse_whitespace` fired on 10 of 10
+    recorded dictations and `replace:` fired on none, and the check whose
+    failure message reads "the dictionary was loaded and measured nothing"
+    reported nothing on all ten.
+
+    So the old predicate could not fail — not "had not failed yet". It was
+    true for any completed dictation whether `vocabulary.toml` held eight
+    entries or did not exist. This is the eighth check of that shape found in
+    this project, and the first one written expressly to be the guard against
+    a hollow instrument.
+
+    Split on "," and stripped rather than on ", " exactly: a `[replace]` key
+    containing a comma splits into fragments, and the fragment that opens the
+    entry still carries the prefix. The discriminator must not depend on the
+    user's vocabulary being unimaginative.
+    """
+    return any(
+        entry.strip().startswith(REPLACE_PREFIX)
+        for row in rows
+        for entry in (row.get("fired_entries") or "").split(",")
+    )
+
+
 def _self_check() -> list[Failure]:
     """The controls, and it exits non-zero when any of them catches nothing.
 
@@ -408,6 +446,33 @@ def _self_check() -> list[Failure]:
             )
         )
 
+    # The two halves of `replace_entries_fired`, because one half alone is
+    # passed by a constant: `return False` satisfies the rules-only case and
+    # `return True` satisfies the dictionary case. Only the pair pins it.
+    #
+    # This is the control the 2026-08-18 fix carried and the 2026-09-01
+    # re-implementation did not. The predicate was corrected inline, correctly,
+    # and left with nothing asserting it stays correct — which is how the
+    # original defect got in.
+    rules_only = [{"fired_entries": "collapse_whitespace, capitalise_sentences"}]
+    if replace_entries_fired(rules_only):
+        problems.append(
+            Failure(
+                "control",
+                "the rules pass alone was read as the dictionary firing — the "
+                "instrument check is hollow again",
+            )
+        )
+
+    with_dictionary = [{"fired_entries": "collapse_whitespace, replace:Cloud Code"}]
+    if not replace_entries_fired(with_dictionary):
+        problems.append(
+            Failure(
+                "control",
+                "a real replace: entry was not seen — the instrument check now "
+                "rejects good runs",
+            )
+        )
     return problems
 
 
@@ -513,24 +578,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    # `fired_entries` carries the whole chain, not just the dictionary: the
-    # rules pass writes `collapse_whitespace` and `capitalise_sentences` into
-    # the same column. Testing the column for *any* content therefore answered
-    # "did post-processing do something" while claiming to answer "did the
-    # dictionary do something" — and `collapse_whitespace` fires on nearly
-    # every utterance, so the check was satisfied on a signal the dictionary
-    # never produced. `VocabularyPostProcessor` labels its own with a
-    # `replace:` prefix (vocabulary.py:176); discriminate on that.
-    #
-    # The column is a ", "-join, so a `[replace]` key containing a comma splits
-    # into fragments. Detection survives it: the fragment that opens the entry
-    # still carries the prefix.
-    fired_any = any(
-        entry.strip().startswith("replace:")
-        for row in rows
-        for entry in (row.get("fired_entries") or "").split(",")
-    )
-    if rows and not fired_any:
+    if rows and not replace_entries_fired(rows):
         failures.append(
             Failure(
                 "instrument",
@@ -560,14 +608,31 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     # -- store_audio ---------------------------------------------------------
-    if rows and not list(store.audio_dir.glob("*.wav")):
-        failures.append(
-            Failure(
-                "reproducibility",
-                "no stored audio — set [history] store_audio = true before the "
-                "gate, or a collapse in this set is unreproducible",
+    # Per gate row, not "any .wav anywhere". Until 2026-08-18 this asked
+    # `not list(audio_dir.glob("*.wav"))`, which any single file satisfied —
+    # including leftovers from a corpus being discarded, which is precisely the
+    # state the disk is in when a gate is re-recorded after a config change.
+    # `_sweep_audio` also expires audio on `retain_days` while the rows persist
+    # (storage/history.py), so rows-without-audio is the *normal* steady state
+    # of a long-lived daemon, not an edge case. Ninth check of that shape found
+    # in this project, and the second in this file in one day.
+    if rows:
+        missing = [
+            str(row["id"])[:12]
+            for row in rows
+            if not (store.audio_dir / f"{row['id']}.wav").exists()
+        ]
+        if missing:
+            failures.append(
+                Failure(
+                    "reproducibility",
+                    f"{len(missing)} of {len(rows)} gate dictations have no "
+                    f"stored audio ({', '.join(missing[:4])}"
+                    f"{', ...' if len(missing) > 4 else ''}) — set [history] "
+                    "store_audio = true before the gate, or a collapse in this "
+                    "set is unreproducible",
+                )
             )
-        )
 
     # -- latency -------------------------------------------------------------
     def series(column: str) -> list[float]:
@@ -709,6 +774,28 @@ def main(argv: list[str] | None = None) -> int:
             "entries": vocabulary.entry_count,
             "boost_terms": len(vocabulary.boost_terms),
         },
+        # objection O11. Nothing in `history.db` records which decode produced
+        # a row — `session.engine` is "backend:model" and nothing else — so two
+        # corpora recorded either side of a configuration change are
+        # indistinguishable in the record, and the operator's memory is the only
+        # artefact separating them. That is verbatim the `verify_guard.py`
+        # failure §9 already documents: the prompt that collapsed a transcript
+        # was described in prose and never written down, so the control
+        # reproduced nothing and printed PASS.
+        #
+        # The prompt is recorded by SHA-256 *and* length rather than verbatim:
+        # it is user-authored text that can name people and clients, the gate
+        # record is committed, and length is the variable this project measured
+        # as load-bearing. `initial_prompt_chars = 0` is the disabling itself.
+        "engine": {
+            "backend": config.engine.backend,
+            "model": config.engine.model,
+            "language": config.engine.language,
+            "initial_prompt_sha256": hashlib.sha256(
+                config.engine.initial_prompt.encode("utf-8")
+            ).hexdigest()[:16],
+            "initial_prompt_chars": len(config.engine.initial_prompt),
+        },
         "chain": list(config.postprocess.chain),
         "latency": {k: round(v, 3) for k, v in latency.items()},
         "guard": [
@@ -743,6 +830,12 @@ def main(argv: list[str] | None = None) -> int:
             f"sha256 {(digest or '(none)')[:16]}"
         )
         print(f"chain               : {list(config.postprocess.chain)}")
+        print(
+            f"engine              : {config.engine.backend}:"
+            f"{config.engine.model}  initial_prompt "
+            f"{len(config.engine.initial_prompt)} chars sha "
+            f"{hashlib.sha256(config.engine.initial_prompt.encode()).hexdigest()[:12]}"
+        )
         for key in sorted(latency):
             print(f"  {key:26s} {latency[key]:9.3f} ms")
         print()
