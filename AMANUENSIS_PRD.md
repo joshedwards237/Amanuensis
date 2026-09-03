@@ -286,6 +286,7 @@ This group raises the bar on reliability — a dropped transcription is not a mi
 Config-selectable, one active at a time:
 
 - **`push_to_talk`** (default) — record while held. Predictable, no false starts.
+  **Carries the double-tap latch** (added 2026-08-09, below).
 - **`toggle`** — press to start, press to stop. For long-form dictation.
 - **`vad_auto`** — press to start, silence detection ends the session.
   Requires VAD (§7.4). Ship behind a flag; it is the mode most likely to misfire.
@@ -540,6 +541,19 @@ retain = true               # false: the transcript is still written before
 retain_days = 30
 store_audio = false         # off by default; audio is the sensitive artifact
 ```
+
+**`[hotkey] double_tap_ms` (added 2026-08-09) is a key rather than a constant**
+because it is a **motor** threshold, not a software one: it is how fast *this
+user's hand* taps, and the value that feels instant to one person makes another
+person's deliberate second press look like a hold. 350 ms is the starting
+default and is **stated as unmeasured** — macOS's own double-click interval is
+user-settable for the same reason, and this project does not have a number for
+it yet. `0` disables the latch outright, which is the setting for a user who
+wants the hold gesture and nothing else without giving up `push_to_talk`.
+
+The key is inert outside `push_to_talk`; `toggle` and `vad_auto` have their own
+press semantics and a latch inside either would be two behaviours competing for
+one press.
 
 **Two keys above are not the free choices they look like** (added 2026-08-01,
 Phase 1 findings 2 and 3).
