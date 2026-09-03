@@ -82,7 +82,7 @@ has to build a real `.app` bundle, which is days of work.
 1. **System Settings → Control Centre → Menu Bar Only** → set
    **Automatically hide and show the menu bar** to **Always**.
 2. Open something full-screen with a lot of white — a document, a browser page.
-   Press the green button or `Ctrl-⌘-F`.
+   Press the green button or `Ctrl-⌘-F`.claud
 3. Start the daemon (Desktop shortcut, step 1).
 
 **Run the trials:**

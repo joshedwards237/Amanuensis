@@ -301,12 +301,68 @@ The menu shows each mode's behaviour rather than its config spelling —
 warning on it. Changing either setting persists to `config.toml` and rebinds the
 event tap live; there is no restart.
 
-**There is no double-tap gesture, and there never was** (recorded 2026-09-03
-because it was asked for as an existing feature). The three modes above are the
-whole of §5.2. `"double_tap"` appears in this repository only as the canonical
-*invalid* mode string in `tests/test_config.py` and `tests/test_cli.py`, which
-is very likely where the memory came from. Adding one would be a fourth mode
-and an amendment here, not a repair.
+**A false statement stood here for about an hour on 2026-09-03 and is retracted
+in place.** It read: *"There is no double-tap gesture, and there never was."*
+That is wrong. The double-tap latch was specified in detail on 2026-08-09 and
+the section below is its text, restored verbatim.
+
+It was not found because it was never on `main`. Commit `a34dfc6` lives only on
+`phase-3-postprocessing`, which was squash-merged as PR #9 on **2026-08-09** —
+and then had four more commits pushed to it on **2026-08-18**, nine days after
+its pull request closed. A squash merge copies content, not history, so nothing
+downstream of the merge point was ever carried across and no tooling complained.
+A grep of the working tree found nothing and the assistant concluded the feature
+had never existed, which is what a stale read looks like when it is confident.
+
+The lesson is not "grep harder". It is that **a branch whose PR has merged is
+not a branch that is finished**, and this repository has five of them.
+
+#### The double-tap latch (2026-08-09)
+
+**Double-tap the binding to start recording hands-free; a single tap ends it.**
+The hold gesture is untouched — both gestures are live on one key, and no mode
+switch is involved.
+
+*Why it is not `toggle`.* `toggle` is a mode, and §5.2's opening sentence binds
+modes to one at a time, so selecting it **costs the user push-to-talk entirely**.
+The reported need was not "I prefer press/press"; it was "a seventy-five second
+dictation pins my hand to a key". A mode that trades the default gesture away to
+solve a gesture problem is the wrong shape. `toggle` remains as written for users
+who want press/press and nothing else.
+
+**The first tap is a complete push-to-talk dictation, and this is the whole
+difficulty.** A double-tap is two press/release pairs; a naive implementation
+records, decodes and injects a ~100 ms fragment before the latch engages. Three
+resolutions were weighed and the ordering matters:
+
+- **Capture, then discard on latch** — *chosen*. Capture starts on the first
+  press exactly as it does today, so push-to-talk keeps its latency and loses no
+  leading audio. If a second press arrives inside `double_tap_ms`, the fragment
+  is dropped **before it reaches the decoder**. It costs nothing to discard:
+  nothing was transcribed, so §8 has nothing to persist and no guarantee is
+  touched.
+- **Defer the start until the window expires** — rejected. It silently drops the
+  first ~300 ms of *every ordinary dictation* to serve the new gesture, which
+  regresses the default path to improve the exception.
+- **Process the fragment normally** — rejected. Every hands-free session would be
+  preceded by a stray word landing at the cursor.
+
+**Ending a latched session is a single tap and nothing else.** A hold during
+latch is ignored rather than treated as the start of a new push-to-talk: the same
+physical gesture would mean "end the latch" to the code and "begin dictating" to
+the hand, and one of those readings would be wrong every time. Composing the latch
+with `vad_auto` was rejected for this release — §5.2 already calls `vad_auto` the
+mode most likely to misfire, and a misfire truncates a long-form dictation
+mid-sentence, which is the exact case the latch exists to serve.
+
+`max_duration_seconds` (§5.3) already bounds a latched session. It needs no
+second ceiling.
+
+**§5.4 binds this and sequences it.** Hands-free means the user's hand is off the
+key, which removes the physical proof that the microphone is live — so the latch
+is the feature that turns a weak recording indicator from imperfect into
+dangerous. It ships **after** Phase 4's louder recording affordance, not
+alongside it (§9, Phase 4).
 
 ### 5.3 Configuration
 
@@ -337,6 +393,14 @@ configurability is how this PRD discharges tradeoffs it cannot resolve.
 [hotkey]
 mode = "push_to_talk"       # push_to_talk | toggle | vad_auto
 binding = "right_option"
+double_tap_ms = 350         # 0 disables the latch. push_to_talk only — see §5.2.
+                            # Restored 2026-09-03: specified 2026-08-09 and lost
+                            # when the branch carrying it was squash-merged
+                            # before the commit existed. A **motor** threshold,
+                            # not a software one — it is how fast this user's
+                            # hand taps, which is why macOS makes its own
+                            # double-click interval user-settable. Stated as
+                            # UNMEASURED.
 
 [audio]
 device = "default"          # or a substring match on device name
@@ -3222,6 +3286,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-03 | **Four commits of Phase 3 work were never on `main`, and one of them was a specification the assistant then declared had never existed.** `phase-3-postprocessing` was squash-merged as PR #9 on 2026-08-09 and had four more commits pushed to it on **2026-08-18**, nine days after its pull request closed: the **double-tap latch** specification (§5.2, §5.3, §9), the `initial_prompt` disabling and its length-not-content mechanism, §5.7's structural blindness to an interior drop, the `store_audio` gate clause that could not fail, the 492→458 correction, a **real audio defect** (`scripts/verify_guard.py`, `scripts/measure_long_audio.py` and `tests/conftest.py` divide by 32768 where every writer multiplies by 32767), and a sentinel record with twelve dispositions. A squash merge copies content rather than history, so nothing downstream of the merge point crossed and no tooling objected. The operator asked for the latch as an existing feature; a grep of the working tree found nothing and the assistant wrote **"There is no double-tap gesture, and there never was"** into §5.2 — a false statement, in the governing document, for about an hour. It is retracted in place rather than deleted, and the latch section is restored verbatim from `a34dfc6`. **A branch whose PR has merged is not a branch that is finished**, and this repository has five of them: `docs-close-2b-followup` (2 unmerged), `landing-page` (6), `phase-2b-hotkey` (9), `phase-3-postprocessing` (4), `site-redesign` (2). The Phase 3 close recorded that `git branch -d` refuses them all and treated that refusal as squash-merge bookkeeping. It was also a signal, and nobody read it as one. |
 | 2026-09-03 | **Ten contaminated rows removed from `history.db`, and audio outlives its row** (§5.5, operator authorisation). The 2026-09-02 22:31–22:33 batch was recorded while a test suite ran on the same machine: three of ten takes at 7.4×, 8.9× and 19.6× their idle re-decode cost. They were **in the product's own measurement record**, and the site's eligibility rule provably cannot exclude them — it drops rows sharing a `started_at` second, which catches parallel writes and not external load. The `<= 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Deleted after a `sqlite3 .backup` and with the audio moved to quarantine rather than unlinked, because the DB backup would not have recovered it. **Found in the doing: §5.5's retention sweep cannot reach orphaned audio.** It expires audio via the rows it belongs to, so a wav whose row is gone is never swept — ten orphans survived the delete and were only found by differencing the audio directory against the row ids. `manu history --purge` covers audio because it purges both; nothing covers a row removed any other way. Unfixed, and named here rather than left for the next person to find with a full disk. |
 | 2026-09-02 | **`[engine] backend` was mislabelling `history.db`, and the registry had been dead since Phase 0** (§6.4, §7.2, Phase 4 slice S6). `resolve_engine` raised `NotImplementedError` for **every** backend including `faster_whisper`, which ships — the daemon worked because `cli.py` imported the class by name and never asked. Four phases of dead dispatch behind a §6.4 entry describing the module as "backend string → class, per config". **The cost was not inertness.** `backend` was read in exactly one place, to build the `engine` label on a history row, so `backend = "moonshine"` was accepted, the daemon ran faster-whisper anyway, and the row was recorded as `moonshine:tiny.en`. A key that does nothing is inert; a key that mislabels the measurement record makes every figure derived from those rows a claim about the wrong engine — and this project derives G1 and edit rate from exactly those rows. `_check_coherence` now **constructs** the engine rather than resolving it, because resolving alone left a second route to the same lie: `backend = "moonshine"` with `model = "tiny.en"` passed. Both routes are refused at config load, and both are pinned by tests that fail when the check is reverted. **`engines/moonshine.py` exists at last** — §6.4 has listed it since Phase 0. It absorbs three contract differences rather than papering over them: no prompt so `biased=False` is honoured by already being true, `boost` accepted and dropped, and `decoded_seconds` **`None` rather than 0.0**, because §5.7 routes a `None` to its fallback and would read a zero as "the decoder stopped immediately" and refuse every transcript. **Parakeet is dropped and recorded as a gap**: NVIDIA NeMo has no CoreML or Metal path on macOS. ADR 0001 named it; nothing has ever benchmarked it. |
 | 2026-09-02 | **The asynchronous clipboard restore is refused for the third time, now on a measurement** (§7.3, Phase 4 slice S5, operator disposition D1). Phase 2b declined it because the restore races the next dictation; the Phase 4 plan reversed that on the argument that the tray could now report the failure. `scripts/price_restore.py` reads the operator's own 93 rows: over **92 consecutive pairs, 0** would have been helped. The nine that overlapped did so by roughly **five seconds** against a 0.155 s restore. Reporting a failure does not undo it — the failure is the user's *previous* clipboard landing in their document, visible only after it has happened, and `injection/macos.py` already called this race "worse than the clipboard-manager one and entirely self-inflicted". **Settled rather than open**: reopening needs a measurement that the gap has changed, not an argument that 155 ms is a lot of milliseconds. **§7.3 floor item 1 gets its test.** The model was named in §6.3 and never checked, and `indicator.py`'s preamble calls main-thread discipline "the single most likely thing to be quietly removed" — which Phase 4 promptly did in `TrayApp`, undetected, because the fake main queue runs blocks inline. `tests/test_thread_model.py` drives all three UI surfaces through a **deferring** queue and asserts nothing touched AppKit before it ran. Generic over the surfaces on purpose: a per-surface check is one the fourth surface does not get. Carries its own positive control, and reverting either the tray's or the overlay's dispatch fails it. |
