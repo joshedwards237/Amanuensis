@@ -18,11 +18,13 @@ written to pass.
 | Today, 10 min | **2. Judge the recording panel** (§5.4) | 10 min | a full-screen app |
 | Today, 15 min | **3. Run the network capture** (G3) | 15 min | terminal, `sudo` |
 | Today, 20 min | **4.** *Optional:* ten short corrections | 20 min | quiet room |
-| Whenever, 5 min | **5. Write the gate record** | 25 min | steps 1–4 done |
+| Today, 5 min | **4b. The latch and the second daemon** (§5.2, §9) | 5 min | two terminals |
+| Whenever, 5 min | **5. Write the gate record** | 25 min | steps 1–4b done |
 | Book it | **6. The install gate** | watch only | **a second person**, 30 min |
 
-Steps 1–4 are independent. **5 needs 1–3. 6 is the gate and should be last** —
-its output is a defect list you may want to fix before anyone else sees it.
+Steps 1–4b are independent. **5 needs 1–3 and 4b. 6 is the gate and should be
+last** — its output is a defect list you may want to fix before anyone else
+sees it.
 
 ---
 
@@ -200,12 +202,68 @@ usual dictation length*. Long-form is already settled — Moonshine collapses at
 
 ---
 
+## Step 4b — the latch and the second daemon (5 minutes)
+
+Both shipped 2026-09-03 and both are gestures rather than output, so nothing
+in the suite can tell you they *feel* right. Two minutes each.
+
+**The double-tap latch** (§5.2). Push-to-talk is unchanged: hold, speak,
+release. What is new is that a **double-tap starts a hands-free session and a
+single tap ends it**, on the same key, with no mode switch.
+
+1. Start the daemon in `push_to_talk` (the default).
+2. **Hold and speak as usual.** It must behave exactly as it did yesterday —
+   this is the one that matters most, because the latch is only affordable if
+   an ordinary dictation is untouched. If your text feels like it arrives
+   later than it used to, stop and say so: that is a G1 regression and the
+   design says it cannot happen.
+3. **Double-tap.** The panel should come up and stay up with your hands off
+   the key. Speak for twenty seconds. **Single-tap** to end it.
+4. **Nothing should land at the cursor from the first tap.** A stray word
+   there means the fragment reached the decoder, which is the failure §5.2
+   rejects by name.
+5. **Hold the key mid-latch and let go.** Nothing should happen — the latch
+   survives a hold, deliberately.
+
+**What to look for:** whether **350 ms** is your hand. If your double-taps are
+not registering, it is too short for you; if a deliberate quick correction gets
+swallowed into a latch, it is too long. `double_tap_ms` in `config.toml` is the
+dial, `0` turns the latch off entirely, and the number is marked **UNMEASURED**
+in §5.3 precisely because it is a motor threshold and nobody has measured
+yours. **Write down the value you end up on** — that is the only measurement
+this step produces and it belongs in the gate record.
+
+**The second daemon** (§9 Phase 4 addition 4). This is what cost you nine gate
+dictations on 2026-08-18.
+
+1. With one daemon running, open a second terminal and run `manu daemon` again.
+2. It must **refuse**, print a sentence naming `manu status`, and exit.
+3. **Check your menu bar.** There must still be exactly **one** glyph. A second
+   one appearing even briefly is the bug — the refusal used to happen after the
+   microphone was already open.
+4. `manu status` should answer from the daemon that is running.
+
+---
+
 ## Step 5 — write the gate record (25 minutes)
 
 Create `docs/gates/phase-4.md`. It carries what was built, what was verified,
 what was deferred, and what the phase revealed the PRD got wrong.
 
-**Results from steps 1–4**, plus this list, so none of it closes by silence:
+**Results from steps 1–4b**, plus this list, so none of it closes by silence:
+
+- [ ] **`double_tap_ms`: the value you settled on, and that it is still
+      unmeasured.** Step 4b produces one number and it is a fact about your
+      hand, not about the software. §5.3 marks 350 as UNMEASURED; if you moved
+      it, the record says what to and why, and it stays marked unmeasured
+      either way — n=1 on one person is not a measurement of a threshold.
+- [ ] **Four commits of Phase 3 work were never on `main`, and the branch
+      count was the signal nobody read.** Recovered 2026-09-03: the latch
+      specification, the `initial_prompt` mechanism, §5.7's interior blindness,
+      two gate clauses that could not fail, a real audio defect, and a sentinel
+      record. All five stale branches are audited and deleted. **The Phase 3
+      gate record cites a `store_audio` clause that could not fail at the time
+      it ran** — say so there rather than only here.
 
 - [ ] **G2's revisit — and it is now actionable.** You deferred it on
       2026-09-02 to "the Phase 4 gate, where the model question is settled". It
