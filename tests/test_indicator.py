@@ -48,9 +48,16 @@ class _FakeButton:
 class _FakeStatusItem:
     def __init__(self) -> None:
         self._button = _FakeButton()
+        #: Phase 4. `TrayApp` attaches a menu to this same item — there is one
+        #: status item in the process and the tray composes the indicator to
+        #: keep it that way.
+        self.menu: Any | None = None
 
     def button(self) -> _FakeButton:
         return self._button
+
+    def setMenu_(self, menu: Any) -> None:
+        self.menu = menu
 
 
 class _FakeStatusBar:

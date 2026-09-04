@@ -51,7 +51,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from amanuensis import __version__
 from amanuensis.config import AppConfig, ConfigError, InjectionConfig, load_config
@@ -74,19 +74,6 @@ _EXIT_OK = 0
 #: Verb -> the phase that makes it do something. Kept in one place so that
 #: `manu daemon` and the tests cannot disagree about what is built.
 #:
-#: `toggle` and `status` moved from Phase 2b to Phase 4 here (recorded at the
-#: Phase 2b gate). §9's Phase 2b names the listener, the controller and the
-#: indicator; it does not name these two, and both need the IPC transport §7.3
-#: lists as portability floor item 3 — which no phase ever scheduled. Phase 4
-#: is where they land because it is the phase that owns `toggle` mode and the
-#: tray, and because a floor item with no phase is a floor item that does not
-#: exist.
-_VERB_PHASES = {
-    "toggle": "Phase 4",
-    "status": "Phase 4",
-}
-
-
 def build_parser() -> argparse.ArgumentParser:
     """The full `manu` parser. Separate from `main` so tests can inspect it."""
     parser = argparse.ArgumentParser(
@@ -232,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install(config, skip_download=args.skip_download, clip=args.clip)
     if args.verb == "daemon":
         return _daemon(config)
+    if args.verb in ("toggle", "status"):
+        return _control(args.verb)
     if args.verb == "history":
         return _history(config, args)
     if args.verb == "vocab":
@@ -240,12 +229,44 @@ def main(argv: list[str] | None = None) -> int:
             return _EXIT_USAGE
         return _vocab_check(text=args.text, show_app=args.app)
 
-    print(
-        f"manu {args.verb}: not implemented yet — it is built in "
-        f"{_VERB_PHASES[args.verb]}.",
-        file=sys.stderr,
-    )
-    return _EXIT_ERROR
+    # Every verb the parser accepts is dispatched above. argparse rejects
+    # anything else before reaching here, so this is unreachable rather than a
+    # fallback — and it says so instead of pretending to handle a case.
+    raise AssertionError(f"unrouted verb {args.verb!r}")
+
+
+def _control(verb: str) -> int:
+    """`manu toggle` and `manu status` — one verb to a running daemon.
+
+    The transport is resolved through `ipc/factory.py`, and the unix socket
+    does not appear here: §7.3's floor item 3 says it "must not appear in the
+    CLI contract as though it were the interface", and this function is that
+    contract.
+
+    A daemon that is not running is reported as exactly that. §7.6 makes the
+    distinction a requirement — "nothing is listening" and "the daemon says it
+    is idle" are different facts, and reporting the first as the second is a
+    claim about the microphone nobody checked.
+    """
+    from amanuensis.ipc.base import ControlRequestError
+    from amanuensis.ipc.factory import UnsupportedPlatformError, create_transport
+
+    try:
+        transport = create_transport()
+    except (UnsupportedPlatformError, ValueError) as exc:
+        print(f"manu {verb}: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    try:
+        response = transport.request(verb)
+    except ControlRequestError as exc:
+        print(f"manu {verb}: {exc}", file=sys.stderr)
+        print("  Start one with `manu daemon`.", file=sys.stderr)
+        return _EXIT_ERROR
+
+    stream = sys.stdout if response.ok else sys.stderr
+    print(response.detail, file=stream)
+    return _EXIT_OK if response.ok else _EXIT_ERROR
 
 
 def _history(config: AppConfig, args: argparse.Namespace) -> int:
@@ -654,11 +675,16 @@ def _daemon(config: AppConfig) -> int:
     `NSApplication.run()`, so a plain Ctrl-C would leave a daemon holding the
     microphone with no indicator to say so.
     """
+    import dataclasses
     import signal
+    import threading
 
     from amanuensis.audio.capture import AudioCapture, DeviceNotFoundError
-    from amanuensis.audio.vad import VoiceActivityDetector
-    from amanuensis.controllers.dictation_controller import DictationController
+    from amanuensis.audio.vad import SilenceWatcher, VoiceActivityDetector
+    from amanuensis.controllers.dictation_controller import (
+        DictationController,
+        DictationState,
+    )
     from amanuensis.engines.faster_whisper import (
         FasterWhisperEngine,
         ModelNotAvailableError,
@@ -667,8 +693,12 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.hotkey.macos import HotkeyPermissionError, UnsupportedBindingError
     from amanuensis.injection.factory import UnsupportedPlatformError, create_injector
     from amanuensis.injection.macos import detect_clipboard_manager
+    from amanuensis.ipc.base import Response, make_handler
+    from amanuensis.ipc.factory import create_transport
+    from amanuensis.ipc.macos import AlreadyRunningError
     from amanuensis.storage.history import HistoryStore
-    from amanuensis.ui.indicator import RecordingIndicator
+    from amanuensis.ui.overlay import RecordingOverlay
+    from amanuensis.ui.tray import TrayApp
 
     try:
         injector = create_injector(config.injection)
@@ -692,8 +722,32 @@ def _daemon(config: AppConfig) -> int:
             print(file=sys.stderr)
         return _EXIT_ERROR
 
+    # §9's single-instance guard. A daemon started 2026-08-07 was still live
+    # when a second was started for the Phase 3 gate: both event taps saw the
+    # binding, both held the microphone, both decoded and both injected. Every
+    # row in `history.db` doubled, every transcript pasted twice, and
+    # `transcribe_ms` ran 3854-5236 ms against ~890 ms single-process. It
+    # survived two days because the only visible symptom was a double paste in
+    # one application.
+    #
+    # Position matters in both directions. It is claimed **before** anything is
+    # taken — the event tap, the microphone, the status item — rather than at
+    # `control.serve` below, which is where the bind used to happen and is
+    # three acquisitions too late; §5.4 calls the intermediate state a privacy
+    # problem in its own right, because the indicator on one daemon reads
+    # *idle* while the other is recording. And it is claimed **after** the
+    # binding and permission refusals above, which take nothing: being told
+    # your hotkey is unsupported should not require being the only daemon.
+    control = create_transport()
+    try:
+        control.claim()
+    except AlreadyRunningError as exc:
+        print(f"manu daemon: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    exposure = detect_clipboard_manager()
     for warning in (
-        _clipboard_warning(config.injection, detect_clipboard_manager()),
+        _clipboard_warning(config.injection, exposure),
         _keystroke_warning(config.injection),
     ):
         if warning is not None:
@@ -741,7 +795,28 @@ def _daemon(config: AppConfig) -> int:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
-    indicator = RecordingIndicator()
+    # Phase 4: `TrayApp` composes the Phase 2b indicator rather than replacing
+    # it, so there is still exactly one status item — and the exposure the
+    # startup warning above prints to a terminal nobody is watching now has a
+    # persistent home (§5.4, §7.3).
+    tray = TrayApp()
+    # An overlay failure reports through the tray rather than killing the
+    # daemon: it runs inside an NSBlockOperation, where an uncaught Python
+    # exception crosses the PyObjC bridge as an NSException and terminates
+    # the process — which it did on 2026-09-02, over a confidence feature.
+    overlay = RecordingOverlay(config.feedback, on_error=tray.set_error)
+
+    def _on_state_change(state: DictationState) -> None:
+        # Two surfaces, one state, and the fan-out lives here rather than in
+        # either of them: §6.2 makes the tray a status surface, and a tray that
+        # drove the overlay would be a tray that owned another component's
+        # lifetime.
+        tray.set_state(state)
+        overlay.set_state(state)
+
+    tray.set_clipboard_exposure(
+        exposure if config.injection.warn_on_clipboard_manager else None
+    )
     controller = DictationController(
         config=config,
         engine=engine,
@@ -750,41 +825,204 @@ def _daemon(config: AppConfig) -> int:
         history=history,
         capture=capture,
         detector=detector,
-        on_state_change=indicator.set_state,
+        on_state_change=_on_state_change,
         vocabulary=vocabulary,
     )
+
+    # The waveform needs the audio while it is arriving, and so does
+    # `vad_auto`. `set_observer` holds one callback, so the fan-out lives here
+    # for the same reason `_on_state_change` does: neither component should own
+    # the other's lifetime, and this thread has a deadline.
+    observers: list[Any] = []
+
+    def _level_for_overlay(block: Any) -> None:
+        import numpy as np
+
+        if block.size:
+            overlay.set_level(
+                float(np.sqrt(np.mean(np.square(block.astype(np.float64)))))
+            )
+
+    observers.append(_level_for_overlay)
+
+    # §5.2's third mode. The watcher is built and fed **always**, and consults
+    # the live mode before acting — rather than being wired only when the
+    # daemon happens to start in `vad_auto`. That is what makes the mode
+    # switchable from the tray: conditional wiring at start-up would mean
+    # choosing `vad_auto` from a menu produced a mode with nothing ending it.
+    hotkey_state = {"mode": config.hotkey.mode, "binding": config.hotkey.binding}
+    watcher = SilenceWatcher(config.vad_auto, config.audio.sample_rate)
+
+    def _watch(block: Any) -> None:
+        if hotkey_state["mode"] != "vad_auto":
+            return
+        if watcher.feed(block):
+            # Handed to a thread rather than done here: this is the PortAudio
+            # callback and §6.3 forbids blocking it.
+            threading.Thread(
+                target=controller.end_session,
+                name="amanuensis-vad-auto-end",
+                daemon=True,
+            ).start()
+
+    observers.append(_watch)
+
+    def _start_session() -> None:
+        # Silence has to be re-earned every session, or the second dictation
+        # inherits the first one's trailing quiet and ends immediately.
+        watcher.reset()
+        controller.start_session()
+
+    def _fan_out(block: Any) -> None:
+        for observer in observers:
+            observer(block)
+
+    capture.set_observer(_fan_out)
 
     def _on_release() -> None:
         # The listener's callbacks return nothing, deliberately: there is
         # nothing useful a callback could hand back to a thread that must not
         # wait for it (§6.3). The session is observed through history and the
-        # indicator, never through this return.
+        # tray, never through this return.
         controller.end_session()
+
+    def _on_cancel() -> None:
+        # §5.2's latch, and the reason it can promise "before the decoder".
+        # The first tap of a double-tap is a complete push-to-talk dictation,
+        # and this arrives while its capture is **still open** — so
+        # `abort_session` throws the audio away rather than queueing it, and
+        # §8 has nothing to persist because nothing was ever transcribed
+        # (choice-story #7). A `_on_release` here instead would hand the
+        # fragment to a worker that is blocked on `get()` and would have it in
+        # microseconds.
+        controller.abort_session()
 
     try:
         controller.start()
-        listener.start(controller.start_session, _on_release)
+        listener.start(_start_session, _on_release, _on_cancel)
     except (ModelNotAvailableError, DeviceNotFoundError, HotkeyPermissionError) as exc:
         controller.shutdown()
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
-    signal.signal(signal.SIGINT, lambda *_: indicator.stop())
-    signal.signal(signal.SIGTERM, lambda *_: indicator.stop())
+    # §7.3 floor item 3, and §7.6's authority model. The acceptor runs on its
+    # own thread and must not block: `toggle` returns as soon as the controller
+    # has been told, never when the dictation finishes.
+    def _status() -> Response:
+        # Deliberately no transcript content. §7.6 forbids it — a `status` that
+        # returned the last transcript would open an egress path G3's packet
+        # capture cannot see.
+        return Response(
+            ok=True,
+            detail=(
+                f"running: model {config.engine.model}, "
+                f"mode {config.hotkey.mode}, state {tray.state.value}"
+            ),
+        )
+
+    def _toggle() -> Response:
+        if tray.state is DictationState.RECORDING:
+            controller.end_session()
+            return Response(ok=True, detail="stopping")
+        _start_session()
+        return Response(ok=True, detail="recording")
+
+    # Already claimed at the top of `_daemon`; this only starts accepting.
+    control.serve(make_handler({"status": _status, "toggle": _toggle}))
+
+    # The hotkey picker (§5.3's `[hotkey] binding`, offered from the tray
+    # because the operator's right-option double-tap fires another
+    # application's shortcut). The tray renders a list and hands back a name;
+    # everything that changing a binding actually involves lives here, which is
+    # §6.2's boundary.
+    from amanuensis.config import (
+        default_config_path,
+        write_hotkey_binding,
+        write_hotkey_mode,
+    )
+    from amanuensis.hotkey.macos import available_bindings, available_modes
+
+    listener_box = {"current": listener}
+
+    def _rebuild_listener(what: str, **changes: str) -> bool:
+        """Swap the event tap for one built from `changes`. True on success.
+
+        Shared by the binding and mode pickers: the delicate part is the window
+        between stopping one tap and starting another, where a raise leaves a
+        daemon with no hotkey at all, and two copies of that would drift.
+        """
+        old = listener_box["current"]
+        try:
+            # Persist first. A setting that works this session and is gone
+            # after a restart is worse than one that never changed, because
+            # the user stops trusting the menu.
+            if "binding" in changes:
+                write_hotkey_binding(default_config_path(), changes["binding"])
+            if "mode" in changes:
+                write_hotkey_mode(default_config_path(), changes["mode"])
+            replacement = create_hotkey_listener(
+                dataclasses.replace(
+                    config.hotkey,
+                    binding=changes.get("binding", hotkey_state["binding"]),
+                    mode=changes.get("mode", hotkey_state["mode"]),
+                )
+            )
+            old.stop()
+            replacement.start(_start_session, _on_release, _on_cancel)
+        except Exception as exc:
+            tray.set_error(f"could not switch to {what}: {exc}")
+            # The old tap is already stopped in the failure window between
+            # `old.stop()` and a raise from `start`; restarting it is the only
+            # thing that leaves a usable daemon.
+            try:
+                if not old.is_running:
+                    old.start(_start_session, _on_release, _on_cancel)
+            except Exception:
+                tray.set_error(
+                    f"the hotkey is not listening after failing to switch to "
+                    f"{what}. Restart the daemon."
+                )
+            return False
+        listener_box["current"] = replacement
+        hotkey_state.update(changes)
+        tray.set_error(None)
+        print(f"{what} (written to {default_config_path()})")
+        return True
+
+    def _change_hotkey(name: str) -> None:
+        if _rebuild_listener(f"hotkey is now {name}", binding=name):
+            tray.set_hotkey_options(available_bindings(), name)
+
+    def _change_mode(name: str) -> None:
+        if _rebuild_listener(f"mode is now {name}", mode=name):
+            # A mode switch mid-session would leave a capture nothing ends.
+            watcher.reset()
+            tray.set_mode_options(available_modes(), name)
+
+    tray.set_on_hotkey(_change_hotkey)
+    tray.set_on_mode(_change_mode)
+    tray.set_hotkey_options(available_bindings(), config.hotkey.binding)
+    tray.set_mode_options(available_modes(), config.hotkey.mode)
+    tray.set_on_quit(tray.stop)
+    signal.signal(signal.SIGINT, lambda *_: tray.stop())
+    signal.signal(signal.SIGTERM, lambda *_: tray.stop())
 
     print(
         f"listening — hold {config.hotkey.binding} to dictate. Ctrl-C to stop.",
         flush=True,
     )
-    indicator.show()
+    tray.show()
     try:
-        indicator.run()
+        tray.run()
     finally:
         # Whatever ended the loop, the microphone is released and the tap is
         # torn down. A daemon that exits still holding either is §5.4's
-        # failure with the indicator already gone.
-        listener.stop()
+        # failure with the tray already gone.
+        control.stop()
+        listener_box["current"].stop()
         controller.shutdown()
+        # The panel says the microphone is live. It outlives neither.
+        overlay.hide()
         print("stopped.")
     return _EXIT_OK
 
@@ -925,9 +1163,12 @@ def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
     """
     from amanuensis.engines.faster_whisper import (
         ModelNotAvailableError,
+        WeightsDigestError,
         download_weights,
         resolve_device,
         resolve_model_name,
+        resolve_model_path,
+        verify_weights,
     )
     from amanuensis.tier import (
         TIER_A_P50_MS,
@@ -949,10 +1190,41 @@ def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
         print("makes, and it happens once (goal G3, §7.6).", flush=True)
         try:
             path = download_weights(model)
+        except WeightsDigestError as exc:
+            # Distinct from a failed download, and worth its own exit path: the
+            # bytes arrived and are not the bytes this project recorded.
+            print(f"manu install: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
         except Exception as exc:  # hub raises several unrelated types
             print(f"manu install: could not download {model}: {exc}", file=sys.stderr)
             return _EXIT_ERROR
         print(f"weights at {path}")
+    else:
+        try:
+            path = resolve_model_path(model)
+        except ModelNotAvailableError as exc:
+            print(f"manu install: {exc}", file=sys.stderr)
+            return _EXIT_ERROR
+
+    # `download_weights` already refused a mismatch — this re-checks so the user
+    # is told the verification happened. Deliberate second hash: it costs about
+    # a fifth of a second on a one-time install, and an enforcement nobody can
+    # see is one a later refactor removes without anything noticing. It also
+    # covers `--skip-download`, where nothing verified the on-disk copy at all.
+    try:
+        verification = verify_weights(path, model)
+    except WeightsDigestError as exc:
+        print(f"manu install: {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+    if verification.verified:
+        print(
+            f"checksums verified — {verification.files_checked} files match the "
+            f"digests recorded for this pinned revision (§7.6)"
+        )
+    else:
+        # Not a pass. §7.6: a model with no recorded digests is reported as
+        # unverified rather than silently accepted.
+        print(f"NOT verified — no digests are recorded for {model} (§7.6)")
 
     try:
         result = run_tier_check(config, clip_path=clip)

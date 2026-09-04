@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -73,11 +74,24 @@ class AudioCapture:
     """
 
     def __init__(self, config: AudioConfig) -> None:
+        self._observer: Callable[[NDArray[np.float32]], None] | None = None
         self._config = config
         self._stream: Any | None = None
         self._blocks: list[NDArray[np.float32]] = []
         self._lock = threading.Lock()
         self._max_samples = config.max_duration_seconds * config.sample_rate
+
+    def set_observer(
+        self, observer: Callable[[NDArray[np.float32]], None] | None
+    ) -> None:
+        """Watch blocks as they arrive. Used by `hotkey.mode = "vad_auto"`.
+
+        The observer runs on the PortAudio callback thread and must be short
+        for the same reason `_on_block` is: this thread has a deadline, and
+        missing it costs audio.
+        """
+        with self._lock:
+            self._observer = observer
 
     @property
     def is_recording(self) -> bool:
@@ -186,3 +200,14 @@ class AudioCapture:
         block = np.asarray(indata, dtype=np.float32).reshape(-1)
         with self._lock:
             self._blocks.append(block.copy())
+            observer = self._observer
+        if observer is not None:
+            # `vad_auto` needs to see the audio while it is still arriving
+            # (§5.2). Anything raised here would unwind into PortAudio's C
+            # stack and cost the stream, which is the same argument the status
+            # field above is left unacted on for — so a broken observer costs
+            # its own feature and nothing else.
+            try:
+                observer(block)
+            except Exception:
+                pass

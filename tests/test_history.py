@@ -585,6 +585,33 @@ def test_stored_audio_is_readable_back_as_what_went_in(tmp_path: Path) -> None:
     assert np.abs(samples - audio).max() < 1e-3
 
 
+def test_full_scale_survives_the_audio_round_trip(tmp_path: Path) -> None:
+    """The reader's divisor must match the writer's multiplier.
+
+    `test_stored_audio_is_readable_back_as_what_went_in` above cannot catch
+    this: it asserts `< 1e-3` against a systematic error of 3.05e-5, on a ramp
+    that never leaves +/- 0.5. Both halves matter -- the tolerance is thirty
+    times the defect, and the boundary where the two constants diverge most is
+    the one sample the fixture never produces.
+
+    Full scale is the discriminating input. `1.0 * 32767` is exactly 32767, so
+    a reader dividing by 32767 returns exactly 1.0 and one dividing by 32768
+    returns 0.99997. Asserted exactly rather than within a tolerance, because
+    any tolerance loose enough to be safe is loose enough to re-admit the bug.
+    """
+    import numpy as np
+    from tests.conftest import read_wav
+
+    store = HistoryStore(HistoryConfig(store_audio=True), data_dir=tmp_path)
+    audio = np.array([1.0, -1.0, 0.0, 1.0, -1.0], dtype=np.float32)
+
+    store.write_pending(_session(audio=audio))
+
+    written = next(iter(tmp_path.glob("audio/*.wav")))
+    samples, _ = read_wav(written)
+    assert samples.tolist() == [1.0, -1.0, 0.0, 1.0, -1.0]
+
+
 def test_no_audio_is_written_when_history_is_not_retained(tmp_path: Path) -> None:
     """`retain = false` is the privacy path. The pending mechanism exists to
     keep a *transcript* recoverable across a crash; audio is not needed for

@@ -286,9 +286,119 @@ This group raises the bar on reliability — a dropped transcription is not a mi
 Config-selectable, one active at a time:
 
 - **`push_to_talk`** (default) — record while held. Predictable, no false starts.
+  **Carries the double-tap latch** (added 2026-08-09, below).
 - **`toggle`** — press to start, press to stop. For long-form dictation.
 - **`vad_auto`** — press to start, silence detection ends the session.
   Requires VAD (§7.4). Ship behind a flag; it is the mode most likely to misfire.
+
+**All three are selectable from the tray** (added 2026-09-03), alongside
+`[hotkey] binding`. §5.3 already made both config-selectable; what the menu adds
+is that the difference between hold-to-talk and press-to-start is something a
+user tries rather than decides, and editing a TOML file to try it is a barrier
+that keeps two of these three modes unused.
+
+The menu shows each mode's behaviour rather than its config spelling —
+`vad_auto` in a menu is a puzzle, not a choice — and carries this section's own
+warning on it. Changing either setting persists to `config.toml` and rebinds the
+event tap live; there is no restart.
+
+**A false statement stood here for about an hour on 2026-09-03 and is retracted
+in place.** It read: *"There is no double-tap gesture, and there never was."*
+That is wrong. The double-tap latch was specified in detail on 2026-08-09 and
+the section below is its text, restored verbatim.
+
+It was not found because it was never on `main`. Commit `a34dfc6` lives only on
+`phase-3-postprocessing`, which was squash-merged as PR #9 on **2026-08-09** —
+and then had four more commits pushed to it on **2026-08-18**, nine days after
+its pull request closed. A squash merge copies content, not history, so nothing
+downstream of the merge point was ever carried across and no tooling complained.
+A grep of the working tree found nothing and the assistant concluded the feature
+had never existed, which is what a stale read looks like when it is confident.
+
+The lesson is not "grep harder". It is that **a branch whose PR has merged is
+not a branch that is finished**, and this repository has five of them.
+
+#### The double-tap latch (2026-08-09)
+
+**Double-tap the binding to start recording hands-free; a single tap ends it.**
+The hold gesture is untouched — both gestures are live on one key, and no mode
+switch is involved.
+
+*Why it is not `toggle`.* `toggle` is a mode, and §5.2's opening sentence binds
+modes to one at a time, so selecting it **costs the user push-to-talk entirely**.
+The reported need was not "I prefer press/press"; it was "a seventy-five second
+dictation pins my hand to a key". A mode that trades the default gesture away to
+solve a gesture problem is the wrong shape. `toggle` remains as written for users
+who want press/press and nothing else.
+
+**The first tap is a complete push-to-talk dictation, and this is the whole
+difficulty.** A double-tap is two press/release pairs; a naive implementation
+records, decodes and injects a ~100 ms fragment before the latch engages. Three
+resolutions were weighed and the ordering matters:
+
+- **Capture, then discard on latch** — *chosen*. Capture starts on the first
+  press exactly as it does today, so push-to-talk keeps its latency and loses no
+  leading audio. If a second press arrives inside `double_tap_ms`, the fragment
+  is dropped **before it reaches the decoder**. It costs nothing to discard:
+  nothing was transcribed, so §8 has nothing to persist and no guarantee is
+  touched.
+- **Defer the start until the window expires** — rejected. It silently drops the
+  first ~300 ms of *every ordinary dictation* to serve the new gesture, which
+  regresses the default path to improve the exception.
+- **Process the fragment normally** — rejected. Every hands-free session would be
+  preceded by a stray word landing at the cursor.
+
+**How the fragment is actually discarded** (added 2026-09-03, at implementation).
+The section above says the fragment is dropped before the decoder and does not
+say *how*, and the two facts it sits between are in tension: `push_to_talk`
+hands the audio to the worker on the physical **release**, and the second press
+of a double-tap arrives after that release. By then the session is queued and
+the worker — blocked on `get()` — has it in microseconds. A cancel racing that
+is not a guarantee, it is a coin toss, and `abort_session` (choice-story #7)
+only discards a session that is *still recording*.
+
+Resolved by **discriminating a tap from a hold on the release**, which costs
+nothing because the two are already different gestures:
+
+- Released after `double_tap_ms` or more — a **hold**. Ends the session
+  immediately, exactly as today. Every ordinary dictation is a hold, so **G1 is
+  untouched**: no dictation anyone actually speaks is delayed by a millisecond.
+- Released inside `double_tap_ms` — a **tap**, which is not yet distinguishable
+  from the first half of a double-tap. The end is deferred until the window
+  expires. A second press inside it calls `abort_session` while the capture is
+  still open, which is the literal "before the decoder" the section asks for:
+  nothing was queued, nothing decoded, and §8 has nothing to persist.
+
+**The cost, stated rather than discovered later:** a deliberate push-to-talk
+utterance shorter than `double_tap_ms` has its *end* delayed by the remainder
+of the window. That is the price of the guarantee and it is paid only by
+utterances under 350 ms, which §5.7's guard cannot measure anyway — its
+numerator quantises to whole seconds below ~3 s. `double_tap_ms = 0` removes
+both the latch and this deferral together.
+
+Deferring the **start** remains rejected for the reason given above; this defers
+an end that no real dictation reaches.
+
+**The second press's own release is swallowed**, or the latch would end on the
+gesture that opened it: press-two enters the latch, and its release arriving
+80 ms later is a tap by every test above.
+
+**Ending a latched session is a single tap and nothing else.** A hold during
+latch is ignored rather than treated as the start of a new push-to-talk: the same
+physical gesture would mean "end the latch" to the code and "begin dictating" to
+the hand, and one of those readings would be wrong every time. Composing the latch
+with `vad_auto` was rejected for this release — §5.2 already calls `vad_auto` the
+mode most likely to misfire, and a misfire truncates a long-form dictation
+mid-sentence, which is the exact case the latch exists to serve.
+
+`max_duration_seconds` (§5.3) already bounds a latched session. It needs no
+second ceiling.
+
+**§5.4 binds this and sequences it.** Hands-free means the user's hand is off the
+key, which removes the physical proof that the microphone is live — so the latch
+is the feature that turns a weak recording indicator from imperfect into
+dangerous. It ships **after** Phase 4's louder recording affordance, not
+alongside it (§9, Phase 4).
 
 ### 5.3 Configuration
 
@@ -319,6 +429,14 @@ configurability is how this PRD discharges tradeoffs it cannot resolve.
 [hotkey]
 mode = "push_to_talk"       # push_to_talk | toggle | vad_auto
 binding = "right_option"
+double_tap_ms = 350         # 0 disables the latch. push_to_talk only — see §5.2.
+                            # Restored 2026-09-03: specified 2026-08-09 and lost
+                            # when the branch carrying it was squash-merged
+                            # before the commit existed. A **motor** threshold,
+                            # not a software one — it is how fast this user's
+                            # hand taps, which is why macOS makes its own
+                            # double-click interval user-settable. Stated as
+                            # UNMEASURED.
 
 [audio]
 device = "default"          # or a substring match on device name
@@ -372,11 +490,15 @@ terminal_punctuation = true # added 2026-08-08, Phase 3. Appends "." when the
                             # filename field. §7.3's own standard — "a tool that
                             # rewrites your punctuation has moved the problem" —
                             # is the argument for the key, not against the rule.
-spoken_commands = false     # added 2026-08-08, Phase 3. "new paragraph" -> \n\n.
-                            # Off by default because it DELETES content words and
-                            # nothing measures it: no take in either corpus
-                            # contains one. The Phase 3 gate reports its firing
-                            # rate; if it changes nothing, the code goes.
+spoken_commands = true      # added 2026-08-08 Phase 3, off; ON from 2026-09-02.
+                            # "new paragraph" -> \n\n. It DELETES content words,
+                            # so it fires only on a complete standalone sentence.
+                            # Retire it if it does not fire across 20 dictations
+                            # in which the phrase was actually spoken, with this
+                            # key on. The Phase 3 clause said "if it changes
+                            # nothing, the code goes" and measured zero over a
+                            # corpus containing no spoken command, which cannot
+                            # discriminate. See §7.5's note on the anchors.
 
 [postprocess.llm]
 enabled = false
@@ -389,6 +511,63 @@ restore_clipboard = true
 restore_delay_ms = 150
 warn_on_clipboard_manager = true   # tray indicator when a manager is detected; see §7.3
 
+[vad_auto]                  # added 2026-09-02, Phase 4. §5.2's third capture
+                            # mode. Separate from [vad] deliberately: that block
+                            # trims silence *before transcription* and its
+                            # defaults are the ones §7.2's figures were measured
+                            # under. This one decides *when to stop recording*.
+                            # The two want opposite settings — trimming wants a
+                            # long window because cutting into speech loses
+                            # words, ending wants a short one because the window
+                            # is dead time on every dictation in the mode — and
+                            # sharing them would mean a user tuning
+                            # responsiveness silently moved the configuration
+                            # every published G1 figure was measured under.
+silence_ms = 1200           # trailing silence that ends a session. Shorter than
+                            # [vad] min_silence_duration_ms = 2000 for the
+                            # reason above.
+threshold = 0.02            # RMS below this is silence. Deliberately a plain
+                            # level test and not Silero: this runs per audio
+                            # block on the capture thread, and its failure modes
+                            # are bounded in a way a neural verdict's are not —
+                            # too early costs the tail of a sentence, too late
+                            # costs a wait.
+max_seconds = 120           # hard stop. §5.2 calls vad_auto "the mode most
+                            # likely to misfire", and the dangerous misfire is
+                            # the one that never fires: a detector that misses
+                            # the end leaves the microphone open indefinitely,
+                            # which is §5.4's failure rather than an annoyance.
+                            # This is the floor under that, not a limit on
+                            # dictation length.
+
+[feedback]                  # added 2026-09-02, Phase 4. §5.4 has referenced
+                            # `[feedback] sounds` since 2026-07-30 and no such
+                            # block existed; the key was specified and never
+                            # built. Second instance of that shape after
+                            # `store_audio`.
+overlay = true              # the §5.4 recording affordance with more presence
+                            # than a glyph. ON: it is the deliverable the
+                            # operator asked for after using the glyph and
+                            # finding it insufficient, and a privacy affordance
+                            # that ships off is one nobody sees. macOS's own
+                            # microphone indicator carries §5.4's *correctness*
+                            # half regardless, which is what makes this a key
+                            # rather than a §5.3 bounded exception.
+overlay_position = "bottom" # bottom | top. Where the panel sits. It must not
+                            # cover the caret in the application being dictated
+                            # into, and which edge is safe depends on the user's
+                            # layout, so this cannot be hardcoded.
+sounds = false              # audio cue on start and stop. OFF, and quarantined
+                            # under §5.3's own rule: nothing has measured how a
+                            # cue on every dictation reads over a working day,
+                            # and quarantine carries an obligation to measure.
+                            # §5.4 writes the key as `sounds = true`, which is
+                            # the key *and a value*, not a stated default —
+                            # recorded here because the two readings differ and
+                            # the ambiguity is three years old. §4's secondary
+                            # user is the reason this exists at all: a cue is
+                            # the one recording signal available without sight.
+
 [history]
 retain = true               # false: the transcript is still written before
                             # injection (§8, unconditional) and deleted once
@@ -397,6 +576,19 @@ retain = true               # false: the transcript is still written before
 retain_days = 30
 store_audio = false         # off by default; audio is the sensitive artifact
 ```
+
+**`[hotkey] double_tap_ms` (added 2026-08-09) is a key rather than a constant**
+because it is a **motor** threshold, not a software one: it is how fast *this
+user's hand* taps, and the value that feels instant to one person makes another
+person's deliberate second press look like a hold. 350 ms is the starting
+default and is **stated as unmeasured** — macOS's own double-click interval is
+user-settable for the same reason, and this project does not have a number for
+it yet. `0` disables the latch outright, which is the setting for a user who
+wants the hold gesture and nothing else without giving up `push_to_talk`.
+
+The key is inert outside `push_to_talk`; `toggle` and `vad_auto` have their own
+press semantics and a latch inside either would be two behaviours competing for
+one press.
 
 **Two keys above are not the free choices they look like** (added 2026-08-01,
 Phase 1 findings 2 and 3).
@@ -451,6 +643,52 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   wrong, and §5.4's purpose is served by it regardless of what Amanuensis
   draws. That is a reason to build the richer affordance for *confidence*
   rather than for *correctness*.
+
+  **The affordance is a waveform pill, not a labelled panel** (2026-09-03,
+  second round of the same provenance). The first build was 220×44 with the
+  text "● RECORDING" in it. Its user's verdict, after step 1 of the runbook:
+  *tacky, too square, too big, and it should have no text.* Now 112×26 with a
+  fully round 13 px radius and seven bars driven by the live RMS of the audio
+  being captured.
+
+  Recorded because of *why* the words came out. §5.4 asks for **confidence**,
+  which is a glance — and a label you have to read is slower than motion you
+  cannot miss. A waveform also answers a question a label cannot: it shows the
+  microphone is *working*, not merely that the process believes it is open. The
+  bars never fall to zero, because a flat pill and a frozen pill look the same
+  and "is it live or is it stuck" is the ambiguity this whole section exists to
+  remove.
+
+  This is the second time this requirement has been improved by its user
+  finding the specified behaviour insufficient, which is the argument §5.4
+  already makes about where the requirement came from.
+
+  **The confidence test, written 2026-09-02 before the overlay was built**
+  (choice-story #6, objection O10). The operator's decision sequences this —
+  `NSPanel` overlay now, a real `.app` bundle only if the overlay still fails —
+  which makes a large deferred item turn on a test. A criterion written after
+  the overlay is seen is a criterion written to pass, and this project has that
+  event on record: an earlier revision of the site spec picked its headline band
+  from five candidates by which read best, inside the section written to prevent
+  it. So the criterion is fixed here, in advance, and it is falsifiable:
+
+  > With a full-screen application focused and the menu bar auto-hidden, the
+  > user can answer **"is the microphone live right now?"** correctly, without
+  > moving the pointer, without keyboard input, and without waiting — on both a
+  > live and an idle daemon, three trials each, six of six.
+
+  Full-screen with the menu bar hidden is the condition, not a stress case: it
+  is where the Phase 2b glyph is not merely small but **absent**, and it is
+  ordinary for the writing and coding this product is for.
+
+  Two people judge it and the record carries both. The operator, because the
+  requirement came from his use and he is the one who reported the glyph
+  insufficient. And **the gate's second person**, as one question inside the
+  install observation — they are the only non-author user the phase contains,
+  and a first reaction cannot be had twice. If they disagree, the record says so
+  rather than averaging them.
+
+  **Failing it means the `.app` bundle**, which §9 already scopes.
 - **Clipboard exposure state** — when `strategy = "clipboard"` and a known
   clipboard manager is detected, the tray carries a persistent indicator that
   transcripts transit the system clipboard (§7.3, objection O12). Same
@@ -1284,6 +1522,25 @@ synchronous service layer, an asynchronous I/O layer, and a queue between them. 
 | `HotkeyListener` | OS event tap; posts press/release into the controller |
 | `AudioCapture` | PortAudio callback thread, writing the ring buffer |
 | Transcription, post-processing, injection | one worker thread, draining sessions |
+| `ControlTransport` acceptor | its own thread, added 2026-09-02 |
+
+**The acceptor's thread is named here because the table had four rows and none
+of them served a socket** (choice-story #1). §7.3's floor item 1 exists because
+"a model that is never written down gets re-derived rather than ported", and
+the Phase 4 plan asserted threading was already settled while booking no work
+for the fifth concern it was adding — the same failure shape one component over.
+
+It is a dedicated thread rather than the alternatives, and both were real. A
+main-thread `CFSocket` source keeps the count at four and couples the transport
+to AppKit, which is the opposite of what floor item 3 asks for. Serving from
+the existing worker is free until the worker is mid-transcription, at which
+point `manu status` blocks behind a decode — a status command that hangs
+precisely when you most want to ask.
+
+The acceptor is a **third producer** into the controller, after the event tap
+and the tray. It obeys the same rule they do: it must not block, so `toggle`
+returns as soon as the controller has been told, never when the dictation
+finishes.
 
 **Two queues, not one** (corrected 2026-07-31, objection A6). An earlier revision
 said "§6.2's `AudioCapture` ring buffer is already that queue." It is not the same
@@ -1371,10 +1628,15 @@ amanuensis/
 │   │   ├── base.py
 │   │   ├── factory.py            # platform detection → listener (§7.3 floor)
 │   │   └── macos.py              # renamed from listener.py, 2026-08-03
+│   ├── ipc/                      # added 2026-09-02 at the Phase 4 gate
+│   │   ├── base.py               # ControlTransport ABC (§7.3 floor item 3)
+│   │   ├── factory.py            # platform detection → transport
+│   │   └── macos.py              # unix socket
 │   ├── storage/
 │   │   └── history.py            # HistoryStore
 │   └── ui/
 │       ├── indicator.py          # the minimum §5.4 surface (Phase 2b)
+│       ├── overlay.py            # the §5.4 recording affordance (Phase 4)
 │       └── tray.py               # TrayApp (Phase 4)
 ├── tests/
 │   └── fixtures/asr/             # desk-mic corpus + reference transcripts (§2, Phase 1)
@@ -1652,6 +1914,27 @@ Three things this settles and one it opens.
   rules chain has no rule that lowercases anything. This is structural, not a
   tuning parameter.
 
+**CLOSED 2026-09-02 at the Phase 4 gate, on network behaviour rather than
+accuracy** (ADR 0001's reconsideration note; `scripts/bench_punctuation.py`).
+Moonshine makes two connection attempts to `huggingface.co:443` every time a
+model loads. It falls back to the local cache when blocked, but G3 is verified
+by packet capture and `verify_g3.py` fails on one socket — faster-whisper's
+no-network property is structural and Moonshine's is not, so it is disqualified
+as a runtime dependency before accuracy is considered. On the Phase 3 corpus it
+also collapses: **715 and 866 deletions against faster-whisper's 3**, with
+`moonshine/tiny` degenerating into a repetition loop on a 97-second take.
+
+**One question inside this one stays open and is labelled open:** Moonshine has
+never been fairly compared on **short** utterances, which is the length it is
+built for and the operator's ordinary case. An attempt on 2026-09-02 was
+withdrawn as invalid — it used read scripts as ground truth and scored the
+*shipped* product at 54.09% against its real 8.59%, because the operator
+contracted naturally while reading and the alignment charged his own speech as
+decoder error. A reference transcript has to be what the speaker said, not what
+they were asked to say. **Parakeet has never been benchmarked at all.**
+
+The original note, which the above answers:
+
 **Open, and marked here deliberately: the model may be the constraint rather
 than the chain.** `small.en`'s 7.88% is the lowest edit rate this project has
 measured on real dictation, and it is unreachable only because of G1. If G1 is
@@ -1660,6 +1943,26 @@ faster backend closes the gap — Moonshine and Parakeet are both named in this
 section and neither has been benchmarked for punctuation — this table is the
 evidence to reopen. **Revisit at the Phase 4 gate**, where the per-tier latency
 table is published and the accuracy claim beside it becomes user-facing.
+
+**The Phase 4 default is frozen at `faster_whisper` / `tiny.en`, and this
+sentence is written before the benchmark runs** (2026-09-02, operator
+disposition D3; slicing record S6, objection O1). Phase 4 benchmarks Moonshine
+and Parakeet and **may not move the shipped default on the result.** The order
+matters and is the whole point of writing it here: a benchmark whose consequence
+is decided after the table is seen selects its own outcome, which this project
+has on record once already — an earlier revision of the site spec picked its
+headline band from five candidates by which read best, inside the section
+written to prevent exactly that. A default that changed mid-phase would also
+invalidate every latency figure in the Phase 4 README and reopen G1 against
+§7.1, in the phase whose gate is a second person installing that README.
+
+**The benchmark's deliverable gains deletion counts.** ADR 0001 declined
+Moonshine on an axis none of edit rate, punctuation classes or p50/p95 can see:
+it deletes 12–14 words where the faster-whisper models delete 2–7, and §8 exists
+to refuse silent data loss. `classify_edits`' `decoder_words` bucket merges
+substitution with deletion, so two engines with identical edit rates and
+opposite failure modes score identically. Re-opening a decision on a different
+metric set than the one that closed it is how the closed reason gets lost.
 
 **WER in this document is macro-average** — the unweighted mean of per-sample
 rates (2026-07-31, objection A3). The frozen fixture's mean is **19.62%**. A
@@ -1848,6 +2151,43 @@ ordinary copy:
 | **Transcript, default config — restore on, `restore_delay_ms = 150`** | **yes** |
 | Transcript, `restore_clipboard = false` | yes |
 
+**The asynchronous restore is refused, and this is the third time the question
+has been asked** (2026-09-02, Phase 4 slice S5, operator disposition D1).
+Phase 2b declined it because the restore thread races the next dictation. The
+Phase 4 plan reversed that on the argument that the tray could now report the
+failure. It is refused again, on a measurement rather than an argument.
+
+`scripts/price_restore.py` reads the operator's own history — 93 rows across
+2026-08-03 to 2026-09-01, 92 consecutive pairs:
+
+| | |
+|---|---|
+| `restore_ms` | p50 155.2, p95 155.9, max 156.3 |
+| slack between dictations | p50 92.4 s, p05 −4.8 s, min −5.5 s |
+| pairs the async restore would have helped | **0** |
+| pairs where the worker was busy with real work anyway | 9 |
+
+Nine pairs overlapped and every one overlapped by roughly **five seconds**
+against a restore of 0.155 s. Moving it off the worker buys 2.8% of the
+contention in the only cases where there was any, and in the other 83 the
+worker was idle by a median of a minute and a half.
+
+Against that: `injection/macos.py` states that restoring without waiting for
+the paste "would race the paste itself, which is a worse race than the
+clipboard-manager one and entirely self-inflicted" — and the tray reporting
+that failure does not undo it. The failure is the user's *previous* clipboard
+landing in their document, which is visible only after it has happened. A
+recorded risk is not a mitigation.
+
+Note also what the plan's argument assumed and this section already knew: the
+restore protects nothing measurable. Phase 2a found Maccy 2.7.0 captured the
+transcript with restore on at 150 ms, with a positive control proving the
+instrument could see an ordinary copy.
+
+**This is now settled rather than open.** Reopening it requires a measurement
+showing the operator's inter-dictation gap has changed, not an argument that
+155 ms is a lot of milliseconds.
+
 A 150 ms window is not a mitigation. The transcript of every dictation is
 recorded by a clipboard manager running on default settings, which is what this
 section already said and now no longer has to assert.
@@ -1958,6 +2298,36 @@ over the same ten takes, **7 of 10** transcripts ended with no sentence-final
 punctuation and roughly ten spurious mid-sentence capitals appeared. Both are
 rule-shaped — which is the argument the next paragraph was already making.
 
+**`spoken_commands` is on from 2026-09-02, and its trigger is defeated by the
+defect this section is about.** `_COMMAND_RE` requires a terminator on **both**
+sides — start-of-transcript or `[.!?]` before the phrase, `[.!?]` or
+end-of-transcript after — because the trailing mark was once optional and
+`Add a note. New line items are on order.` lost three words to it. That
+tightening is correct and stays. But the Phase 3 gate measured **58 missing
+sentence marks over ten dictations**, root cause: Whisper supplies no mark at
+the end of its own segments. Those are the same marks the rule anchors on.
+Verified against the shipped regex:
+
+| transcript | fires |
+|---|---|
+| `That is the point. New paragraph. Second point.` | yes |
+| `That is the point New paragraph Second point` | no |
+| `That is the point New paragraph. Second point` | no |
+| `That is the point. New paragraph Second point` | no |
+
+So the Phase 3 firing rate of zero is **two facts stacked**, not one: the
+operator never said the phrase, and had he said it the anchors would most likely
+have been stripped before the rule saw them. The clause "if it changes nothing,
+the code goes" was written expecting the measurement to be about the rule; the
+corpus could not have produced any other number. §5.3's retirement condition is
+rewritten to one that can discriminate — twenty dictations in which the phrase
+was **actually spoken**, with the key on.
+
+Recorded rather than fixed. Loosening the anchors is the change that already
+deleted three content words once, and this is the one rule in the chain that
+deletes them. A user who says "new paragraph" and gets nothing has met this,
+and the README says so.
+
 Start with deterministic rules. They are debuggable, instant, and cover most of the value.
 
 A local LLM pass (Qwen3-0.6B or similar via llama.cpp) can do what rules cannot — reflowing
@@ -2022,8 +2392,63 @@ auth. What does apply:
 
 - No telemetry, no crash reporting, no update check that phones home. If an update check
   is ever added it is opt-in and documented.
+- **Who may command the process that holds the microphone** (added 2026-09-02,
+  Phase 4, slicing record S4). §7.6 forbids interpreting a transcript as a
+  command and never asked the sibling question, which arrives with `manu
+  toggle`: the daemon holds the microphone permanently, and Phase 4 gives it a
+  socket that opens it.
+
+  **The boundary is filesystem permissions and nothing else.** The socket is a
+  unix domain socket at mode `0600` inside the data directory, which is
+  `0700`. Any process running as this user can send `toggle`; no process
+  running as another user can reach it, and nothing on the network can reach it
+  at all because it is not a network socket.
+
+  That is the correct level, and the argument is that it grants no authority a
+  same-user process does not already have. Such a process can synthesise the
+  hotkey through `CGEvent`, open the microphone itself, read the clipboard the
+  transcript transits, and read `history.db` directly. A socket that starts a
+  dictation is strictly less than any of those. Adding a token would move the
+  secret into a file with the same permissions as the socket, protecting the
+  socket from an attacker who by construction can read the token.
+
+  Three things follow and are requirements rather than notes:
+
+  1. **The transport carries no transcript content, ever.** `status` reports
+     daemon state — running, model, permissions, recording or not. It does not
+     report what was said. A `status` that returned the last transcript would
+     open a §7.6 egress path that G3's packet capture cannot see and that this
+     section spent a phase closing.
+  2. **Unknown verbs are refused, not ignored.** The daemon accepts exactly the
+     verbs it implements and answers anything else with an error naming them.
+  3. **A stale socket is not a running daemon.** The file outlives a crash, so
+     `manu status` distinguishes "nothing is listening" from "the daemon says
+     it is idle" — reporting the first as the second is a claim about the
+     microphone that nobody checked.
+
 - Model weights are downloaded once at install over HTTPS with checksum verification, from
   a pinned revision. Never at runtime.
+
+  **What "checksum verification" means here, added 2026-09-02 because for three
+  phases it meant nothing** (objection O8). `download_weights` pinned a revision
+  and verified no digest at all; the claim above had been in this document since
+  2026-07-30 and the code never honoured it — the sixth instance in this project
+  of a stated constraint the implementation did not keep. The mechanism is now:
+  **this project records a SHA-256 for every file of every pinned revision, and
+  the download is re-hashed against that record before the weights are used.**
+
+  The digests are recorded *by this project*, from a snapshot it has, and that
+  is the whole point. Hugging Face already content-addresses LFS blobs, so
+  verifying against the hub's own metadata verifies the hub against itself and
+  catches nothing a compromised or re-pointed hub would do. A digest we wrote
+  down catches it.
+
+  A model with no recorded digests is **not** silently accepted — it is reported
+  as unverified, on the same rule `PINNED_REVISIONS` already follows for
+  revisions. That matters immediately: §7.2's Phase 4 benchmark adds Moonshine
+  and Parakeet, and neither has a pinned revision or a digest. A check that
+  passes for a model it has no record of is a check that cannot fail, which is
+  the shape this section is being amended to close.
 - History DB is created `0600`. Audio storage defaults off.
 - **Both artefacts of an utterance, stated together** (choice-story #7). They are
   handled asymmetrically and the asymmetry is deliberate, so it belongs in one place
@@ -2606,6 +3031,39 @@ documented, install path with checksummed model download.
    what makes §6.3's focus check meaningful. The tray is what a restore
    outliving its session would need in order to report failure anywhere.
 
+**Two additions from the Phase 3 gate** (2026-08-09):
+
+4. **A single-instance guard on `manu daemon`.** Found by running into it: a
+   daemon started two days earlier was still live when a second was started for
+   the gate, and **both** taps saw the binding, both held the microphone, both
+   decoded, and both injected. It doubled every row in `history.db`, pasted
+   every transcript twice, and put `transcribe_ms` at 3854–5236 ms against
+   ~890 ms for the same durations single-process — two Whisper models
+   contending for one CPU. The user-visible symptom was a double paste in one
+   application and nothing anywhere else, which is why it survived two days.
+
+   It is a §5.4 violation before it is a correctness bug: with two daemons the
+   indicator on one reads *idle* while the other is recording, so the interface
+   states the microphone is off while it is on. §5.4 calls that a privacy
+   problem regardless of where the audio goes.
+
+   A PID file or a bound unix socket, refusing to start with the live PID
+   named. It lands here rather than as a Phase 3 patch because §7.3's
+   portability floor item 3 already brings a platform-resolved socket into this
+   phase, and the lock is the same boundary.
+
+5. **The `push_to_talk` double-tap latch** (§5.2, added 2026-08-09). Ships
+   **after** addition 2, not with it. The latch is what removes the user's hand
+   from the key, and the hand on the key is the physical proof that the
+   microphone is live — so the latch converts a weak recording indicator from
+   imperfect into dangerous. Building it on top of the louder affordance is the
+   ordering; building both at once was considered and rejected as a slice large
+   enough to hide either one failing.
+
+   The implementation risk is named in §5.2 and is not the timing: it is that
+   the first tap of a double-tap is already a complete push-to-talk dictation,
+   and the fragment must be discarded **before the decoder**, not after.
+
 The README also carries the **per-tier latency table** — the Tier A G1 figures and the
 Tier B G1-CPU figures, each labelled with **what the machine measured** rather than what
 silicon it has (§2, §4, §7.2; choice-story #8, objection A9) — and the privacy section
@@ -2792,7 +3250,17 @@ Resolve before or at the stated gate. Do not guess.
    tested, and is now not relied upon for v1.
 2. **Settings UI** — tray menu is sufficient for v1. A React/Tauri settings panel is a
    post-v1 question and is not in §9.
-3. **Model distribution** — Hugging Face at first run vs. bundled installer. Phase 4.
+3. ~~**Model distribution**~~ — **RESOLVED 2026-09-02 (operator disposition D2):
+   `manu install`, which already exists, invoked by the first launch rather than
+   by a command the user must discover.** §11.3 offered "Hugging Face at first
+   run vs. bundled installer" and the shipped answer is neither — the weights
+   come from Hugging Face at *install* time, and §7.6's **never at runtime** is
+   unchanged. Recorded because the question nearly resolved the other way: "at
+   first run" reads as the daemon's first start, which would put an HTTPS fetch
+   inside the process whose network silence is G3's headline claim, and
+   `engines/faster_whisper.py:16-19` calls the absence of that path *structural*.
+   The distinction is invisible in the phrase and decides what the Phase 4
+   packet capture is looking at.
 4. ~~**Public repo timing**~~ — **RESOLVED 2026-09-02, by observation: the
    repository has been public since it was created on 2026-07-31.** The decision
    was never taken; it was made by the act of creating the remote public, three
@@ -2853,15 +3321,19 @@ same day.
 |---|---|---|
 | Slicing — `amanuensis-prd` | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
 | Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 4 accepted, 1 merged |
+| Slicing — `phase-4-tray-modes` | `docs/superpowers/slices/phase-4-tray-modes.md` | 8 slices — **all accepted** |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
 | Objections — `collapse-guard` | `docs/superpowers/objections/collapse-guard.md` | 8 objections — 7 accepted, 1 deferred |
 | Objections — `dictionary` | `docs/superpowers/objections/dictionary.md` | 11 objections — **all accepted** |
+| Objections — `phase-3-gate-recommendations-code` | `docs/superpowers/objections/phase-3-gate-recommendations-code.md` | 12 objections — 10 accepted, 1 accepted-and-closed, 1 accepted-not-implemented |
 | Objections — `phase-3-postprocessing-code` | `docs/superpowers/objections/phase-3-postprocessing-code.md` | 12 objections — **all accepted** |
 | Objections — `phase-3-postprocessing` | `docs/superpowers/objections/phase-3-postprocessing.md` | 12 objections — **all accepted** |
+| Objections — `phase-4-plan` | `docs/superpowers/objections/phase-4-plan.md` | 12 objections — 10 accepted, 2 deferred |
 | Choice stories — `amanuensis-prd` | `docs/superpowers/stories/amanuensis-prd.md` | 13 stories — **all accepted** |
 | Choice stories — `dictionary` | `docs/superpowers/stories/dictionary.md` | 8 stories — **all accepted** |
 | Choice stories — `phase-3-postprocessing` | `docs/superpowers/stories/phase-3-postprocessing.md` | 10 stories — 9 accepted, 1 revisit |
+| Choice stories — `phase-4-plan` | `docs/superpowers/stories/phase-4-plan.md` | 12 stories — **all accepted** |
 | Cost estimate | `cost-estimates/2026-07-30-amanuensis-prd-estimate.md` | not adjudicable |
 <!-- END sentinel-index (generated) -->
 
@@ -2900,10 +3372,27 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-03 | **The double-tap latch's "discard before the decoder" was a requirement with no mechanism, and the mechanism is a tap/hold split on the release** (§5.2, §5.3, §9 Phase 4 addition 5). The 2026-08-09 specification chose *capture then discard on latch* over deferring the start, and rejected processing the fragment — but `push_to_talk` queues the audio on the physical **release**, and the second press arrives after it. The worker is blocked on `get()`, so it holds the session within microseconds; `abort_session` discards only a session still recording. The stated guarantee was therefore unreachable by any cancel, and would have shipped as a race nobody had raced. **Resolved without touching G1**: a release after `double_tap_ms` is a hold and ends the session immediately, which is every dictation a person actually speaks; a release inside the window is a tap and its *end* is deferred until the window closes, so a second press finds the capture still open and `abort_session` is literal rather than hopeful. The cost is named in §5.2 rather than found later — a deliberate utterance under 350 ms has its end delayed by the remainder of the window, which is below the floor §5.7's guard can measure at all. The second press's own release is swallowed, or the latch would end on the gesture that opened it. |
+| 2026-09-03 | **Four commits of Phase 3 work were never on `main`, and one of them was a specification the assistant then declared had never existed.** `phase-3-postprocessing` was squash-merged as PR #9 on 2026-08-09 and had four more commits pushed to it on **2026-08-18**, nine days after its pull request closed: the **double-tap latch** specification (§5.2, §5.3, §9), the `initial_prompt` disabling and its length-not-content mechanism, §5.7's structural blindness to an interior drop, the `store_audio` gate clause that could not fail, the 492→458 correction, a **real audio defect** (`scripts/verify_guard.py`, `scripts/measure_long_audio.py` and `tests/conftest.py` divide by 32768 where every writer multiplies by 32767), and a sentinel record with twelve dispositions. A squash merge copies content rather than history, so nothing downstream of the merge point crossed and no tooling objected. The operator asked for the latch as an existing feature; a grep of the working tree found nothing and the assistant wrote **"There is no double-tap gesture, and there never was"** into §5.2 — a false statement, in the governing document, for about an hour. It is retracted in place rather than deleted, and the latch section is restored verbatim from `a34dfc6`. **A branch whose PR has merged is not a branch that is finished**, and this repository has five of them: `docs-close-2b-followup` (2 unmerged), `landing-page` (6), `phase-2b-hotkey` (9), `phase-3-postprocessing` (4), `site-redesign` (2). The Phase 3 close recorded that `git branch -d` refuses them all and treated that refusal as squash-merge bookkeeping. It was also a signal, and nobody read it as one. |
+| 2026-09-03 | **Ten contaminated rows removed from `history.db`, and audio outlives its row** (§5.5, operator authorisation). The 2026-09-02 22:31–22:33 batch was recorded while a test suite ran on the same machine: three of ten takes at 7.4×, 8.9× and 19.6× their idle re-decode cost. They were **in the product's own measurement record**, and the site's eligibility rule provably cannot exclude them — it drops rows sharing a `started_at` second, which catches parallel writes and not external load. The `<= 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Deleted after a `sqlite3 .backup` and with the audio moved to quarantine rather than unlinked, because the DB backup would not have recovered it. **Found in the doing: §5.5's retention sweep cannot reach orphaned audio.** It expires audio via the rows it belongs to, so a wav whose row is gone is never swept — ten orphans survived the delete and were only found by differencing the audio directory against the row ids. `manu history --purge` covers audio because it purges both; nothing covers a row removed any other way. Unfixed, and named here rather than left for the next person to find with a full disk. |
+| 2026-09-02 | **`[engine] backend` was mislabelling `history.db`, and the registry had been dead since Phase 0** (§6.4, §7.2, Phase 4 slice S6). `resolve_engine` raised `NotImplementedError` for **every** backend including `faster_whisper`, which ships — the daemon worked because `cli.py` imported the class by name and never asked. Four phases of dead dispatch behind a §6.4 entry describing the module as "backend string → class, per config". **The cost was not inertness.** `backend` was read in exactly one place, to build the `engine` label on a history row, so `backend = "moonshine"` was accepted, the daemon ran faster-whisper anyway, and the row was recorded as `moonshine:tiny.en`. A key that does nothing is inert; a key that mislabels the measurement record makes every figure derived from those rows a claim about the wrong engine — and this project derives G1 and edit rate from exactly those rows. `_check_coherence` now **constructs** the engine rather than resolving it, because resolving alone left a second route to the same lie: `backend = "moonshine"` with `model = "tiny.en"` passed. Both routes are refused at config load, and both are pinned by tests that fail when the check is reverted. **`engines/moonshine.py` exists at last** — §6.4 has listed it since Phase 0. It absorbs three contract differences rather than papering over them: no prompt so `biased=False` is honoured by already being true, `boost` accepted and dropped, and `decoded_seconds` **`None` rather than 0.0**, because §5.7 routes a `None` to its fallback and would read a zero as "the decoder stopped immediately" and refuse every transcript. **Parakeet is dropped and recorded as a gap**: NVIDIA NeMo has no CoreML or Metal path on macOS. ADR 0001 named it; nothing has ever benchmarked it. |
+| 2026-09-02 | **The asynchronous clipboard restore is refused for the third time, now on a measurement** (§7.3, Phase 4 slice S5, operator disposition D1). Phase 2b declined it because the restore races the next dictation; the Phase 4 plan reversed that on the argument that the tray could now report the failure. `scripts/price_restore.py` reads the operator's own 93 rows: over **92 consecutive pairs, 0** would have been helped. The nine that overlapped did so by roughly **five seconds** against a 0.155 s restore. Reporting a failure does not undo it — the failure is the user's *previous* clipboard landing in their document, visible only after it has happened, and `injection/macos.py` already called this race "worse than the clipboard-manager one and entirely self-inflicted". **Settled rather than open**: reopening needs a measurement that the gap has changed, not an argument that 155 ms is a lot of milliseconds. **§7.3 floor item 1 gets its test.** The model was named in §6.3 and never checked, and `indicator.py`'s preamble calls main-thread discipline "the single most likely thing to be quietly removed" — which Phase 4 promptly did in `TrayApp`, undetected, because the fake main queue runs blocks inline. `tests/test_thread_model.py` drives all three UI surfaces through a **deferring** queue and asserts nothing touched AppKit before it ran. Generic over the surfaces on purpose: a per-surface check is one the fourth surface does not get. Carries its own positive control, and reverting either the tray's or the overlay's dispatch fails it. |
+| 2026-09-02 | **`manu status` and `manu toggle` ship, and §7.6 answers the question it never asked** (§6.3, §6.4, §7.3 floor item 3, §7.6, slicing record S4). The transport spent **two phases as a floor item with no phase**, which §7.3's own words call a floor item that does not exist. `ipc/` joins §6.4 on `hotkey/`'s pattern — `base.py`, `factory.py`, `macos.py` — and the unix socket does not appear in the CLI contract, which floor item 3 requires. **§7.6 gains the authority model.** It forbids interpreting a *transcript* as a command and never asked who may command the process that holds the microphone. The boundary is filesystem permissions and nothing else: `0600` inside a `0700` directory. That is the right level rather than a shortcut, because a same-user process can already synthesise the hotkey through `CGEvent`, open the microphone itself, read the clipboard the transcript transits, and read `history.db` — a socket that starts a dictation is strictly less than any of those, and a token would move the secret into a file with the same permissions as the socket. Three requirements follow: the transport **carries no transcript content ever** (a `status` returning the last transcript is an egress path the packet capture cannot see); unknown verbs are **refused, not ignored**, naming the ones that work; and a **stale socket is not a running daemon**, because reporting "nothing is listening" as "the daemon says it is idle" is a claim about the microphone nobody checked. **§6.3's thread table gains the acceptor's row** (choice-story #1). It had four rows and none served a socket, while the Phase 4 plan asserted threading was settled and booked no work for the fifth concern it was adding — floor item 1's failure shape one component over. A dedicated thread, because a main-thread `CFSocket` source couples the transport to AppKit and serving from the worker makes `manu status` block behind a decode. Found while building it: **`sun_path` is 104 bytes on macOS** and `$AMANUENSIS_DATA_DIR` can exceed it — pytest's own tmp tree does, at 129. Refused with a sentence naming the variable rather than the kernel's bare `AF_UNIX path too long`. |
+| 2026-09-02 | **`toggle` and `vad_auto` ship, and a refusal test opened the operator's microphone** (§5.2, §5.3, §9 Phase 4). `toggle` alternates on key-down and ignores the physical release; `vad_auto` starts on key-down and is ended by a new `SilenceWatcher` on the capture thread, because §5.2 is *press to start, silence ends the session* — the finger still opens the microphone and only the close is automatic. New **`[vad_auto]`** block rather than reusing `[vad]`: that block trims before transcription and its defaults are the ones §7.2's figures were measured under, this one decides when to stop recording, and the two want opposite windows. Sharing them would let a user tuning responsiveness silently move the configuration every published G1 figure was measured under. `max_seconds` is the floor under the mode's worst failure — §5.2 calls `vad_auto` the most likely to misfire and the dangerous misfire is the one that never fires, leaving the microphone open indefinitely. **The incident.** `test_the_daemon_refuses_a_mode_it_does_not_implement` passed `mode="toggle"` and asserted the daemon refused it as unbuilt. Building `toggle` removed the refusal, and the test did not fail — it **hung**, running `_daemon` for real: model loaded, microphone opened, AppKit run loop blocked inside pytest. Two such processes held the operator's microphone for **thirteen and ten minutes** and put two status items in his menu bar. He noticed; the suite did not. A test written against a refusal becomes a test that exercises the thing the moment the refusal is lifted, and it does not announce itself. `tests/conftest.py` gains an **autouse** `_no_real_microphone` guard — the same answer as the 2026-08-08 `_isolate_user_data` fixture, for the same species, because a guard each test must remember is a guard one test forgets. Positive and negative controls both present; removing the guard fails the positive one. |
+| 2026-09-02 | **§7.6's "checksum verification" is implemented, three phases after the sentence was written** (objection O8, §7.6, §9 Phase 4 slice S1). `download_weights` pinned a revision and verified **no digest at all** — sixth instance in this project of a stated constraint the code did not honour, and the first found by a sentinel rather than by a failure. `PINNED_DIGESTS` records a SHA-256 per file per pinned revision, `verify_weights` re-hashes after download and **raises**, and `manu install` prints what it checked. Digests are recorded *by this project* from snapshots it holds: Hugging Face content-addresses its own LFS blobs, so checking a download against hub metadata verifies the hub against itself. A model with **no** recorded digest is reported unverified rather than passed — Moonshine and Parakeet arrive in Phase 4 in exactly that state, and a check that passes for a model it has no record of is a check that cannot fail. Both controls, both verified by sabotage: one wrong hex digit fails the positive control, and a `verify_weights` that always succeeds fails both negative controls. **Separately, writing the README first found a defect the gate would otherwise have spent itself on:** `src/amanuensis/assets/*.wav` is gitignored, so `manu install` fails on any fresh clone at the reference clip. Deliberate — §7.2 needs a clip that is not the user's voice and needs no microphone, and macOS `say` output has no clear redistribution grant — but nothing told the user. The README now generates it as its own step. The provenance is still open and still assigned to this phase. |
+| 2026-09-02 | **`spoken_commands` is on by default, and the sunset clause that nearly deleted it could not have said anything else** (§5.3, §7.5, choice-story #11). Phase 3 shipped the rule off under "if it changes nothing, the code goes" and the gate returned **zero** — over a corpus that contains no spoken command, so the number measures the speaker's habit rather than the rule. The condition is rewritten to one that can discriminate: **twenty dictations in which the phrase was actually spoken, with the key on.** Flipping costs nothing until it is spoken, and it is the only paragraph mechanism the product has before Phase 5, which is unscheduled. Checking the flip found a third fact neither the clause nor the gate knew: **`_COMMAND_RE` requires a terminator on both sides of the phrase**, and §7.5's dominant defect is Whisper supplying no mark at its own segment ends — **58 missing marks over ten dictations**, the same marks the rule anchors on. Verified against the shipped regex; three of four realistic transcripts do not fire. The Phase 3 zero is therefore two facts stacked, and the rule's trigger is defeated by the error class it sits beside. **Recorded, not fixed** — loosening the trailing anchor back to `[.!?]?` is the change that deleted three content words from `Add a note. New line items are on order.`, and this is the one rule in the chain that deletes them. Pinned by a test carrying the actual strings. |
+| 2026-09-02 | **Three sentinels were run against the Phase 4 plan while it was still a sketch, and two of four operator decisions did not survive contact with the repository** (`docs/superpowers/{slices,objections,stories}/phase-4*`). Twelve objections, two critical. **The asynchronous clipboard restore was priced before it was built** and buys nothing: over 92 consecutive dictations spanning a month, **0 pairs** would have been helped — the nine that overlapped did so by ~5 s against a 0.155 s restore, and `injection/macos.py:132-137` already records that restoring without waiting for the paste is *a worse race than the clipboard-manager one and entirely self-inflicted*. **§11.3 is resolved as `manu install` invoked by first launch**, not as a fetch in the daemon: the phrase "at first run" would have put an HTTPS call inside the process whose silence G3 verifies, and `verify_g3.py:77-78` fails on one socket or one byte with no notion of permitted install traffic. **§7.2 freezes the Phase 4 default before the benchmark runs**, because a benchmark whose consequence is decided after the table is seen selects its own outcome — the site's headline band is the precedent — and the deliverable gains **deletion counts**, the axis ADR 0001 actually decided Moonshine on and the one `classify_edits` merges into `decoder_words`. Also found and unfixed: `download_weights` verifies **no digest** while §7.6 claims checksum verification (sixth instance of a stated constraint the code does not honour), and **§6.3's thread table has four rows and none serves a socket** — floor item 1's failure shape one component over, in the phase that adds the acceptor. |
 | 2026-09-02 | **G2's threshold is confirmed at 5% and the miss is carried as debt** (§2, §9, `docs/gates/phase-3.md`). §9 permits moving a missed threshold and requires the reason stated; the Phase 3 gate measured the reason — 95% of the 8.59% is decoder-side, 58% of *that* is one class no rule reaches — and left the number to the operator. Disposition: **do not move it.** A measured reason to move is not an obligation to, and `small.en` reaches 7.88% on the same corpus while being priced out only by G1's p95 — so relaxing the target before the engine question is settled would fix 8.59% as acceptable using evidence the Phase 4 gate may overturn. Revisited there. Also **§11.4 is resolved by observation rather than by decision**: the repository has been public since it was created on 2026-07-31, three phases before this section expected to answer the question, and every `.gitignore` argument about verbatim dictation was made in an interval this document still described as open. |
+| 2026-08-18 | **`[engine] initial_prompt` disabled, and the reason is length rather than the prompt** (§5.6, §5.7). Isolated at the Phase 3 gate: a 30-character domain-matched prompt loses nothing; every prompt over ~150 characters drops words mid-transcript regardless of subject, including one about sourdough — Whisper's decoder context is shared between prompt and output. §5.6's mechanism 1 was the cheap stand-in for the replacement map, the map now does its one recorded win (`Excels X` → `XLSX`) deterministically in 0.13 ms, and **four of the dictionary's eight entries existed only to repair `Cloud` for `Claude` that the prompt itself manufactured** (fixture L04: biased 6×/0×, unbiased 0×/5×) — the prompt was paying for its own cleanup and the dictionary's measured benefit was inflated by it. Two consequences accepted rather than discovered: `faster_whisper.py:355` concatenates `[boost]` into the same argument, so this closes an instance and not the shape; and `_why_no_retry` now refuses unconditionally, making `DictationState.RECOVERED` dead code and reducing §5.7 to detect-and-refuse. |
+| 2026-08-18 | **§5.7's coverage is structurally blind to an interior drop, and the phase that found it could not measure its own incidence.** `decoded_seconds = max(segment.end)` over speech seconds is 1.0 whenever the *last* segment reaches the end, so a transcript missing a passage in the middle reads as perfectly covered — all ten gate dictations recorded `guard_coverage = 1.0` while live output ran 109 words short of the prompt-off decode. The gap follows from two lines and needs no experiment. **The incidence does not:** the first attempt to quantify it reported a 103-word loss on a take whose live transcript was full length, because the measurement ran on `store_audio`'s int16 round-trip rather than the array the decoder saw. A remedy was drafted (`voiced / span`) and withdrawn — it is blind to a *head* drop for the same reason coverage is blind to an interior one, and it reintroduces the padding confound the 2026-08-07 correction removed. Recorded here unresolved rather than closed with a metric that fails the same way. |
+| 2026-08-18 | **The Phase 3 gate's `store_audio` clause could not fail, twenty lines below the docstring describing the eighth such check.** `if rows and not list(audio_dir.glob("*.wav"))` asks whether *any* WAV exists, never joining a gate row to its file — so leftovers from a corpus being discarded satisfy it, which is exactly the disk state when a gate is re-recorded after a config change. `_sweep_audio` expires audio on `retain_days` while rows persist, making rows-without-audio the normal steady state of a long-lived daemon rather than an edge case. Now per-row and verified by sabotage. **Ninth instance in this repository, and the second in this file on the same day** — the same pass that fixed the dictionary's instrument check read the block above it and not the block below. |
+| 2026-08-09 | **The double-tap latch is specified inside `push_to_talk` rather than as a mode** (§5.2, §5.3, §9 Phase 4 addition 5). §5.2 already had `toggle` — "press to start, press to stop" — scheduled for Phase 4, and it does not answer the request: modes are one-at-a-time, so choosing `toggle` **costs the user push-to-talk entirely**, and the reported need was not a preference for press/press but that a seventy-five-second dictation pins a hand to a key. So the latch lives inside `push_to_talk` and both gestures are live on one binding. The difficulty is not the timing: **the first tap of a double-tap is already a complete push-to-talk dictation**, so the fragment is captured as normal and discarded *before the decoder* if a second press lands inside `double_tap_ms` — deferring the capture instead would drop the first ~300 ms of every ordinary dictation to serve the exception. A latched session ends on a single tap only; a hold is ignored, because the same gesture would otherwise mean "end the latch" to the code and "begin dictating" to the hand. `double_tap_ms = 350` is **stated as unmeasured** — it is a motor threshold, which is why macOS makes its own double-click interval user-settable. Sequenced *after* §5.4's louder recording affordance: the latch is what takes the user's hand off the key, and that hand was the physical proof the microphone was live. |
+| 2026-08-09 | **Two daemons ran at once for two days, and nothing in the product noticed** (§9 Phase 4 addition 4). A `manu daemon` started 2026-08-07 was still live when a second was started for the Phase 3 gate. Both event taps saw the binding, both held the microphone, both decoded and both injected: every row in `history.db` doubled, every transcript pasted twice, and `transcribe_ms` ran **3854–5236 ms against ~890 ms** for the same durations single-process — two Whisper models contending for one CPU. Nine gate dictations were discarded. It is a **§5.4 violation before it is a correctness bug**: with two daemons the indicator on one reads *idle* while the other is recording, so the interface asserts the microphone is off while it is on. It survived two days because the only user-visible symptom was a double paste in one application. Phase 4 gets a PID file or bound socket, alongside §7.3 floor item 3's transport. |
+| 2026-08-09 | **"492 tests" is not a number this repository has ever produced.** It appears in four places — this table's 2026-08-08 sabotage entry, `CLAUDE.md`, the code-mode objection record twice, and `REFLECTION_LOG.md`. The suite collects **458** (413 `def test_`, parametrise expands), reproduced four ways, and was 401 definitions at the pre-fix commit, so no tree state in the phase yields 492. The *finding* those entries record survives untouched — reverting the fixes did leave a green suite, and the rewritten tests do now fail under the same sabotage. Only the count was fiction. Corrected in place below and in all four sources. A gate record whose headline lesson is "verify by breaking the code" cannot carry a figure that reproduces nowhere. **Re-applied 2026-09-03**, because the correction rode on `a34dfc6` and that commit never reached `main` — see the 2026-09-03 entry above. The four copies on this branch are not quite the four listed here: this table's 2026-08-08 row, `REFLECTION_LOG.md`, **its source fragment** `reflections/active/2026-08-08-fixing-an-instance-is-not-fixing-a-shape.md`, and the code-mode objection record once rather than twice; `CLAUDE.md` no longer carries it at all. 458 was re-derived rather than copied forward — `pytest --collect-only` against a detached worktree at `45cc63b` collects **458** across 16 files, and 413 `def test_` counts by grep over the same tree. |
+| 2026-08-08 | **Two regression tests written for accepted dispositions could not fail, and were verified by sabotage rather than by review.** Reverting the objection-O3 fix and deleting the `vocab_ms` assignment left all 458 tests green: one test supplied the value under test as a literal argument, the other asserted `>= 0.0` on a field whose default is `0.0`. Both were written immediately after observing the bugs they were meant to pin, which is the trap — **a test written just after a fix feels verified because the failure was just witnessed, and that is a different event from the test having failed.** Both rewritten to run a full dictation; the same sabotage now fails against both. Sixth and seventh instances of a check that could not fail in this repository, and the first two written *after* the pattern was named in a gate record. |
 | 2026-08-08 | **A code-mode review found §8 losing a transcript, and the fix for the same hazard three weeks earlier had closed one third of the window.** `_process` assigned `session.raw_transcript` *after* `_judge` returned, and `_judge` runs a second decode for §5.7's retry — so a raise there reached the handler with the decoder's words in a local variable and nothing persisted. Reproduced. The earlier disposition (objection O1) had guarded the post-processing chain and been recorded as restoring the guarantee; the window between "the words exist" and "the words are safe" still spanned a second decode and a guard evaluation. **Fixing an instance is not fixing a shape**, and this is the fifth time this project has recorded the specification asserting a guarantee the code did not honour. The transcript is now on the session the moment it exists, and the failure path writes it. |
 | 2026-08-08 | **Four rules in `RuleBasedPostProcessor` corrupted ordinary English, and the tests written for two earlier defects in the same file could not see them.** `it was really really good` lost a word; `20 minutes left` became `20 Minutes left`; `the U.S. economy is fine` became `The U.S. Economy is fine.` — two rules compounding, because the space one inserted created a boundary the other acted on; and `Add a note. New line items are on order.` lost three words to the spoken-command rule. All four verified at a REPL. The repeat rule's guard was **inverted from a blocklist to an allowlist** of closed-class function words, which makes the no-deleted-content-word property structural instead of a thing a test has to remember to probe — the third defect in that one function, and the first fix to revisit its premise rather than add a conjunct to it. |
-| 2026-08-08 | **Two regression tests written for accepted dispositions could not fail, and were verified by sabotage rather than by review.** Reverting the objection-O3 fix and deleting the `vocab_ms` assignment left all 492 tests green: one test supplied the value under test as a literal argument, the other asserted `>= 0.0` on a field whose default is `0.0`. Both were written immediately after observing the bugs they were meant to pin, which is the trap — **a test written just after a fix feels verified because the failure was just witnessed, and that is a different event from the test having failed.** Both rewritten to run a full dictation; the same sabotage now fails against both. Sixth and seventh instances of a check that could not fail in this repository, and the first two written *after* the pattern was named in a gate record. |
+| 2026-08-08 | **Two regression tests written for accepted dispositions could not fail, and were verified by sabotage rather than by review.** Reverting the objection-O3 fix and deleting the `vocab_ms` assignment left all 458 tests green: one test supplied the value under test as a literal argument, the other asserted `>= 0.0` on a field whose default is `0.0`. Both were written immediately after observing the bugs they were meant to pin, which is the trap — **a test written just after a fix feels verified because the failure was just witnessed, and that is a different event from the test having failed.** Both rewritten to run a full dictation; the same sabotage now fails against both. Sixth and seventh instances of a check that could not fail in this repository, and the first two written *after* the pattern was named in a gate record. |
 | 2026-08-08 | **A test suite that could read — and was one flag from deleting — the operator's real transcripts.** `manu history` began working in Phase 3, and a pre-existing test that called `main(["history"])` to assert the verb *refused* started listing live rows out of the real data directory; the suite printed them. The read was the visible half. The unacceptable half is that the same phase ships `manu history --purge`, so a test one flag away would have destroyed the artefact §8 exists to preserve, with nothing asserting anything about it. `tests/conftest.py` now points `$AMANUENSIS_CONFIG_DIR` and `$AMANUENSIS_DATA_DIR` at a temporary directory for **every** test, `autouse` rather than opt-in — a fixture each test must remember is a fixture one test forgets, and this failure is silent until it is catastrophic. It uses the product's own documented override rather than patching a path resolver. |
 | 2026-08-08 | **§5.5's three retention gaps closed, and two of them were silent-failure shapes** (objection O11, objection O12). `retain_days` reaches `history.db` at last, on an **ISO-8601 string cutoff** — comparing the TEXT `started_at` against an epoch float does not error, it silently matches nothing, which is a retention sweep that appears to work forever. The sweep runs at daemon start **and daily from the worker**, because a start-only sweep contradicted the long-lived-daemon argument that justifies hot-reloading `vocabulary.toml`. The database moves to **WAL with a 15 s busy timeout**: `manu history` is a second process on the file the daemon holds, IPC is Phase 4, and under the default journal a `--purge` racing `write_pending` raises into the §8 write — losing a transcript to a *history* command. `--purge` covers rows, `pending/`, stored audio and the new `-wal`/`-shm` sidecars, asks before deleting, and repeats §5.5's refusal to claim secure erasure rather than letting the user infer the stronger promise. |
 | 2026-08-08 | **Phase 3's gate could not fail, and the clause that made it so was written before the thing it excused existed** (§9, objection O4, choice-story #8). The reject clause excused an edit rate driven by proper nouns because it "points at §5.6's vocabulary mechanisms, not at a phase failure" — and Phase 3 *builds* §5.6. With G2's 5% movable and §2's 909 ms prediction covering G1, every failure mode was pre-authorised. Amended, and **narrowed to terms present in the frozen `vocabulary.toml`**: un-excusing the class wholesale would fail the gate on the *corpus's scope* rather than the *dictionary's misses*, and would hand Phase 5 a reject clause counting the **87.2% of errors measured as unrecoverable ASR mistranscription**. Two derived latency ceilings added (`postprocess_ms` p95 ≤ 5 ms, `vocab_ms` p95 ≤ 10 ms), plus a minimum instrument — a frozen *empty* dictionary satisfies a SHA-256 and measures nothing, so entry count is recorded and one entry must fire. Second instance in this PRD of a gate that could not fail by construction; the first is §7.5's, about Phase 5. |

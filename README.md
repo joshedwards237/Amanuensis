@@ -7,16 +7,17 @@ No account. No network at runtime. No audio leaving the machine.
 
 ---
 
-## Status: Phase 3 built 2026-08-08. **Gate not yet run — it needs the operator.**
+## Status: Phase 3 gate **PASSED** 2026-09-01. Phase 4 in progress.
 
 **The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
 your words appear at the cursor in whatever application has focus.
 
-Post-processing now runs: the rules pass fixes whitespace, sentence
-capitalisation and punctuation spacing, the dictionary is live on both
-mechanisms, and history retains and purges. What is *not* done is the **gate** —
-ten real dictations of ≥ 60 s judged on edit rate, which is dictation the
-operator has to do. Nothing below should be read as a gate result.
+The Phase 3 gate ran on ten real dictations of 67–97 s and **passed**: edit rate
+**8.59%**, of which 163 of 171 edits are the decoder's and 8 are the rules
+chain's. That misses goal G2's 5% and the threshold was **deliberately not
+moved** — the gap is carried as debt and revisited at the Phase 4 gate.
+[`docs/gates/phase-3.md`](docs/gates/phase-3.md) has the full record, including
+what the measurement cannot see.
 
 Working: model download and the install-time tier check (`manu install`), the
 global hotkey, the resident daemon, microphone capture, silence trimming,
@@ -79,6 +80,110 @@ binary — that is Phase 4.
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
 
+---
+
+## Install
+
+macOS only (PRD §3) and Python **3.12 or later**. There is no packaged app, no
+installer and no signed binary yet — Phase 4 is where that lands. What follows is
+the whole path from nothing to a first dictation.
+
+**1. Get the source and install it.**
+
+```sh
+git clone https://github.com/joshedwards237/Amanuensis.git
+cd Amanuensis
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install .
+```
+
+**2. Generate the reference clip.**
+
+```sh
+scripts/make_tier_clip.sh
+```
+
+The install measures your machine against a ten-second speech clip, and **the
+repository does not ship one**. That is not an oversight: PRD §7.2 requires a
+clip that is not your voice and needs no microphone permission before first use,
+which leaves synthesised speech — and the redistribution grant for a macOS
+system voice is not clear enough to commit one. So you generate it locally with
+`say`. No microphone, no network. Settling this is an open Phase 4 item.
+
+If you are not on macOS-with-`say`, or you would rather use your own recording:
+`manu install --clip /path/to/ten-seconds.wav`.
+
+**3. Download the model and measure this machine.**
+
+```sh
+manu install
+```
+
+This is **the only network access Amanuensis ever makes**, and it happens once.
+It fetches the ASR weights from Hugging Face over HTTPS at a pinned revision,
+then re-hashes every downloaded file against a SHA-256 this project recorded
+itself — a mismatch is refused, not warned about (§7.6). Then it runs nine timed
+decodes on the clip from step 2 to find which speed tier your machine is in.
+
+Expect a few minutes; the download was measured at 185 s on the author's
+connection and yours will differ. It prints `checksums verified`, then your tier
+and the p50 and p95 it measured. Those are your numbers, not ours.
+
+**4. Grant two macOS permissions.**
+
+The daemon needs **Accessibility** (to type into other applications) and **Input
+Monitoring** (to see the hotkey). They are separate panes in System Settings →
+Privacy & Security, and granting one does not grant the other.
+
+**The entry you are looking for carries your terminal's name, not "Amanuensis".**
+macOS attaches these grants to whatever launched the process, so look for
+Terminal, iTerm, Ghostty, or VS Code — whichever you ran `manu` from. This is a
+real wart and it goes away when Phase 4 ships an `.app` bundle. `manu daemon`
+names both permissions and tells you which is missing if you skip this step.
+
+**5. Dictate.**
+
+```sh
+manu daemon
+```
+
+Hold **right-option**, speak, release. The text appears at your cursor in
+whatever application has focus. A glyph appears in your menu bar while the daemon
+runs: `○` idle, `●` recording, `◐` transcribing. Stop the daemon with Ctrl-C.
+
+If you would rather check the pieces before binding a hotkey:
+
+```sh
+manu transcribe --seconds 10        # record and print, inject nothing
+```
+
+**6. Uninstall.**
+
+```sh
+manu history --purge                # transcripts, stored audio, and the database
+pip uninstall amanuensis
+rm -rf ~/Library/Application\ Support/amanuensis    # config, weights cache aside
+```
+
+The model weights live in the Hugging Face cache (`~/.cache/huggingface`) and are
+shared with anything else that uses them; delete that separately if you want the
+disk back. Revoke the two permissions in System Settings — uninstalling does not.
+
+### If it does not work
+
+- **Nothing happens when I hold right-option.** Input Monitoring is not granted
+  to the terminal you launched from. `manu daemon` says so on startup.
+- **The glyph goes `●` then nothing appears.** Accessibility is missing —
+  transcription worked, injection did not. `manu history --last` has your words.
+- **`⚠` after a dictation.** The collapse guard withheld the text because the
+  decoder stopped early. `manu history --last` has what it got.
+- **`manu install` says the reference clip is missing.** Step 2 — the clip is
+  generated locally and is not in the repository.
+- **I said "new paragraph" and got the words instead of a break.** Known, and
+  the cause is documented in PRD §7.5: the rule fires only when the decoder
+  supplied sentence marks on both sides of the phrase, and it frequently does
+  not.
+
 ## What it will do
 
 Press and hold a hotkey, speak, release. The transcript is post-processed and
@@ -118,9 +223,9 @@ that one is not ours to get wrong.
 
 | Goal | Target | Status |
 |---|---|---|
-| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met.** Over every clean row at ≤ 10 s in `history.db` (n = 27): **p50 206.0 ms / p95 538.9 ms**. All stages are now in the number, post-processing included. **Read the scaling note below before quoting this figure** |
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met: p50 312.4 ms / p95 344.5 ms**, over ten dictations of 7.5–10.0 s recorded 2026-09-02 for this purpose, with the full shipped chain. [`docs/gates/g1-at-ten-seconds.md`](docs/gates/g1-at-ten-seconds.md) carries the conditions. **Read the scaling note below before quoting this figure** |
 | Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
-| Accuracy | edit rate ≤ 5% | **not yet measured.** Edit rate is a Phase 3 measurement; the WER figures in `docs/adr/0001-engine-selection.md` are a different quantity |
+| Accuracy | edit rate ≤ 5% | **missed, at 8.59%**, measured over ten real dictations of 67–97 s at the Phase 3 gate. The threshold was deliberately **not moved**; the gap is carried as debt. 163 of 171 edits are the decoder's — see below |
 | Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat below |
 
 Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Metal
@@ -128,14 +233,32 @@ backend, so "Apple Silicon" was never a distinct execution path — a machine's 
 is decided by what it measures at install.
 
 **The latency figure is for a ten-second utterance and it does not generalise
-across lengths.** These are measured bands from `history.db`, with concurrent
-benchmark rows excluded:
+across lengths.**
 
 | you spoke for | text appears after | n |
 |---|---|---|
-| ≤ 10 s | p50 206.0 ms / p95 538.9 ms — the band G1 gates | 27 |
-| 16–60 s | **no band exists** — fewer than the ten clean observations needed before a percentile is publishable | 7 |
-| ≥ 60 s | p50 1566.4 ms / p95 4203.6 ms — well over the 800 ms p95 | 11 |
+| **7.5–10.0 s** | **p50 312.4 ms / p95 344.5 ms** — the band G1 gates, measured deliberately | **10** |
+| 10–60 s | **no band is published** — too few observations under known conditions | — |
+| 67–97 s | p50 ≈ 0.9 s, and over 800 ms throughout — the Phase 3 corpus | 10 |
+
+> **Why the headline row is a dedicated recording and not a query over
+> `history.db`.** A band scraped from stored rows mixes configurations, machine
+> load and product versions, and this project has already published one figure
+> that way and had to withdraw it. On 2026-09-02 a first attempt at the row
+> above produced a p95 of **4014 ms** — three of nine takes running 7.4×, 8.9×
+> and 19.6× their idle re-decode cost on identical-length input, because a test
+> suite was running on the same machine. All nine were discarded rather than the
+> three outliers, because keeping the fastest six would have been choosing the
+> rows that flatter. The accepted run carries the same control and shows
+> 1.29–1.76× with no outliers.
+>
+> Those rows were **removed on 2026-09-03**, after a backup, because the site's
+> eligibility rule provably cannot exclude them — it drops rows sharing a
+> timestamp second, which catches parallel writes and not external load. The
+> `≤ 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Until
+> a `config_sha256` provenance column exists, any band this project publishes
+> from stored rows depends on nobody having run anything heavy at the time,
+> which is not a property a database can attest to.
 
 That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
 so. But dictating a paragraph is the ordinary case, and the headline number says
@@ -160,8 +283,8 @@ slower tier. PRD §4 says so in the same place it makes the speed claim.
 
 ## Known costs, stated up front
 
-The PRD's rule is that a cost gets documented rather than papered over. Three
-that will affect you as a user. The first two are now **measured**, not argued.
+The PRD's rule is that a cost gets documented rather than papered over. The
+first two are **measured**, not argued.
 
 - **Your transcripts go into your clipboard manager.** Not "may" — measured
   against a real one (Maccy) on default settings: every transcript was captured,
@@ -194,6 +317,47 @@ that will affect you as a user. The first two are now **measured**, not argued.
   Amanuensis cannot see egress that happens inside a different process, which is
   exactly where the clipboard path goes. The Maccy result above *is* that blind
   spot, measured. (§2 G3)
+
+### The collapse guard has two blind spots, and neither is fixed
+
+§5.7's guard measures **decoded coverage** — how far into your audio the decoder
+got before it stopped — and refuses to inject a transcript that covers less than
+half. It caught a real 30.5-second dictation that came back as two words. Two
+things it cannot do, both established with controls at the Phase 3 gate and both
+still true:
+
+- **It cannot see a hole in the middle.** Coverage is the *end point* of
+  decoding, not how much came back. One take lost 56 words spanning 27.7 s to
+  49.4 s of a single dictation, and the guard reported **coverage 100.0%,
+  passed**. That is invisible by construction, not by oversight.
+- **It cannot fire below about two seconds of speech.** The refusal threshold is
+  unreachable under 2.00 s — measured on 11 of 11 short takes — because the
+  numerator quantises to whole seconds at that length. Short dictation is the
+  ordinary case for most people, and there the guard is decorative.
+
+Both fail **open**: a bad short transcript is injected rather than withheld, so
+you see it at your own cursor and can undo it. That is the safe direction, and
+it is why this is documented rather than treated as a release blocker. It is
+recorded here rather than only in the gate record because the gate record is not
+a document users read.
+
+### What you get in this phase, and what it does not do
+
+- A **recording panel** appears while the microphone is live, and it stays
+  visible over a full-screen application with the menu bar hidden — which is
+  where the menu-bar glyph is not merely small but absent. It never takes focus.
+  Turn it off with `[feedback] overlay = false`.
+- **`hotkey.mode`** accepts `push_to_talk` (default), `toggle` (press to start,
+  press to stop) and `vad_auto` (press to start, silence ends it). `vad_auto`
+  has its own `[vad_auto]` silence window and a `max_seconds` hard stop, because
+  a detector that misses the end would otherwise leave the microphone open.
+- **`manu status`** and **`manu toggle`** talk to a running daemon over a unix
+  socket at mode `0600`. Any process running as you can send those; nothing on
+  the network can, and no transcript text ever crosses that socket.
+- **Spoken commands are on**: say "new paragraph" as a complete sentence and you
+  get a blank line. It frequently will not fire, and the reason is documented —
+  it needs sentence marks on both sides of the phrase, and the decoder often
+  supplies neither.
 
 ## Scope
 

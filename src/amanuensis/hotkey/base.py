@@ -37,7 +37,12 @@ class HotkeyListener(ABC):
     """Emits press and release events for the configured binding."""
 
     @abstractmethod
-    def start(self, on_press: HotkeyCallback, on_release: HotkeyCallback) -> None:
+    def start(
+        self,
+        on_press: HotkeyCallback,
+        on_release: HotkeyCallback,
+        on_cancel: HotkeyCallback | None = None,
+    ) -> None:
         """Begin listening. Returns once the tap is installed, not when it stops.
 
         Raises if the OS refuses the tap — on macOS that means Input

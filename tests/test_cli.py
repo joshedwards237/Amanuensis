@@ -12,6 +12,8 @@ decided by implementation order.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +25,7 @@ from amanuensis.cli import (
     build_parser,
     main,
 )
-from amanuensis.config import InjectionConfig
+from amanuensis.config import InjectionConfig, default_data_dir
 from amanuensis.models.results import ClipboardExposure
 
 
@@ -62,40 +64,71 @@ def test_no_subcommand_prints_usage_and_fails() -> None:
     assert main([]) != 0
 
 
-@pytest.mark.parametrize(
-    ("verb", "phase"),
-    [
-        # `daemon` left this table in Phase 2b — it does something now, and
-        # calling `main(["daemon"])` from a test would take the microphone and
-        # block in an AppKit run loop. Its paths are tested below, all of them
-        # ones that return before anything is opened.
-        ("toggle", "Phase 4"),
-        ("status", "Phase 4"),
-    ],
-)
-def test_each_verb_names_the_phase_that_builds_it(
-    verb: str, phase: str, capsys: pytest.CaptureFixture[str]
+@pytest.fixture
+def short_data_dir(monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A data directory short enough for `sun_path`.
+
+    `conftest` isolates `$AMANUENSIS_DATA_DIR` into pytest's tmp tree, which is
+    129 bytes deep — past the kernel's 104-byte limit for a unix socket. The
+    transport refuses that with a sentence rather than a bare `OSError`, which
+    is correct behaviour and not what these tests are about.
+    """
+    import shutil
+    import tempfile
+
+    made = Path(tempfile.mkdtemp(prefix="amn", dir="/tmp"))
+    monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(made))
+    yield made
+    shutil.rmtree(made, ignore_errors=True)
+
+
+@pytest.mark.parametrize("verb", ["toggle", "status"])
+def test_a_verb_with_no_daemon_says_so_and_says_how(
+    verb: str, capsys: pytest.CaptureFixture[str], short_data_dir: Path
 ) -> None:
+    """Both verbs shipped in Phase 4, and this test replaces the one asserting
+    they were unbuilt.
+
+    §7.6's third requirement is the content: "nothing is listening" and "the
+    daemon says it is idle" are different facts, and reporting the first as the
+    second is a claim about the microphone nobody checked. So a missing daemon
+    is an error with a non-zero exit and a next step, not a shrug.
+
+    It runs against `$AMANUENSIS_DATA_DIR` in a temp directory — `conftest`
+    already redirects it — so it can never reach a daemon the operator has
+    running, and never starts one.
+    """
     exit_code = main([verb])
 
     assert exit_code != 0
-    assert phase in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "not running" in err.lower()
+    assert "manu daemon" in err, "the error must name the next step"
 
 
-def test_toggle_and_status_name_the_transport_they_are_waiting_on() -> None:
+def test_toggle_and_status_name_the_transport_they_are_waiting_on(
+    short_data_dir: Path,
+) -> None:
     """Recorded at the Phase 2b gate: §9's Phase 2b names the listener, the
     controller and the indicator, and does not name these two. Both need the
     IPC transport §7.3 lists as portability floor item 3, which no phase ever
     scheduled — so they move to Phase 4, which owns `toggle` mode and the tray.
 
     Asserted here rather than left as prose, because the previous value said
-    Phase 2b and this phase is the one that would have shipped the lie.
+    Phase 2b and this phase is the one that would have shipped the lie. The
+    assertion moved from a phase label to the transport itself once Phase 4
+    built them.
     """
-    from amanuensis.cli import _VERB_PHASES
+    from amanuensis.ipc.factory import create_transport
 
-    assert _VERB_PHASES["toggle"] == "Phase 4"
-    assert _VERB_PHASES["status"] == "Phase 4"
-    assert "daemon" not in _VERB_PHASES
+    # The socket is not in the CLI contract — §7.3 floor item 3 — so the thing
+    # asserted is that a transport resolves at all, not what kind it is.
+    transport = create_transport()
+    assert transport.path.name == "daemon.sock"
+    assert transport.path.parent == default_data_dir(), (
+        "the socket lives beside history.db so one $AMANUENSIS_DATA_DIR "
+        "override moves both; see choice-story #2"
+    )
 
 
 def test_a_bad_config_is_reported_as_an_error_not_a_traceback(
@@ -288,18 +321,29 @@ def test_the_daemon_refuses_an_unsupported_binding(
 def test_the_daemon_refuses_a_mode_it_does_not_implement(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§9's Phase 2b is push-to-talk only. Accepting `vad_auto` and behaving as
-    push-to-talk would be a configured mode silently doing something else —
-    and §5.2 calls `vad_auto` the mode most likely to misfire."""
+    """Accepting an unknown mode and behaving as push-to-talk would be a
+    configured mode silently doing something else.
+
+    **Rewritten 2026-09-02, and the reason is worth keeping.** This test used
+    to pass `mode="toggle"` and assert the daemon refused it as unbuilt. Phase 4
+    built `toggle`, so the refusal it depended on went away — and the test did
+    not fail. It *hung*: `_daemon` ran on, loaded the model, opened the
+    microphone and blocked in the AppKit run loop, in a pytest process, on the
+    operator's machine.
+
+    A test written against a refusal becomes a test that exercises the thing
+    the moment the refusal is lifted, and it does not announce itself when it
+    does. The mode named here is one nothing will ever implement.
+    """
     from amanuensis.cli import _daemon
     from amanuensis.config import AppConfig, HotkeyConfig
 
-    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(mode="toggle")))
+    exit_code = _daemon(AppConfig(hotkey=HotkeyConfig(mode="telepathy")))
 
     assert exit_code != 0
     err = capsys.readouterr().err
-    assert "toggle" in err
-    assert "Phase 4" in err
+    assert "telepathy" in err
+    assert "push_to_talk" in err, "the error must name a mode that works"
 
 
 def test_the_daemon_reports_both_missing_permissions_at_once(
@@ -330,6 +374,68 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
     err = capsys.readouterr().err
     assert "Accessibility" in err
     assert "Input Monitoring" in err
+
+
+def test_a_second_daemon_is_refused_before_it_takes_the_microphone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§9's single-instance guard, asserted at the position that makes it one.
+
+    The transport has refused a second bind since it was written; what was
+    wrong was *when* `_daemon` reached it. The bind lived at `control.serve`,
+    below `create_hotkey_listener`, `AudioCapture`, `TrayApp` and
+    `controller.start` — so the second daemon installed an event tap, opened
+    the microphone and added a second status item, and only then discovered it
+    should not exist. §5.4 calls that intermediate state a privacy problem on
+    its own: the indicator on one daemon reads *idle* while the other records.
+
+    So this asserts an ordering, not a return code. The autouse
+    `_no_real_microphone` guard raises if `AudioCapture` is ever constructed
+    for real, and `TrayApp` is monkeypatched to raise — either one firing means
+    the refusal came too late. A test that only checked the exit code would
+    have passed against the broken order, because the broken order also exits
+    non-zero, just after taking three things it should not have.
+    """
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig
+    from amanuensis.hotkey import macos as macos_hotkey
+    from amanuensis.injection import macos as macos_injection
+    from amanuensis.ipc import factory as ipc_factory
+    from amanuensis.ipc.macos import UnixSocketTransport
+    from amanuensis.ui import tray as tray_module
+
+    class _Granted:
+        def CGPreflightPostEventAccess(self) -> bool:
+            return True
+
+        def CGPreflightListenEventAccess(self) -> bool:
+            return True
+
+    monkeypatch.setattr(macos_injection, "_quartz", _Granted)
+    monkeypatch.setattr(macos_hotkey, "_quartz", _Granted)
+
+    def _too_late(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the tray was built before the guard refused")
+
+    monkeypatch.setattr(tray_module, "TrayApp", _too_late)
+
+    # A short path: sun_path is 104 bytes and pytest's tmp tree is 129.
+    holder_dir = Path(tempfile.mkdtemp(prefix="amn", dir="/tmp"))
+    incumbent = UnixSocketTransport(holder_dir / "d.sock")
+    incumbent.claim()
+    monkeypatch.setattr(
+        ipc_factory, "create_transport", lambda: UnixSocketTransport(incumbent.path)
+    )
+    try:
+        exit_code = _daemon(AppConfig())
+    finally:
+        incumbent.stop()
+        shutil.rmtree(holder_dir, ignore_errors=True)
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "already listening" in err
+    assert "manu status" in err, "the refusal must name a next step"
 
 
 # ---------------------------------------------------------------------------
@@ -419,3 +525,18 @@ def test_history_last_says_so_when_there_is_nothing(
     assert main(["history", "--last"]) == 0
 
     assert "no transcripts" in capsys.readouterr().out.lower()
+
+
+def test_a_data_dir_too_deep_for_a_socket_is_a_sentence_not_a_traceback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`sun_path` is 104 bytes on macOS and the kernel's own error names
+    nothing. `$AMANUENSIS_DATA_DIR` is user-set and can easily exceed it —
+    pytest's own tmp tree does, which is how this was found.
+    """
+    exit_code = main(["status"])  # conftest's isolated data dir is 129 bytes
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "AMANUENSIS_DATA_DIR" in err
+    assert "Traceback" not in err

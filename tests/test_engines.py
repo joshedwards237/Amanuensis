@@ -34,11 +34,16 @@ from numpy.typing import NDArray
 from amanuensis.config import EngineConfig
 from amanuensis.engines.base import TranscriptionEngine
 from amanuensis.engines.faster_whisper import (
+    PINNED_DIGESTS,
+    PINNED_REVISIONS,
     FasterWhisperEngine,
     ModelNotAvailableError,
+    WeightsDigestError,
+    download_weights,
     resolve_device,
     resolve_model_name,
     resolve_model_path,
+    verify_weights,
 )
 from conftest import requires_corpus
 
@@ -456,3 +461,272 @@ def test_no_prompt_and_no_terms_is_none_rather_than_empty() -> None:
     from amanuensis.engines.faster_whisper import FasterWhisperEngine
 
     assert FasterWhisperEngine(EngineConfig(initial_prompt=""))._prompt(()) is None
+
+
+# ---------------------------------------------------------------------------
+# Checksum verification — §7.6, objection O8
+# ---------------------------------------------------------------------------
+
+
+def _snapshot(tmp_path: Path, model: str) -> Path:
+    """A snapshot with every file present and every file wrong.
+
+    Right shape, wrong bytes — so a verifier that only checks for presence
+    passes it and a verifier that hashes does not.
+    """
+    directory = tmp_path / model
+    directory.mkdir()
+    for name in PINNED_DIGESTS[model]:
+        (directory / name).write_bytes(b"not the real weights")
+    return directory
+
+
+def test_every_pinned_revision_has_a_recorded_digest() -> None:
+    """A pin with no digest is a revision nobody verifies (§7.6).
+
+    The two tables are maintained by hand and drift apart silently — this is
+    the assertion that notices.
+    """
+    assert set(PINNED_DIGESTS) == set(PINNED_REVISIONS)
+    for model, files in PINNED_DIGESTS.items():
+        assert files, f"{model} has an empty digest record"
+        assert "model.bin" in files, f"{model} records no digest for the weights"
+        for name, digest in files.items():
+            assert len(digest) == 64, f"{model}/{name} is not a sha256"
+            int(digest, 16)  # raises if it is not hex
+
+
+def test_tampered_weights_are_refused(tmp_path: Path) -> None:
+    """The negative control. Bytes that are not the recorded bytes must fail.
+
+    This is the objection O8 case: for three phases `download_weights` pinned a
+    revision and verified nothing, so this test could not have passed and no
+    test asked it to.
+    """
+    directory = _snapshot(tmp_path, "tiny.en")
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "model.bin" in str(exc.value)
+
+
+def test_a_missing_file_is_refused_not_skipped(tmp_path: Path) -> None:
+    """A digest record that silently ignores an absent file verifies nothing."""
+    directory = _snapshot(tmp_path, "tiny.en")
+    (directory / "model.bin").unlink()
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "model.bin" in str(exc.value)
+
+
+def test_a_model_with_no_recorded_digest_reports_unverified(tmp_path: Path) -> None:
+    """The other half of the shape §7.6 is amended to close.
+
+    Moonshine and Parakeet arrive in Phase 4 with no pin and no digest. A check
+    that passes for a model it has no record of is a check that cannot fail, so
+    the absence is reported rather than treated as success.
+    """
+    directory = tmp_path / "unpinned"
+    directory.mkdir()
+    (directory / "model.bin").write_bytes(b"anything at all")
+    result = verify_weights(directory, "moonshine/tiny")
+    assert result.verified is False
+    assert result.files_checked == 0
+
+
+def test_the_real_cached_weights_verify() -> None:
+    """The positive control, against bytes this project actually shipped on.
+
+    Without it the negative control above is passed by a function that refuses
+    everything. Skips rather than fails where the cache is cold — the digests
+    are the artefact under test, not the download.
+    """
+    try:
+        directory = resolve_model_path("tiny.en")
+    except ModelNotAvailableError:
+        pytest.skip("no local tiny.en snapshot — run `manu install`")
+    result = verify_weights(directory, "tiny.en")
+    assert result.verified is True
+    assert result.files_checked == len(PINNED_DIGESTS["tiny.en"])
+
+
+def test_an_unreadable_file_is_refused_not_raised_through(tmp_path: Path) -> None:
+    """A file that cannot be read has not been verified (§7.6).
+
+    Found by the stress pass, not by the unit tests above: `_sha256` opened
+    without catching `OSError`, so a `chmod 000` weights file raised
+    `PermissionError` straight past `manu install`'s handler and out as a
+    traceback. Unreadable is a verification failure, not an internal error.
+    """
+    directory = _snapshot(tmp_path, "tiny.en")
+    target = directory / "model.bin"
+    target.chmod(0o000)
+    try:
+        with pytest.raises(WeightsDigestError) as exc:
+            verify_weights(directory, "tiny.en")
+        assert "model.bin" in str(exc.value)
+    finally:
+        target.chmod(0o644)
+
+
+def test_a_file_nobody_recorded_is_refused(tmp_path: Path) -> None:
+    """The record is complete by construction, so an extra file is an anomaly.
+
+    `scripts/record_weight_digests.py` records every file in a snapshot. A
+    verifier that only checks the files it knows about will pass a directory
+    someone has added to, which is a check that cannot fail in the one
+    direction an attacker controls.
+    """
+    directory = tmp_path / "extra"
+    directory.mkdir()
+    for name, digest in PINNED_DIGESTS["tiny.en"].items():
+        source = resolve_model_path("tiny.en") / name
+        if not source.is_file():
+            pytest.skip("no local tiny.en snapshot — run `manu install`")
+        (directory / name).write_bytes(source.read_bytes())
+        assert digest  # the copy is the real bytes, so the control is honest
+    assert verify_weights(directory, "tiny.en").verified is True
+
+    (directory / "payload.bin").write_bytes(b"anything")
+    with pytest.raises(WeightsDigestError) as exc:
+        verify_weights(directory, "tiny.en")
+    assert "payload.bin" in str(exc.value)
+
+
+def test_a_dotfile_does_not_fail_verification(tmp_path: Path) -> None:
+    """macOS writes `.DS_Store` into any directory opened in Finder.
+
+    A verification that fails because someone looked at a folder is one people
+    learn to bypass, so dotfiles are exempt from the unrecorded-file check —
+    deliberately, and this is where that decision is written down.
+    """
+    directory = tmp_path / "browsed"
+    directory.mkdir()
+    for name in PINNED_DIGESTS["tiny.en"]:
+        source = resolve_model_path("tiny.en") / name
+        if not source.is_file():
+            pytest.skip("no local tiny.en snapshot — run `manu install`")
+        (directory / name).write_bytes(source.read_bytes())
+    (directory / ".DS_Store").write_bytes(b"finder junk")
+    assert verify_weights(directory, "tiny.en").verified is True
+
+
+def test_download_weights_refuses_bad_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed. The verification lives inside the download, not beside it.
+
+    Without this, deleting the `verify_weights` call from `download_weights`
+    leaves every other test in this file green — the CLI's own check would
+    still print a refusal, but the function that hands weights to callers
+    would have handed them over first. That is the §7.6 guarantee, so it is
+    tested where it is made.
+    """
+    snapshot = _snapshot(tmp_path, "tiny.en")  # right shape, wrong bytes
+
+    import faster_whisper.utils
+
+    monkeypatch.setattr(
+        faster_whisper.utils, "download_model", lambda *a, **k: str(snapshot)
+    )
+    with pytest.raises(WeightsDigestError):
+        download_weights("tiny.en")
+
+
+# ---------------------------------------------------------------------------
+# The registry, and the label it was writing into history.db
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipping_backend_resolves() -> None:
+    """`resolve_engine` raised `NotImplementedError` for **every** backend
+    since Phase 0 — including the one that ships — while §6.4 describes the
+    module as "backend string → class, per config".
+
+    The daemon worked because `cli.py` imported `FasterWhisperEngine` by name
+    and never asked the registry, which is what let the dispatch stay dead for
+    four phases without anything noticing.
+    """
+    from amanuensis.engines.registry import resolve_engine
+
+    assert resolve_engine("faster_whisper") is FasterWhisperEngine
+
+
+def test_an_unbuilt_backend_still_names_its_phase() -> None:
+    from amanuensis.engines.registry import UnknownBackendError, resolve_engine
+
+    with pytest.raises(NotImplementedError) as exc:
+        resolve_engine("parakeet")
+    assert "parakeet" in str(exc.value)
+
+    with pytest.raises(UnknownBackendError):
+        resolve_engine("not-an-engine")
+
+
+def test_a_backend_the_daemon_will_not_run_is_refused_at_config_time() -> None:
+    """The defect this replaces, and it is worse than a key that does nothing.
+
+    `[engine] backend = "moonshine"` was accepted, the daemon constructed
+    `FasterWhisperEngine` regardless, and `history.db` recorded the row as
+    `moonshine:tiny.en` — because `backend` was read in exactly one place, to
+    build that label. A key that does nothing is inert; a key that mislabels
+    the measurement record makes every figure derived from those rows a claim
+    about the wrong engine.
+
+    Config validation now refuses a backend that cannot be constructed, so the
+    label and the engine cannot disagree.
+    """
+    import tempfile
+
+    from amanuensis.config import ConfigError, load_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.toml"
+        path.write_text('[engine]\nbackend = "parakeet"\n')
+        with pytest.raises(ConfigError) as exc:
+            load_config(path)
+        assert "parakeet" in str(exc.value)
+
+
+def test_a_backend_and_model_that_disagree_are_refused() -> None:
+    """The second route to the same mislabel, and it survived the first fix.
+
+    Resolving the class was not enough: `backend = "moonshine"` with
+    `model = "tiny.en"` still loaded, and the row would still have been written
+    `moonshine:tiny.en`. The engine is constructed rather than merely resolved
+    — both engines validate the model name in `__init__` and load nothing
+    there — so the label and the engine cannot disagree by any route.
+    """
+    import tempfile
+
+    from amanuensis.config import ConfigError, load_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.toml"
+        path.write_text('[engine]\nbackend = "moonshine"\nmodel = "tiny.en"\n')
+        with pytest.raises(ConfigError) as exc:
+            load_config(path)
+        assert "tiny.en" in str(exc.value)
+
+
+def test_the_moonshine_engine_satisfies_the_contract() -> None:
+    """§6.4 has listed `engines/moonshine.py` since Phase 0 and it did not
+    exist. An ABC with one implementation is a claim nobody has tested."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.base import TranscriptionEngine
+    from amanuensis.engines.moonshine import MoonshineEngine
+
+    engine = MoonshineEngine(EngineConfig(model="moonshine/tiny"))
+    assert isinstance(engine, TranscriptionEngine)
+    assert engine.model_name == "moonshine/tiny"
+    assert engine.is_loaded is False
+
+
+def test_moonshine_rejects_a_sample_rate_it_would_silently_mistranscribe() -> None:
+    """No resampling here, so a mismatch transcribes audio played at the wrong
+    speed rather than failing."""
+    from amanuensis.config import EngineConfig
+    from amanuensis.engines.moonshine import MoonshineEngine
+
+    engine = MoonshineEngine(EngineConfig(model="moonshine/tiny"))
+    with pytest.raises(ValueError, match="16000"):
+        engine.transcribe(np.zeros(16000, dtype=np.float32), 44_100)

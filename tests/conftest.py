@@ -42,7 +42,12 @@ def read_wav(path: Path) -> tuple[NDArray[np.float32], int]:
         rate = handle.getframerate()
         frames = handle.readframes(handle.getnframes())
         channels = handle.getnchannels()
-    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    # 32767, matching what every writer in this project uses
+    # (storage/history.py, record_phase3_corpus.py, record_spontaneous.py).
+    # Reading back at 32768 applied a systematic 3.05e-5 gain error to every
+    # sample — half a least-significant bit, and small, but it meant no
+    # round-trip through stored audio was exact even in principle.
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
     return np.ascontiguousarray(samples, dtype=np.float32), rate
@@ -128,3 +133,44 @@ def _isolate_user_data(
     monkeypatch.setenv("AMANUENSIS_CONFIG_DIR", str(base / "config"))
     monkeypatch.setenv("AMANUENSIS_DATA_DIR", str(base / "data"))
     return base
+
+
+class MicrophoneOpenedInTestError(RuntimeError):
+    """A test reached the real audio device. See `_no_real_microphone`."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_microphone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test opens the operator's microphone. Ever.
+
+    **This exists because one did, on 2026-09-02, twice, for thirteen minutes.**
+    `test_the_daemon_refuses_a_mode_it_does_not_implement` passed
+    `mode="toggle"` and asserted the daemon refused it as unbuilt. Phase 4 built
+    `toggle`. The refusal the test depended on went away and the test did not
+    fail — `_daemon` ran on, loaded the model, opened the microphone and blocked
+    in the AppKit run loop inside pytest, leaving a second status item in the
+    operator's menu bar. He noticed it; the suite did not.
+
+    This is the same species as the 2026-08-08 failure that produced
+    `_isolate_user_data` above — a test reaching a real resource because nothing
+    structurally stopped it — and the same answer: `autouse`, not opt-in. A
+    guard each test must remember is a guard one test forgets, and the forgetting
+    is silent until it is not.
+
+    The seam is `AudioCapture._sounddevice`, the same one the capture tests
+    already replace. A test that genuinely wants a fake device replaces it
+    itself and this fixture never fires; a test that reaches for the real one
+    gets an error naming the reason rather than a live microphone.
+    """
+    from amanuensis.audio import capture as capture_module
+
+    def _refuse() -> object:
+        raise MicrophoneOpenedInTestError(
+            "a test reached the real audio device. Replace "
+            "`amanuensis.audio.capture._sounddevice` with a fake, or use the "
+            "`capture` fixtures. See tests/conftest.py::_no_real_microphone — "
+            "this guard exists because a test once held the operator's "
+            "microphone open for thirteen minutes."
+        )
+
+    monkeypatch.setattr(capture_module, "_sounddevice", _refuse)

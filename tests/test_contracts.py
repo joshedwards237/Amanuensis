@@ -100,12 +100,20 @@ def test_unknown_backend_lists_the_ones_that_exist() -> None:
     assert "faster_whisper" in message
 
 
-def test_a_known_but_unbuilt_backend_says_which_phase_builds_it() -> None:
-    """Honest beats convenient: nothing here pretends to be implemented."""
-    with pytest.raises(NotImplementedError) as exc:
-        resolve_engine("faster_whisper")
+def test_a_known_but_unbuilt_backend_says_so_rather_than_pretending() -> None:
+    """Honest beats convenient. Two failure modes, kept distinct: an unknown
+    name is the user's typo, a declared-but-unbuilt one is our gap.
 
-    assert "Phase 1" in str(exc.value)
+    Rewritten 2026-09-02. This used to assert `faster_whisper` itself raised —
+    true since Phase 0, because the registry was a stub for every backend
+    including the one that ships, which is how dead dispatch survived four
+    phases behind a §6.4 entry describing it as "backend string → class".
+    """
+    with pytest.raises(NotImplementedError) as exc:
+        resolve_engine("parakeet")
+
+    assert "parakeet" in str(exc.value)
+    assert "not built" in str(exc.value)
 
 
 # --------------------------------------------------------------------------

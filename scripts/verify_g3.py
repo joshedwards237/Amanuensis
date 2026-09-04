@@ -48,6 +48,8 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -55,6 +57,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -76,6 +79,23 @@ class Observation:
     @property
     def saw_traffic(self) -> bool:
         return bool(self.sockets) or self.bytes_in > 0 or self.bytes_out > 0
+
+
+#: The positive control, defined once because there are now two callers.
+#: It **holds the connection open** while it sleeps. An earlier version
+#: fetched and exited, which validated the byte meter and left the socket
+#: poller unproven — it reported zero sockets on a run that had certainly
+#: opened one, because `lsof` samples every 250 ms and a fast HTTP round trip
+#: closes in less. A control exercising one of two instruments licenses a clean
+#: reading from the other.
+CONTROL_SNIPPET: Final = (
+    "import socket, time;"
+    "s = socket.create_connection(('example.com', 80), timeout=10);"
+    "s.sendall(b'GET / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n');"
+    "s.recv(1024);"
+    "time.sleep(3);"
+    "s.close()"
+)
 
 
 def poll_sockets(pid: int, stop: threading.Event, found: list[str]) -> None:
@@ -118,6 +138,108 @@ def read_bytes(pid: int, samples: int) -> tuple[int, int]:
         except ValueError:
             continue
     return peak_in, peak_out
+
+
+def find_daemons() -> list[int]:
+    """Every running `manu daemon`, by PID.
+
+    Matched on the command line rather than a pidfile because there is no
+    pidfile: the daemon's rendezvous point is the IPC socket, and that carries
+    no PID (§7.6 keeps the transport's payload to two verbs).
+
+    Returns a **list**, and the caller refuses on more than one rather than
+    taking the first. Two daemons share one hotkey — they both inject and both
+    persist every dictation — and observing one of two while the other is also
+    on the network would be a clean reading of half the product. This project
+    has had two running at once, in this phase.
+
+    `pgrep -f` matches its own command line and this process's, so both are
+    excluded explicitly; without that, "is a daemon running" answers yes to
+    the question being asked.
+    """
+    result = subprocess.run(
+        ["/usr/bin/pgrep", "-f", "manu daemon"],
+        capture_output=True,
+        text=True,
+    )
+    mine = {os.getpid(), os.getppid()}
+    return [
+        int(line)
+        for line in result.stdout.split()
+        if line.isdigit() and int(line) not in mine
+    ]
+
+
+def daemon_is_serving() -> tuple[bool, str]:
+    """Ask the daemon a question and see whether it answers.
+
+    **The subject's own positive control, and the check was worthless without
+    it.** `lsof -p` on a dead PID prints nothing and `nettop -p` on a dead PID
+    reports nothing, so a process that has exited reads as 0 sockets and 0
+    bytes — a PASS. "The daemon was silent" and "there was no daemon" were the
+    same measurement.
+
+    It happened: the Phase 4 gate's own daemon observation returned PASS over a
+    PID that no longer existed, while the script's output claimed the tray was
+    drawn and the IPC acceptor was listening. Neither was checked and neither
+    was true.
+
+    `manu status` answering proves three things at once: the process is alive,
+    it is *this* product, and it has the Phase 4 IPC surface §9 wants observed.
+    A Phase 3 daemon would fail it, which is correct — that is not the
+    assembled product.
+    """
+    from amanuensis.ipc.base import ControlRequestError
+    from amanuensis.ipc.factory import create_transport
+
+    try:
+        response = create_transport().request("status")
+    except ControlRequestError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return response.ok, response.detail
+
+
+def observe_pid(label: str, pid: int, seconds: float, samples: int) -> Observation:
+    """Watch a process this script did not start, for a fixed window.
+
+    §9 requires the Phase 4 capture against **the assembled product** — tray
+    running, socket acceptor listening, a real dictation performed. `observe`
+    below cannot do that: it watches only the subprocess it spawns, so a daemon
+    running alongside it is a different PID and entirely invisible. That is a
+    check passing on an adjacent signal, and the Phase 4 runbook told the
+    operator to run it that way before anyone noticed.
+
+    Note what a clean result here does and does not mean. `lsof -i` counts
+    **internet** sockets, so the daemon's unix domain socket is correctly not
+    among them — a unix socket is not a network socket and cannot be reached
+    from off the machine. That is a fact about the transport's design, not
+    something this observation establishes.
+    """
+    observation = Observation(label=label)
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=poll_sockets, args=(pid, stop, observation.sockets)
+    )
+    watcher.start()
+
+    meter = {"result": (0, 0)}
+
+    def sample_bytes() -> None:
+        meter["result"] = read_bytes(pid, samples)
+
+    metering = threading.Thread(target=sample_bytes)
+    metering.start()
+
+    time.sleep(seconds)
+    stop.set()
+    watcher.join()
+    metering.join()
+
+    observation.exit_code = 0
+    observation.bytes_in, observation.bytes_out = meter["result"]
+    return observation
 
 
 def observe(label: str, command: Sequence[str], samples: int) -> Observation:
@@ -188,6 +310,37 @@ def report(observation: Observation) -> None:
     print(f"  bytes in/out   {observation.bytes_in} / {observation.bytes_out}")
 
 
+def _manu_binary() -> str:
+    """Locate the `manu` this interpreter belongs to.
+
+    Was `REPO_ROOT / ".venv" / "bin" / "manu"`, which assumes the virtualenv
+    lives inside the checkout. It does not in a `git worktree`: the venv stays
+    in the original clone, `.venv` is gitignored so it never follows, and this
+    script died with `FileNotFoundError` in the phase whose gate it is.
+
+    `sys.executable` is the interpreter actually running, so its sibling is the
+    right console script whether that is a lobby checkout, a worktree, or a venv
+    somewhere else entirely. `shutil.which` is the fallback for a system
+    install, and a clear error beats a traceback if neither works — the point of
+    this script is to be runnable at a gate.
+    """
+    candidate = Path(sys.executable).parent / "manu"
+    if candidate.is_file():
+        return str(candidate)
+
+    found = shutil.which("manu")
+    if found:
+        return found
+
+    raise SystemExit(
+        f"cannot find the `manu` console script.\n"
+        f"  looked beside this interpreter: {candidate}\n"
+        f"  and on PATH.\n"
+        f"  Install the package (`pip install -e .`) into the environment you "
+        f"are running this with."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify_g3.py",
@@ -198,6 +351,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--seconds", type=float, default=3.0)
+    parser.add_argument(
+        "--daemon",
+        type=float,
+        metavar="SECONDS",
+        default=0.0,
+        help=(
+            "observe a already-running `manu daemon` for SECONDS instead of "
+            "spawning `manu transcribe`. This is what §9's Phase 4 gate asks "
+            "for — the capture against the assembled product, tray drawn and "
+            "IPC acceptor listening — and it is not what the default mode "
+            "measures: that watches only the subprocess it starts, so a daemon "
+            "running alongside it is a different pid and invisible. Dictate "
+            "during the window"
+        ),
+    )
     parser.add_argument(
         "--inject",
         action="store_true",
@@ -228,8 +396,101 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("  resolve_model_path uses local_files_only=True, so a cold cache")
         print("  raises rather than fetching — there is no fetching code path.")
 
-    manu = str(REPO_ROOT / ".venv" / "bin" / "manu")
+    manu = _manu_binary()
     samples = max(4, int(args.seconds) + 6)
+
+    if args.daemon:
+        pids = find_daemons()
+        if len(pids) > 1:
+            raise SystemExit(
+                f"{len(pids)} daemons are running: {pids}.\n"
+                "  Two share one hotkey and both inject and both persist every\n"
+                "  dictation, and observing one while the other is also live\n"
+                "  would be a clean reading of half the product. Quit all but\n"
+                "  one from its menu-bar icon, then run this again."
+            )
+        pid = pids[0] if pids else None
+        if pid is None:
+            raise SystemExit(
+                "no running `manu daemon` found.\n"
+                "  Start one (the Desktop shortcut, or `manu daemon`), leave the\n"
+                "  tray up, then run this again and dictate during the window."
+            )
+        # Before anything is measured: is there something there to measure?
+        serving, detail = daemon_is_serving()
+        if not serving:
+            raise SystemExit(
+                "the daemon did not answer `manu status`, so there is nothing "
+                "to observe.\n"
+                f"  {detail}\n"
+                "  A dead or Phase 3 daemon reads as 0 sockets and 0 bytes — "
+                "silence and\n"
+                "  absence are the same measurement — so this refuses rather "
+                "than passing.\n"
+                "  Start a Phase 4 daemon (the Desktop shortcut) and run this "
+                "again."
+            )
+        print(f"\n2/3. The assembled daemon under observation (pid {pid})")
+        print(f"     Alive and serving: {detail}")
+        print(f"     Watching for {args.daemon:g}s — **dictate now**, so the")
+        print("     window covers a real hotkey press, decode and injection.")
+        subject = observe_pid(
+            f"manu daemon (pid {pid})", pid, args.daemon, samples
+        )
+        print(f"  sockets        {len(subject.sockets)}")
+        for line in subject.sockets:
+            print(f"                 {line}")
+        print(f"  bytes in/out   {subject.bytes_in} / {subject.bytes_out}")
+
+        # And after: was it still there? A daemon that exited mid-window would
+        # have contributed silence for the remainder and read as compliance.
+        still, still_detail = daemon_is_serving()
+        print(f"  still serving  {'yes' if still else 'NO'} — {still_detail}")
+        if not still:
+            print()
+            print("=" * 70)
+            print("G3 (daemon): INCONCLUSIVE — the daemon stopped answering")
+            print("  during the window, so part of this reading is the silence")
+            print("  of a process that was not running.")
+            return 1
+        print()
+        print("  NOTE: this observes whatever the daemon did during the window.")
+        print("  If you did not dictate, it is a reading of an idle process and")
+        print("  §9 asks for the assembled product *working*. Say which, in the")
+        print("  gate record.")
+        control = observe(
+            "a deliberate fetch",
+            [sys.executable, "-c", CONTROL_SNIPPET],
+            samples,
+        )
+        print("\n4. Positive control — the instrument must be able to see traffic")
+        print(f"  sockets        {len(control.sockets)}")
+        print(f"  bytes in/out   {control.bytes_in} / {control.bytes_out}")
+        print()
+        print("=" * 70)
+        if subject.saw_traffic:
+            print("G3 (daemon): FAIL — the assembled daemon touched the network")
+            return 1
+        if not control.saw_traffic:
+            print("G3 (daemon): INCONCLUSIVE — the control saw nothing either,")
+            print("  so this instrument cannot distinguish silence from blindness.")
+            return 1
+        print("G3 (daemon): PASS")
+        print(f"  0 internet sockets and 0 bytes over {args.daemon:g}s of a running")
+        print("  daemon with the tray drawn and the IPC acceptor listening,")
+        print(f"  against {len(control.sockets)} socket(s) and "
+              f"{control.bytes_in + control.bytes_out} bytes for a control.")
+        print()
+        print("  Scope, and it must travel with this result (choice-story #11):")
+        print("  - Amanuensis's own sockets only. Nothing about the rest of")
+        print("    the machine.")
+        print("  - The unix socket behind `manu status`/`manu toggle` is not an")
+        print("    internet socket and is correctly absent here; that is a property")
+        print("    of the transport, not a finding of this capture.")
+        print("  - Transcripts transit the system clipboard by default, where")
+        print("    another process may capture them. Measured: Maccy 2.7.0 captured")
+        print("    every one. That path is invisible to packet capture.")
+        return 0
 
     print()
     print(f"2/3. Full transcribe cycle under observation ({args.seconds:g}s capture)")
@@ -254,12 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         [
             sys.executable,
             "-c",
-            "import socket, time;"
-            "s = socket.create_connection(('example.com', 80), timeout=10);"
-            "s.sendall(b'GET / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n');"
-            "s.recv(1024);"
-            "time.sleep(3);"
-            "s.close()",
+            CONTROL_SNIPPET,
         ],
         samples=8,
     )
@@ -269,7 +525,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
         print("  --tcpdump requested. Run this by hand; it needs root and this")
         print("  script will not ask for your password:")
-        print(f"    sudo /usr/sbin/tcpdump -ni any -c 200 &")
+        print("    sudo /usr/sbin/tcpdump -ni any -c 200 &")
         print(f"    {manu} transcribe --seconds {args.seconds:g}")
         print("  Interface-wide capture also sees every other process on the")
         print("  machine, which is why it is not the primary evidence here.")

@@ -64,7 +64,12 @@ def read_wav(path: Path) -> tuple[NDArray[np.float32], int]:
         rate = handle.getframerate()
         frames = handle.readframes(handle.getnframes())
         channels = handle.getnchannels()
-    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    # 32767, matching what every writer in this project uses
+    # (storage/history.py, record_phase3_corpus.py, record_spontaneous.py).
+    # Reading back at 32768 applied a systematic 3.05e-5 gain error to every
+    # sample — half a least-significant bit, and small, but it meant no
+    # round-trip through stored audio was exact even in principle.
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
     return np.ascontiguousarray(samples, dtype=np.float32), rate
@@ -74,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="measure_long_audio.py")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--corpus", type=Path, default=CORPUS)
+    parser.add_argument(
+        "--biased",
+        action="store_true",
+        help=(
+            "decode with config.toml's initial_prompt applied, as the daemon "
+            "does. Off by default — see the note at the transcribe call."
+        ),
+    )
     args = parser.parse_args(argv)
 
     from amanuensis import guard as guard_module
@@ -104,10 +117,19 @@ def main(argv: list[str] | None = None) -> int:
         vad_ms = (time.perf_counter() - started) * 1000.0
 
         started = time.perf_counter()
-        # Unbiased on purpose: this measures the decoder against duration, and
-        # `initial_prompt` is the one input §5.7 shows can change how far it
-        # gets. A biased run would confound the two.
-        decoded = engine.transcribe(trimmed.audio, rate, biased=False)
+        # Unbiased by default: the original question here is the decoder against
+        # duration, and `initial_prompt` is the one input §5.7 shows can change
+        # how far it gets. A biased run would confound the two.
+        #
+        # `--biased` exists for the *other* question, added at the Phase 3 gate.
+        # Objection O5's short set asks whether the guard refuses genuine short
+        # speech, and the guard's false positives happen in the daemon — which
+        # decodes biased whenever `initial_prompt` or `[boost]` is set, and this
+        # machine's config.toml has set one since 2026-08-03. Measuring the
+        # false-positive direction with bias off would measure a configuration
+        # the operator does not run. Both runs are reported; neither replaces
+        # the other.
+        decoded = engine.transcribe(trimmed.audio, rate, biased=args.biased)
         transcribe_ms = (time.perf_counter() - started) * 1000.0
 
         speech = trimmed.retained_seconds - trimmed.padding_seconds
@@ -136,6 +158,23 @@ def main(argv: list[str] | None = None) -> int:
                 "original_seconds": round(trimmed.original_seconds, 2),
                 "retained_seconds": round(trimmed.retained_seconds, 2),
                 "speech_seconds": round(speech, 2),
+                # The guard's numerator, reported raw because its own
+                # `coverage` is `min(decoded / speech, 1.0)` and a clamped 1.0
+                # cannot distinguish "exactly covered" from "five times over".
+                # That distinction is the whole of objection O5's question —
+                # how much margin a genuine short utterance has before the
+                # refusal fires — and the clamp erases it. This is the input
+                # to the product's verdict, not a second opinion about it.
+                # `float | None` since `engines/moonshine.py` landed
+                # (2026-09-02): an engine that cannot report how far it
+                # got says so rather than claiming zero, which §5.7
+                # would read as "stopped immediately". Carried through
+                # as null for the same reason.
+                "decoded_seconds": (
+                    None
+                    if decoded.decoded_seconds is None
+                    else round(decoded.decoded_seconds, 2)
+                ),
                 "vad_ms": round(vad_ms, 1),
                 "transcribe_ms": round(transcribe_ms, 1),
                 "predicted_ms": round(predicted, 1),
@@ -164,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = {
         "n": len(rows),
+        # Recorded rather than implied. Two runs of this script over the same
+        # files now differ in a way the numbers alone do not show.
+        "biased": args.biased,
         "transcribe_ms_p50": percentile(measured, 50),
         "transcribe_ms_p95": percentile(measured, 95),
         "predicted_ms_p50": percentile(predicted_all, 50),
@@ -181,7 +223,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print()
-    print(f"  n = {summary['n']}   (nearest-rank percentiles, never interpolated)")
+    print(
+        f"  n = {summary['n']}   "
+        f"initial_prompt {'APPLIED' if args.biased else 'off'}   "
+        "(nearest-rank percentiles, never interpolated)"
+    )
     print(
         f"  transcribe_ms   p50 {summary['transcribe_ms_p50']:8.1f}   "
         f"p95 {summary['transcribe_ms_p95']:8.1f}"

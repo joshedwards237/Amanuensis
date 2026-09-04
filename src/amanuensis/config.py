@@ -37,13 +37,14 @@ preserved as the literal string through load and validation, and
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, get_type_hints
 
 import platformdirs
 
@@ -52,18 +53,22 @@ __all__ = [
     "AudioConfig",
     "ConfigError",
     "EngineConfig",
+    "FeedbackConfig",
     "GuardConfig",
     "HistoryConfig",
     "HotkeyConfig",
     "InjectionConfig",
     "LLMConfig",
     "PostprocessConfig",
+    "VadAutoConfig",
     "VadConfig",
     "default_config_path",
     "default_data_dir",
     "default_history_path",
     "load_config",
     "resolve_cpu_threads",
+    "write_hotkey_binding",
+    "write_hotkey_mode",
 ]
 
 _APP_NAME: Final = "amanuensis"
@@ -86,6 +91,19 @@ class ConfigError(Exception):
 class HotkeyConfig:
     mode: str = "push_to_talk"
     binding: str = "right_option"
+    #: §5.2's double-tap latch, restored to the spec 2026-09-03 and built the
+    #: same day. A key rather than a constant because it is a **motor**
+    #: threshold: how fast this user's hand taps, where the value that feels
+    #: instant to one person makes another's deliberate second press look like
+    #: a hold. macOS makes its own double-click interval user-settable for the
+    #: same reason. 350 is a starting default and is **UNMEASURED**.
+    #:
+    #: `0` disables the latch, and with it the tap deferral §5.2 describes —
+    #: a user who wants only the hold gesture pays nothing for a feature that
+    #: is off. Read only in `push_to_talk`; the other two modes have their own
+    #: press semantics and a latch inside either is two behaviours competing
+    #: for one press.
+    double_tap_ms: int = 350
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,12 +213,19 @@ class PostprocessConfig:
     #: adds a content word, and undoing it costs one keystroke against the 70%
     #: of dictations that otherwise need one added.
     terminal_punctuation: bool = True
-    #: "new paragraph" -> a blank line. Off by default because the rule
-    #: **deletes content words** and nothing measures it — no take in either
-    #: corpus contains one. The processor counts what it *would* have done even
-    #: while disabled, so the Phase 3 gate reports a real firing rate rather
-    #: than the structural zero a disabled rule would otherwise produce.
-    spoken_commands: bool = False
+    #: "new paragraph" -> a blank line. **On from 2026-09-02** (§5.3, §7.5,
+    #: choice-story #11). It was off from Phase 3 under a sunset clause — "if it
+    #: changes nothing, the code goes" — and the Phase 3 gate returned zero over
+    #: a corpus containing no spoken command, which cannot tell a rule that does
+    #: nothing from a rule that was never invoked. Flipping costs nothing until
+    #: the phrase is spoken.
+    #:
+    #: It is still the one rule here that **deletes content words**, which is
+    #: why `_COMMAND_RE` fires only on a complete standalone sentence — and why
+    #: §7.5 records that those same anchors are the punctuation Whisper omits.
+    #: The processor counts what it *would* have done even while disabled, so a
+    #: gate reports a real firing rate rather than a structural zero.
+    spoken_commands: bool = True
     llm: LLMConfig = LLMConfig()
 
 
@@ -213,6 +238,65 @@ class InjectionConfig:
     #: detection list is incomplete by nature and absence of a warning means
     #: "no known manager detected", never "no manager present" (§7.3, O12).
     warn_on_clipboard_manager: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class VadAutoConfig:
+    """§5.2's third capture mode: press to start, silence ends the session.
+
+    Separate from `VadConfig` on purpose. That one trims silence *before
+    transcription* and its defaults are the ones §7.2's latency figures were
+    measured under; this one decides *when to stop recording*. The two want
+    opposite windows — trimming wants a long one because cutting into speech
+    loses words, ending wants a short one because the window is dead time on
+    every dictation in the mode — so sharing them would mean a user tuning
+    responsiveness had silently moved the configuration every published G1
+    figure was measured under.
+    """
+
+    #: Trailing silence that ends a session.
+    silence_ms: int = 1200
+    #: RMS below this is silence. A plain level test rather than Silero: this
+    #: runs per block on the capture thread, and its failure modes are bounded
+    #: in a way a neural verdict's are not — too early costs the tail of a
+    #: sentence, too late costs a wait.
+    threshold: float = 0.02
+    #: Hard stop. §5.2 calls this "the mode most likely to misfire" and the
+    #: dangerous misfire is the one that never fires: a detector that misses
+    #: the end leaves the microphone open indefinitely, which is §5.4's failure
+    #: rather than an annoyance.
+    max_seconds: int = 120
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackConfig:
+    """§5.4's surfaces. The block existed in §5.4's prose and nowhere else.
+
+    `[feedback] sounds` has been cited by §5.4 since 2026-07-30 and there was
+    no `[feedback]` table in §5.3, no field here, and no code reading one — a
+    key specified and never built, which is `store_audio`'s shape a second
+    time. It is built now because Phase 4 owns §5.4.
+    """
+
+    #: The recording affordance with more presence than a glyph (§5.4, Phase 2b
+    #: finding 4). On: it is the deliverable the operator asked for after using
+    #: the glyph and finding it insufficient, and a privacy affordance that
+    #: ships off is one nobody sees. It is a key rather than a §5.3 bounded
+    #: exception because macOS's own microphone indicator carries §5.4's
+    #: *correctness* half regardless of what this product draws — so the
+    #: overlay is a confidence feature, and confidence is user-settable.
+    overlay: bool = True
+    #: Which screen edge. The panel must not cover the caret in the application
+    #: being dictated into, and which edge is safe depends on the user's
+    #: layout, so this cannot be hardcoded.
+    overlay_position: str = "bottom"
+    #: Audio cue on start and stop. Off, and quarantined under §5.3's rule that
+    #: off-by-default carries an obligation to measure: nothing has measured
+    #: how a cue on every dictation reads over a working day. §5.4 writes the
+    #: key as `sounds = true`, which is a key *and a value* rather than a
+    #: stated default — the two readings differ and the ambiguity is recorded
+    #: in §5.3 rather than resolved silently here.
+    sounds: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +319,8 @@ class AppConfig:
     guard: GuardConfig = GuardConfig()
     postprocess: PostprocessConfig = PostprocessConfig()
     injection: InjectionConfig = InjectionConfig()
+    vad_auto: VadAutoConfig = VadAutoConfig()
+    feedback: FeedbackConfig = FeedbackConfig()
     history: HistoryConfig = HistoryConfig()
 
 
@@ -344,6 +430,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     "hotkey": {
         "mode": _Rule((str,), _one_of("push_to_talk", "toggle", "vad_auto")),
         "binding": _Rule((str,)),
+        "double_tap_ms": _Rule((int,)),
     },
     "audio": {
         "device": _Rule((str,)),
@@ -387,6 +474,16 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "restore_delay_ms": _Rule((int,), _non_negative),
         "warn_on_clipboard_manager": _Rule((bool,)),
     },
+    "vad_auto": {
+        "silence_ms": _Rule((int,), _positive),
+        "threshold": _Rule((float, int), _non_negative),
+        "max_seconds": _Rule((int,), _positive),
+    },
+    "feedback": {
+        "overlay": _Rule((bool,)),
+        "overlay_position": _Rule((str,), _one_of("bottom", "top")),
+        "sounds": _Rule((bool,)),
+    },
     "history": {
         "retain": _Rule((bool,)),
         "retain_days": _Rule((int,), _non_negative),
@@ -402,6 +499,8 @@ _TOP_LEVEL_TABLES: Final = (
     "guard",
     "postprocess",
     "injection",
+    "vad_auto",
+    "feedback",
     "history",
 )
 
@@ -514,7 +613,27 @@ def _collect(table: str, raw: dict[str, Any], cls: type) -> dict[str, Any]:
     already built.
     """
     rules = _SCHEMA[table]
-    nested = {f.name for f in fields(cls)} - set(rules)
+    # A sub-table is a field whose type is itself a config dataclass. It used
+    # to be "every field this schema does not mention", which made a schema
+    # entry optional: adding `double_tap_ms` to `HotkeyConfig` and forgetting
+    # `_SCHEMA` parsed the key, skipped it, and left the default in place, so
+    # the setting read as accepted and did nothing. Same shape as the
+    # 2026-09-02 `[engine] backend` finding, one layer down. Now a field that
+    # is neither a rule nor a dataclass is a bug in *this* file and says so.
+    # `get_type_hints`, not `f.type`: `from __future__ import annotations`
+    # makes every field type a *string*, and `is_dataclass("LlmConfig")` is
+    # False for the same reason it is False for any other string — which
+    # would classify every sub-table as unschemad and refuse the config
+    # this function exists to load.
+    hints = get_type_hints(cls)
+    nested = {f.name for f in fields(cls) if is_dataclass(hints[f.name])}
+    unschemad = {f.name for f in fields(cls)} - set(rules) - nested
+    if unschemad:
+        raise ConfigError(
+            f"[{table}] has fields with no schema entry: "
+            f"{', '.join(sorted(unschemad))}. Add them to _SCHEMA — without a "
+            "rule the key parses, validates nothing, and is silently dropped."
+        )
 
     values: dict[str, Any] = {}
     for key, value in raw.items():
@@ -537,6 +656,47 @@ def _check_coherence(config: AppConfig) -> None:
     forgets the model path should learn that at daemon start, not on the
     utterance where the pass silently does not happen.
     """
+    # A backend the daemon cannot construct is refused here rather than at
+    # first use, and the reason is sharper than "fail early". `[engine]
+    # backend` was read in exactly one place — to build the `engine` label on a
+    # history row — so an unbuildable value was accepted, the daemon ran
+    # faster-whisper anyway, and `history.db` recorded the row under the engine
+    # that did not produce it. A key that does nothing is inert; a key that
+    # mislabels the measurement record makes every figure derived from those
+    # rows a claim about the wrong engine.
+    from amanuensis.engines.registry import UnknownBackendError, resolve_engine
+
+    try:
+        engine_class = resolve_engine(config.engine.backend)
+        # Constructed, not merely resolved. Both engines validate the model
+        # name in `__init__` and load nothing there, and resolving the class
+        # alone left the mislabel reachable by a different route: `backend =
+        # "moonshine"` with `model = "tiny.en"` passed, and the row would still
+        # have been written as `moonshine:tiny.en`.
+        engine_class(config.engine)
+    except (NotImplementedError, UnknownBackendError) as exc:
+        raise ConfigError(f"engine.backend: {exc}") from exc
+    except ValueError as exc:
+        raise ConfigError(f"engine.model: {exc}") from exc
+    except ImportError as exc:
+        raise ConfigError(
+            f"engine.backend: {config.engine.backend!r} is built but its "
+            f"runtime is not installed ({exc}). Install it, or choose a "
+            "backend whose runtime is present."
+        ) from exc
+
+    if config.hotkey.double_tap_ms < 0:
+        # Found by sabotaging the latch's own tests: a negative window is
+        # arithmetically indistinguishable from `0` everywhere it is read
+        # (`held >= window` is true for any held), so it would silently mean
+        # "off" while reading as a setting the user chose. §5.3 gives `0` that
+        # meaning explicitly, and two spellings of one behaviour is how a user
+        # concludes the key does nothing.
+        raise ConfigError(
+            f"hotkey.double_tap_ms: {config.hotkey.double_tap_ms} is negative. "
+            "Use 0 to disable the double-tap latch (PRD §5.2, §5.3)."
+        )
+
     if config.postprocess.llm.enabled and not config.postprocess.llm.model_path:
         raise ConfigError(
             "postprocess.llm.model_path: required when "
@@ -616,6 +776,12 @@ def load_config(path: Path | None = None) -> AppConfig:
         injection=InjectionConfig(
             **_collect("injection", raw.get("injection", {}), InjectionConfig)
         ),
+        vad_auto=VadAutoConfig(
+            **_collect("vad_auto", raw.get("vad_auto", {}), VadAutoConfig)
+        ),
+        feedback=FeedbackConfig(
+            **_collect("feedback", raw.get("feedback", {}), FeedbackConfig)
+        ),
         history=HistoryConfig(
             **_collect("history", raw.get("history", {}), HistoryConfig)
         ),
@@ -623,3 +789,103 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     _check_coherence(config)
     return config
+
+
+def write_hotkey_mode(path: Path, mode: str) -> None:
+    """Persist `[hotkey] mode`. See `write_hotkey_binding` for the mechanics.
+
+    Offered from the tray beside the binding, because the difference between
+    hold-to-talk and press-to-start is the kind of thing a user tries rather
+    than decides, and §5.2 says all three modes are config-selectable.
+    """
+    from amanuensis.hotkey.macos import available_modes
+
+    _write_hotkey_key(path, "mode", mode, available_modes(), "hotkey.mode")
+
+
+def write_hotkey_binding(path: Path, binding: str) -> None:
+    """Persist `[hotkey] binding` without disturbing anything else.
+
+    Added 2026-09-03 for the tray's hotkey picker: the operator's right-option
+    double-tap fires another application's shortcut, so the binding has to be
+    changeable without hand-editing a file.
+
+    **Text surgery rather than a TOML round-trip, and that is the whole point.**
+    This project's `config.toml` is mostly comments — every value carries the
+    argument for why it is that value, and §5.3 is built on that. `tomllib` is
+    read-only and every writer available would return the data and drop the
+    prose. So this rewrites one line and leaves every byte around it alone.
+
+    Three shapes, in order: the key exists under `[hotkey]` and is replaced in
+    place with its trailing comment intact; the table exists without the key and
+    the key is inserted immediately after the header; neither exists and both
+    are appended.
+
+    The value is validated **before** the file is opened. Writing a binding the
+    listener will reject leaves a daemon that cannot start and a config the user
+    did not hand-edit, which is a bad place to learn about a typo.
+    """
+    from amanuensis.hotkey.macos import available_bindings
+
+    _write_hotkey_key(
+        path, "binding", binding, available_bindings(), "hotkey.binding"
+    )
+
+
+def _write_hotkey_key(
+    path: Path,
+    key: str,
+    value: str,
+    known: tuple[str, ...],
+    label: str,
+) -> None:
+    """One key under `[hotkey]`, rewritten in place.
+
+    Shared by the two public writers rather than duplicated: the delicate part
+    is the table scoping, and two copies of it would drift.
+    """
+    if value not in known:
+        raise ConfigError(
+            f"{label}: {value!r} is not one this listener recognises. "
+            f"Known: {', '.join(known)}"
+        )
+
+    text = path.read_text() if path.is_file() else ""
+    lines = text.splitlines(keepends=True)
+    new_line = f'{key} = "{value}"'
+
+    header = None
+    for index, line in enumerate(lines):
+        if line.strip() == "[hotkey]":
+            header = index
+            break
+
+    if header is None:
+        suffix = "" if not text or text.endswith("\n") else "\n"
+        text = f"{text}{suffix}\n[hotkey]\n{new_line}\n"
+    else:
+        # Only within this table: these are plausible key names elsewhere, and
+        # a file-wide match would rewrite another table's value and leave the
+        # hotkey exactly as it was.
+        end = len(lines)
+        for index in range(header + 1, len(lines)):
+            if lines[index].lstrip().startswith("["):
+                end = index
+                break
+
+        replaced = False
+        for index in range(header + 1, end):
+            match = re.match(rf"(\s*){key}(\s*)=\s*\S+(.*)$", lines[index])
+            if match:
+                trailing = match.group(3)
+                comment = trailing[trailing.index("#") :] if "#" in trailing else ""
+                keep = f" {comment}" if comment else ""
+                lines[index] = f"{match.group(1)}{new_line}{keep}\n"
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(header + 1, f"{new_line}\n")
+        text = "".join(lines)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)

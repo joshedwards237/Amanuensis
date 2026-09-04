@@ -28,6 +28,7 @@ from amanuensis.config import (
     default_history_path,
     load_config,
     resolve_cpu_threads,
+    write_hotkey_binding,
 )
 
 # --------------------------------------------------------------------------
@@ -196,6 +197,39 @@ def test_invalid_enum_value_lists_the_permitted_ones(tmp_path: Path) -> None:
     assert "hotkey.mode" in message
     assert "push_to_talk" in message
     assert "vad_auto" in message
+
+
+def test_a_negative_double_tap_window_is_refused_rather_than_read_as_off(
+    tmp_path: Path,
+) -> None:
+    """Two spellings of one behaviour is how a user concludes a key is inert.
+
+    A negative window is arithmetically indistinguishable from `0` everywhere
+    `hotkey/macos.py` reads it -- `held >= window` is true for any hold and any
+    tap -- so it would silently disable §5.2's latch while reading as a setting
+    that was chosen. §5.3 gives `0` that meaning explicitly and this refuses
+    the other route to it.
+    """
+    path = tmp_path / "config.toml"
+    path.write_text("[hotkey]\ndouble_tap_ms = -1\n")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+
+    message = str(exc.value)
+    assert "hotkey.double_tap_ms" in message
+    assert "0 to disable" in message, "the refusal must name the way to turn it off"
+
+
+def test_zero_double_tap_window_is_accepted_as_the_documented_way_off(
+    tmp_path: Path,
+) -> None:
+    """The negative control on the check above. A refusal that also rejected
+    the documented value would be a check nobody could satisfy."""
+    path = tmp_path / "config.toml"
+    path.write_text("[hotkey]\ndouble_tap_ms = 0\n")
+
+    assert load_config(path).hotkey.double_tap_ms == 0
 
 
 def test_out_of_range_value_is_rejected(tmp_path: Path) -> None:
@@ -405,3 +439,143 @@ def test_retry_below_zero_is_accepted_as_never_retry(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[guard]\nretry_below_coverage = 0.0\n")
     assert load_config(path).guard.retry_below_coverage == 0.0
+
+
+# ---------------------------------------------------------------------------
+# [feedback] — §5.4's keys, specified 2026-07-30 and built 2026-09-02
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_defaults() -> None:
+    """§5.4 referenced `[feedback] sounds` for three phases with no such block.
+
+    `overlay` is on because it is the affordance the operator asked for after
+    finding the glyph insufficient, and a privacy affordance that ships off is
+    one nobody sees. `sounds` is off and quarantined under §5.3's rule: nothing
+    has measured how a cue on every dictation reads over a working day.
+    """
+    feedback = AppConfig().feedback
+    assert feedback.overlay is True
+    assert feedback.overlay_position == "bottom"
+    assert feedback.sounds is False
+
+
+def test_feedback_parses_from_toml(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[feedback]\noverlay = false\noverlay_position = "top"\nsounds = true\n'
+    )
+    feedback = load_config(path).feedback
+    assert feedback.overlay is False
+    assert feedback.overlay_position == "top"
+    assert feedback.sounds is True
+
+
+def test_feedback_rejects_an_unknown_position(tmp_path: Path) -> None:
+    """The overlay must not cover the caret, and "middle" has no meaning."""
+    path = tmp_path / "config.toml"
+    path.write_text('[feedback]\noverlay_position = "middle"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "overlay_position" in str(exc.value)
+
+
+def test_feedback_rejects_a_wrong_type(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[feedback]\noverlay = "yes"\n')
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "overlay" in str(exc.value)
+
+
+def test_feedback_rejects_an_unknown_key(tmp_path: Path) -> None:
+    """A typo that silently does nothing is how `store_audio` did nothing."""
+    path = tmp_path / "config.toml"
+    path.write_text("[feedback]\noverlays = true\n")
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+# ---------------------------------------------------------------------------
+# Writing one key back — the tray's hotkey picker (2026-09-03)
+# ---------------------------------------------------------------------------
+
+
+def test_writing_the_binding_preserves_everything_else(tmp_path: Path) -> None:
+    """The operator's `config.toml` is hand-written and full of comments that
+    explain why each value is what it is. A round-trip through a TOML library
+    would drop every one of them, so this edits the line and nothing else."""
+    path = tmp_path / "config.toml"
+    original = (
+        "# my notes\n"
+        "[hotkey]\n"
+        'mode = "push_to_talk"\n'
+        'binding = "right_option"   # because it is under my thumb\n'
+        "\n"
+        "[engine]\n"
+        'model = "auto"\n'
+    )
+    path.write_text(original)
+
+    write_hotkey_binding(path, "right_shift")
+
+    after = path.read_text()
+    assert 'binding = "right_shift"' in after
+    assert "# my notes" in after
+    assert "# because it is under my thumb" in after, "the comment was lost"
+    assert 'mode = "push_to_talk"' in after
+    assert 'model = "auto"' in after
+    assert load_config(path).hotkey.binding == "right_shift"
+
+
+def test_writing_the_binding_adds_the_key_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[hotkey]\nmode = "toggle"\n')
+    write_hotkey_binding(path, "fn")
+    assert load_config(path).hotkey.binding == "fn"
+    assert load_config(path).hotkey.mode == "toggle"
+
+
+def test_writing_the_binding_adds_the_table_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[engine]\nmodel = "auto"\n')
+    write_hotkey_binding(path, "left_option")
+    assert load_config(path).hotkey.binding == "left_option"
+    assert load_config(path).engine.model == "auto"
+
+
+def test_writing_the_binding_creates_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "config.toml"
+    write_hotkey_binding(path, "right_command")
+    assert load_config(path).hotkey.binding == "right_command"
+
+
+def test_an_unknown_binding_is_refused_before_the_file_is_touched(
+    tmp_path: Path,
+) -> None:
+    """Writing a value the listener will reject leaves a daemon that cannot
+    start, and the user's only clue is a config file they did not hand-edit."""
+    path = tmp_path / "config.toml"
+    path.write_text('[hotkey]\nbinding = "right_option"\n')
+    with pytest.raises(ConfigError):
+        write_hotkey_binding(path, "the_spacebar")
+    assert 'binding = "right_option"' in path.read_text(), "the file was modified"
+
+
+def test_a_binding_in_a_later_table_is_not_mistaken_for_the_hotkey(
+    tmp_path: Path,
+) -> None:
+    """`binding` is a plausible key name elsewhere. A naive line match would
+    rewrite the wrong table's value and leave the hotkey untouched."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[engine]\n"
+        'model = "auto"\n'
+        "\n"
+        "[hotkey]\n"
+        'binding = "right_option"\n'
+    )
+    write_hotkey_binding(path, "fn")
+    text = path.read_text()
+    assert text.index("[hotkey]") < text.index('binding = "fn"')
+    assert load_config(path).hotkey.binding == "fn"
