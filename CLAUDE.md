@@ -57,11 +57,33 @@ the shape of a difference — the surface split called 107 of 171 edits
 chain-attributable and fired the reject clause; the responsibility split puts 8
 inside the chain, on the same file.
 
-**Phase 4 is next** (PRD §9): `TrayApp`, `toggle` and `vad_auto`, `manu toggle` /
-`manu status` and the IPC transport, error surfacing, the README with the
-clipboard caveat and the per-tier latency table, and the checksummed install
-path. Its gate is a second person installing from the README unaided, plus the
-second G3 packet capture against the assembled product.
+**Phase 4 is BUILT (2026-09-03) and its gate has NOT run.** `TrayApp` with mode
+and binding pickers, the `RecordingOverlay`, `toggle` and `vad_auto`, the
+`push_to_talk` double-tap latch, `manu toggle` / `manu status` over a unix
+socket, the single-instance guard, and §7.6's checksummed weight download all
+ship. **G1 is met at ten seconds** — p50 312.4 ms / p95 344.5 ms over ten
+dictations recorded for the purpose, `docs/gates/g1-at-ten-seconds.md`.
+
+What remains is operator-only and is the gate: `docs/gates/phase-4-operator-runbook.md`.
+Steps 1 and 3 have PASSED; **2 (the overlay confidence test), 4b (the latch and
+the second daemon), 5 (the gate record) and 6 (the n=1 install) have not.**
+Do not open Phase 5 until step 6 is done and the record is written.
+
+**A branch whose PR has merged is not a branch that is finished** (2026-09-03).
+`phase-3-postprocessing` was squash-merged as PR #9 and had four more commits
+pushed to it nine days later; a squash copies content rather than history, so
+none of them crossed and no tooling objected. One was the double-tap latch
+specification, which was then declared never to have existed. All five stale
+branches are now audited and deleted, and PR #14 was merged with
+`--delete-branch` for exactly this reason. **Delete the branch at merge.**
+`git branch -d` refusing a squash-merged branch is not only bookkeeping — the
+Phase 3 close read it that way and it was also a signal.
+
+**CI does not run the test suite.** `harness.yml` enforces constraints and
+`site.yml` runs `ruff`/`mypy` on four site scripts only. Nothing in CI runs
+`pytest`, `mypy --strict src/`, or `ruff check src/ tests/` — a green PR attests
+to the harness constraints and GitGuardian, not to the tests. Run them locally
+and say so.
 
 ---
 

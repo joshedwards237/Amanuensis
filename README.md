@@ -19,12 +19,23 @@ moved** — the gap is carried as debt and revisited at the Phase 4 gate.
 [`docs/gates/phase-3.md`](docs/gates/phase-3.md) has the full record, including
 what the measurement cannot see.
 
-Working: model download and the install-time tier check (`manu install`), the
-global hotkey, the resident daemon, microphone capture, silence trimming,
-transcription, the collapse guard, the pre-injection history write, injection
-with clipboard save/restore, and a menu-bar recording indicator. Still refusing
-and naming their phase: `history` without `--last` (Phase 3), `toggle` and
-`status` (Phase 4).
+Working: model download with checksum verification and the install-time tier
+check (`manu install`), the global hotkey, the resident daemon, microphone
+capture, silence trimming, transcription, the collapse guard, the pre-injection
+history write, injection with clipboard save/restore, `manu history`, and the
+menu-bar indicator.
+
+**Phase 4 built 2026-09-03** and added the surface around that loop: a tray menu
+that switches capture mode and hotkey binding without editing a file, a
+recording panel with more presence than a glyph (§5.4), all three capture modes
+— hold-to-talk, press-to-start-press-to-stop, and press-to-start-silence-ends —
+a **double-tap latch** so a long dictation does not pin your hand to a key, and
+`manu status` and `manu toggle` over a local unix socket. **Nothing refuses by
+phase any more**; every verb in `manu --help` does what it says.
+
+Its **gate has not run.** That gate is a second person installing from this
+README with no help, and until it does, treat everything below as tested by the
+person who wrote it.
 
 **The collapse guard** (2026-08-07, PRD §5.7) exists because `initial_prompt`
 can silently destroy a transcript, and shipped in Phase 1 with nothing watching
@@ -73,9 +84,11 @@ measured rather than assumed. See [`docs/gates/`](docs/gates/).
 | [`docs/gates/`](docs/gates/) | One measurement record per phase gate, plus the probe and the Phase 5 experiments |
 | [`docs/adr/`](docs/adr/) | Architecture decisions — 0001 selects the ASR engine |
 
-It is usable now, if you are willing to run it from a source checkout and live
-without post-processing. There is no packaged app, no installer, and no signed
-binary — that is Phase 4.
+It is usable now, if you are willing to run it from a source checkout. There is
+no packaged app, no installer and no signed binary, and **no phase currently
+schedules one** — PRD §5.4 makes an `.app` bundle the fallback if the recording
+panel fails its confidence test, which is a decision the Phase 4 gate has not
+taken yet.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
@@ -138,8 +151,12 @@ Privacy & Security, and granting one does not grant the other.
 **The entry you are looking for carries your terminal's name, not "Amanuensis".**
 macOS attaches these grants to whatever launched the process, so look for
 Terminal, iTerm, Ghostty, or VS Code — whichever you ran `manu` from. This is a
-real wart and it goes away when Phase 4 ships an `.app` bundle. `manu daemon`
-names both permissions and tells you which is missing if you skip this step.
+real wart and **it does not currently go away.** An `.app` bundle would fix it
+and none is scheduled: PRD §5.4 holds it in reserve as the fallback if the
+recording panel fails its confidence test, so it ships only if that test fails.
+Said plainly here because an earlier revision of this file promised the bundle
+as a Phase 4 deliverable, which was never what §9 scoped. `manu daemon` names
+both permissions and tells you which is missing if you skip this step.
 
 **5. Dictate.**
 
@@ -149,7 +166,35 @@ manu daemon
 
 Hold **right-option**, speak, release. The text appears at your cursor in
 whatever application has focus. A glyph appears in your menu bar while the daemon
-runs: `○` idle, `●` recording, `◐` transcribing. Stop the daemon with Ctrl-C.
+runs: `○` idle, `●` recording, `◐` transcribing, and a panel appears near the
+edge of the screen while the microphone is open. Stop the daemon with Ctrl-C, or
+from the tray menu.
+
+**If right-option is taken on your machine, change it from the tray menu** —
+it lists every supported binding and writes your choice to the config file. The
+same menu switches capture mode, so you can try one rather than decide from a
+description:
+
+- **Hold to talk** (default) — record while held. Nothing starts by accident.
+- **Press to start, press to stop** — for long-form dictation.
+- **Press to start, silence ends it** — needs VAD, and it is the mode most
+  likely to misfire.
+
+**Double-tap right-option to dictate hands-free**, then single-tap to finish.
+This works inside hold-to-talk without giving it up, so both gestures live on
+one key. A hold during a hands-free session is ignored on purpose. The window is
+`double_tap_ms` in the config file and defaults to 350 ms, which is **a guess
+about your hand, not a measurement** — set it to `0` if you want the hold
+gesture and nothing else.
+
+From another terminal, while the daemon runs:
+
+```sh
+manu status                         # is it up, which model, which mode
+manu toggle                         # start or stop a dictation without the hotkey
+```
+
+Only one daemon can run at a time; a second refuses and names the first.
 
 If you would rather check the pieces before binding a hotkey:
 
@@ -179,12 +224,22 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   decoder stopped early. `manu history --last` has what it got.
 - **`manu install` says the reference clip is missing.** Step 2 — the clip is
   generated locally and is not in the repository.
+- **My double-tap does not latch.** 350 ms is a default, not a measurement of
+  your hand. Raise `double_tap_ms` in the config file; set it to `0` to turn the
+  latch off entirely and keep hold-to-talk.
+- **A short deliberate tap feels slow to appear.** Expected, and it is the price
+  of the latch: a release inside `double_tap_ms` waits out the rest of the
+  window in case a second press is coming. Anything you hold for longer than
+  that window — which is every real dictation — is unaffected. `0` removes both.
+- **`manu daemon` refuses and names another daemon.** One at a time, on purpose.
+  Two would both hold the microphone, both inject and both persist, and the
+  menu-bar glyph on one would read idle while the other recorded.
 - **I said "new paragraph" and got the words instead of a break.** Known, and
   the cause is documented in PRD §7.5: the rule fires only when the decoder
   supplied sentence marks on both sides of the phrase, and it frequently does
   not.
 
-## What it will do
+## What it does
 
 Press and hold a hotkey, speak, release. The transcript is post-processed and
 injected at the cursor. A daemon keeps the ASR model resident in memory, because
@@ -194,6 +249,11 @@ which is acceptable.
 ```sh
 manu install                        # download the model once, measure this machine's tier
 manu daemon                         # hold right-option, speak, release
+manu status                         # is a daemon running, and in which mode
+manu toggle                         # start or stop a dictation without the hotkey
+manu history --last                 # the last transcript, even if injection failed
+manu history --purge                # delete transcripts, stored audio and the database
+manu vocab check                    # validate your replacement dictionary
 manu transcribe --seconds 10        # one-shot diagnostic: record and print
 manu transcribe --inject            # one-shot: record, persist, paste at the cursor
 ```
@@ -202,12 +262,13 @@ The daemon needs **two separate macOS permissions** and will name both if
 either is missing: **Accessibility** to type into other applications, and
 **Input Monitoring** to see the hotkey. They live in different Settings panes
 and granting one does not grant the other. macOS attaches both to whatever
-launched `manu`, so until this ships as an `.app` the entry you are looking for
-carries your terminal's name.
+launched `manu`, so the entry you are looking for carries your terminal's name.
 
-While the daemon runs there is a glyph in your menu bar: `○` idle, `●`
-recording, `◐` transcribing. macOS shows its own microphone indicator too, and
-that one is not ours to get wrong.
+While the daemon runs there is a glyph in your menu bar — `○` idle, `●`
+recording, `◐` transcribing — and a panel near the edge of the screen whenever
+the microphone is open, because §5.4 treats "is it listening right now" as a
+privacy requirement rather than a nicety. macOS shows its own microphone
+indicator too, and that one is not ours to get wrong.
 
 - **Batch transcription**, not streaming, for v1 (PRD §7.1)
 - **faster-whisper** by default, behind an abstraction so the engine can be
