@@ -202,6 +202,31 @@ If you would rather check the pieces before binding a hotkey:
 manu transcribe --seconds 10        # record and print, inject nothing
 ```
 
+**5b. Optional — a Desktop launcher instead of a terminal.**
+
+```sh
+scripts/start-amanuensis.command --link
+```
+
+There is **no application icon and no login item.** `manu daemon` in a terminal
+is the whole product; this puts a double-clickable entry on your Desktop that
+opens a Terminal window and runs it for you. It is a shell script, not an
+`.app`.
+
+**It is not installed by `pip`** — the wheel contains `src/amanuensis` and
+nothing else, so this file exists only in a source checkout. `--link` creates a
+**symlink** rather than a copy, which is the whole point: the first version of
+this was hand-copied, the checkout it named was later deleted, and the Desktop
+entry spent four days answering `cannot find`. A symlink follows the checkout;
+re-run `--link` if you move it.
+
+The permission consequence is real and is the reason this is not simply better
+than a terminal. macOS attaches Accessibility and Input Monitoring to
+**whatever launches the process** — double-clicking makes that **Terminal.app**,
+not the terminal you normally type in. Grant them to whichever you actually use,
+or grant both. `scripts/start-amanuensis.command --check` prints what it
+resolved without starting anything.
+
 **6. Uninstall.**
 
 ```sh
@@ -231,6 +256,9 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   of the latch: a release inside `double_tap_ms` waits out the rest of the
   window in case a second press is coming. Anything you hold for longer than
   that window — which is every real dictation — is unaffected. `0` removes both.
+- **The Desktop launcher says `cannot find`.** Its checkout moved or was
+  deleted. Re-run `scripts/start-amanuensis.command --link` from the current
+  one. `--check` shows where it is looking.
 - **`manu daemon` refuses and names another daemon.** One at a time, on purpose.
   Two would both hold the microphone, both inject and both persist, and the
   menu-bar glyph on one would read idle while the other recorded.
