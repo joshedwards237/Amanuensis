@@ -75,7 +75,14 @@ gate = [
 ]
 
 [project.scripts]
+# Two names, one entry point (added 2026-09-08). `manu` is what every document
+# in this repository types and it is not going anywhere; `amanuensis` exists
+# because the product's name is the thing a user remembers, and a person who
+# has installed this and comes back a week later types what it is called. The
+# cost of the second name is one line here and a `prog` that reports whichever
+# was typed — see `_program_name` in cli.py.
 manu = "amanuensis.cli:main"
+amanuensis = "amanuensis.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/joshedwards237/Amanuensis"

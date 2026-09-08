@@ -13,6 +13,7 @@ decided by implementation order.
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -540,3 +541,95 @@ def test_a_data_dir_too_deep_for_a_socket_is_a_sentence_not_a_traceback(
     err = capsys.readouterr().err
     assert "AMANUENSIS_DATA_DIR" in err
     assert "Traceback" not in err
+
+
+# ---------------------------------------------------------------------------
+# Two console scripts, one entry point (added 2026-09-08)
+# ---------------------------------------------------------------------------
+
+
+def test_both_console_scripts_are_declared_and_point_at_one_entry_point() -> None:
+    """`manu` is what every document here types; `amanuensis` is what a person
+    who installed this a week ago remembers it is called.
+
+    Asserted against `pyproject.toml` rather than against a list in the code,
+    because the packaging metadata is what actually creates the commands — a
+    constant agreeing with itself proves nothing about what `pip install` puts
+    on the PATH.
+    """
+    import tomllib
+
+    from amanuensis.cli import PROGRAM_NAMES
+
+    root = Path(__file__).resolve().parent.parent
+    with (root / "pyproject.toml").open("rb") as handle:
+        scripts = tomllib.load(handle)["project"]["scripts"]
+
+    assert set(scripts) == set(PROGRAM_NAMES), (
+        "pyproject and PROGRAM_NAMES disagree about which commands exist"
+    )
+    assert set(scripts.values()) == {"amanuensis.cli:main"}, (
+        "both names must reach the same entry point, or they are two products"
+    )
+
+
+@pytest.mark.parametrize("typed", ["manu", "amanuensis"])
+def test_usage_names_the_command_that_was_actually_typed(
+    typed: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A hard-coded `prog` tells a confused user to run the command they did
+    not type. argparse threads it through every subparser and every error
+    message, so this is not only the help text."""
+    from amanuensis.cli import build_parser
+
+    monkeypatch.setattr(sys, "argv", [f"/somewhere/bin/{typed}", "--help"])
+
+    parser = build_parser()
+    assert parser.format_usage().startswith(f"usage: {typed} ")
+
+    # `--version` is the string people paste into bug reports, and it was
+    # hard-coded separately from `prog` — `amanuensis --version` answered
+    # "manu 0.1.0" until this was checked against a real wheel install.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--version"])
+    assert capsys.readouterr().out.startswith(f"{typed} ")
+
+
+def test_usage_falls_back_rather_than_printing_a_filename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`python -m amanuensis` gives an argv[0] of a path to `__main__.py`,
+    which is not a command anyone can run. The negative control on the pair
+    above: without it, `prog` would echo whatever argv[0] happened to be."""
+    from amanuensis.cli import build_parser
+
+    monkeypatch.setattr(sys, "argv", ["/x/amanuensis/__main__.py"])
+
+    assert build_parser().format_usage().startswith("usage: manu ")
+
+
+@pytest.mark.parametrize("typed", ["manu", "amanuensis"])
+def test_an_error_message_names_the_command_that_was_typed(
+    typed: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The case that motivated threading `prog` at all, and the reason it is
+    not only about `--help`: someone runs one command wrongly and argparse
+    tells them to consult the other one.
+
+    Asserted on `"usage: <typed>"` and the `"<typed>: error:"` prefix rather
+    than on absence of the other name — "amanuensis" *contains* "manu", so a
+    not-in assertion here would fail for a reason that has nothing to do with
+    the behaviour. Parametrised over both, so the test cannot pass by the
+    fallback happening to be right.
+    """
+    from amanuensis.cli import build_parser
+
+    monkeypatch.setattr(sys, "argv", [f"/somewhere/bin/{typed}"])
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["history", "--nonsense"])
+
+    err = capsys.readouterr().err
+    assert err.startswith(f"usage: {typed} ")
+    assert f"{typed}: error:" in err

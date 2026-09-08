@@ -51,7 +51,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from amanuensis import __version__
 from amanuensis.config import AppConfig, ConfigError, InjectionConfig, load_config
@@ -74,16 +74,42 @@ _EXIT_OK = 0
 #: Verb -> the phase that makes it do something. Kept in one place so that
 #: `manu daemon` and the tests cannot disagree about what is built.
 #:
+#: The two console scripts `pyproject.toml` declares, both pointing here.
+PROGRAM_NAMES: Final = ("manu", "amanuensis")
+
+
+def _program_name() -> str:
+    """Whatever the user actually typed, for `--help` and every error message.
+
+    Two names reach this entry point. A hard-coded `prog` means one of them
+    prints usage lines naming the *other* command — in the one place a user who
+    is already confused has gone looking, telling them to run something they did
+    not install a name for. argparse threads `prog` through every subparser and
+    every error, so this is the single point that decides it.
+
+    `python -m amanuensis` gives an `argv[0]` of a path to `__main__.py`, which
+    is not a command anyone typed; it falls back rather than printing a filename
+    as though it were the command.
+    """
+    name = Path(sys.argv[0]).name if sys.argv else ""
+    return name if name in PROGRAM_NAMES else PROGRAM_NAMES[0]
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The full `manu` parser. Separate from `main` so tests can inspect it."""
     parser = argparse.ArgumentParser(
-        prog="manu",
+        prog=_program_name(),
         description=(
             "Fully local dictation. Press a hotkey, speak, release — your "
             "words appear at the cursor. No account, no network at runtime."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"manu {__version__}")
+    # The typed name here too. `amanuensis --version` answering "manu 0.1.0"
+    # is the same small lie as the usage line, and it is the string people
+    # paste into bug reports.
+    parser.add_argument(
+        "--version", action="version", version=f"{parser.prog} {__version__}"
+    )
     parser.add_argument(
         "--config",
         type=Path,
