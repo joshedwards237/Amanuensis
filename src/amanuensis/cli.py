@@ -188,6 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="reference clip for the timed check (default: the bundled one)",
     )
+    install.add_argument(
+        "--no-desktop-launcher",
+        action="store_true",
+        help=(
+            "skip the double-clickable launcher this otherwise writes to your "
+            "Desktop (see README step 5b)"
+        ),
+    )
 
     return parser
 
@@ -216,7 +224,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.verb == "transcribe":
         return _transcribe(config, seconds=args.seconds, inject=args.inject)
     if args.verb == "install":
-        return _install(config, skip_download=args.skip_download, clip=args.clip)
+        return _install(
+            config,
+            skip_download=args.skip_download,
+            clip=args.clip,
+            desktop_launcher=not args.no_desktop_launcher,
+        )
     if args.verb == "daemon":
         return _daemon(config)
     if args.verb in ("toggle", "status"):
@@ -1153,7 +1166,12 @@ def _print_timings(
     )
 
 
-def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
+def _install(
+    config: AppConfig,
+    skip_download: bool,
+    clip: Path | None,
+    desktop_launcher: bool = True,
+) -> int:
     """Fetch the weights once, then measure and record this machine's tier.
 
     The two halves are deliberately separate. §7.2: "Model download is not part
@@ -1246,7 +1264,54 @@ def _install(config: AppConfig, skip_download: bool, clip: Path | None) -> int:
     else:
         print("  G1-CPU applies (§2). The measured number is published; nothing halts.")
     print(f"  recorded at {written}")
+
+    if desktop_launcher:
+        _write_desktop_launcher()
+
     return _EXIT_OK
+
+
+def _write_desktop_launcher() -> None:
+    """The double-clickable entry, written last and never fatal.
+
+    Last because the install's actual job — weights, checksums, tier — is done
+    by the time it runs, and non-fatal because a launcher that could not be
+    written is a convenience the user did not get, not an installation that
+    failed. Returning non-zero here would tell them the install broke when the
+    product works.
+
+    It reports the path either way. A file appearing in someone's home
+    directory should be announced by the command that put it there.
+    """
+    from amanuensis.launcher import resolve_manu, write_desktop_launcher
+
+    manu = resolve_manu()
+    if manu is None:
+        print()
+        print("Desktop launcher: skipped — could not find this install's `manu`.")
+        print("  `manu daemon` in a terminal is the whole product regardless.")
+        return
+
+    try:
+        outcome = write_desktop_launcher(manu)
+    except OSError as exc:
+        print()
+        print(f"Desktop launcher: skipped — {exc}")
+        return
+
+    print()
+    if outcome.action == "kept-symlink":
+        print(f"Desktop launcher: {outcome.detail}")
+        return
+    if not outcome.ok:
+        print(f"Desktop launcher: skipped — {outcome.detail}")
+        return
+    print(f"Desktop launcher {outcome.action}: {outcome.path}")
+    print("  Double-click it to start dictating. It opens a Terminal window,")
+    print("  which is also how you stop the daemon if the menu bar is not enough.")
+    print("  macOS attaches Accessibility and Input Monitoring to whatever")
+    print("  launches the process, so double-clicking makes that Terminal.app.")
+    print("  Skip this next time with `manu install --no-desktop-launcher`.")
 
 
 if __name__ == "__main__":  # pragma: no cover
