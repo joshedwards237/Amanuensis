@@ -142,6 +142,9 @@ Expect a few minutes; the download was measured at 185 s on the author's
 connection and yours will differ. It prints `checksums verified`, then your tier
 and the p50 and p95 it measured. Those are your numbers, not ours.
 
+It also writes **`~/Desktop/Start Amanuensis.command`**, a double-clickable
+launcher — see below. `manu install --no-desktop-launcher` skips it.
+
 **4. Grant two macOS permissions.**
 
 The daemon needs **Accessibility** (to type into other applications) and **Input
@@ -202,30 +205,42 @@ If you would rather check the pieces before binding a hotkey:
 manu transcribe --seconds 10        # record and print, inject nothing
 ```
 
-**5b. Optional — a Desktop launcher instead of a terminal.**
+**A Desktop launcher — `manu install` already put one there.**
 
-```sh
-scripts/start-amanuensis.command --link
-```
+Step 3 wrote **`~/Desktop/Start Amanuensis.command`**. Double-click it and the
+daemon starts in a Terminal window. Skip it next time with
+`manu install --no-desktop-launcher`; delete the file whenever you like, and
+re-run `manu install` to get it back.
 
 There is **no application icon and no login item.** `manu daemon` in a terminal
-is the whole product; this puts a double-clickable entry on your Desktop that
-opens a Terminal window and runs it for you. It is a shell script, not an
-`.app`.
+is the whole product, and the launcher is a shell script that runs it for you —
+not an `.app`. The daemon does not start at login and does not survive a reboot.
 
-**It is not installed by `pip`** — the wheel contains `src/amanuensis` and
-nothing else, so this file exists only in a source checkout. `--link` creates a
-**symlink** rather than a copy, which is the whole point: the first version of
-this was hand-copied, the checkout it named was later deleted, and the Desktop
-entry spent four days answering `cannot find`. A symlink follows the checkout;
-re-run `--link` if you move it.
-
-The permission consequence is real and is the reason this is not simply better
-than a terminal. macOS attaches Accessibility and Input Monitoring to
-**whatever launches the process** — double-clicking makes that **Terminal.app**,
+**The permission consequence is real, and it is why this is not simply better
+than a terminal.** macOS attaches Accessibility and Input Monitoring to
+**whatever launches the process**. Double-clicking makes that **Terminal.app** —
 not the terminal you normally type in. Grant them to whichever you actually use,
-or grant both. `scripts/start-amanuensis.command --check` prints what it
-resolved without starting anything.
+or to both.
+
+`manu install` writes the launcher with the path of the `manu` that wrote it,
+because a Finder launch inherits no shell profile: `manu` is not on `PATH` and
+cannot be found by looking. If you later move or delete that environment the
+launcher says so and names `manu install` as the repair, rather than failing
+with `cannot find`. It never overwrites a file it did not write, and it leaves a
+symlink alone.
+
+Two commands on the launcher itself:
+
+```sh
+~/Desktop/Start\ Amanuensis.command --check   # what it resolved; starts nothing
+```
+
+**From a source checkout**, `scripts/start-amanuensis.command --link` makes the
+Desktop entry a **symlink into the checkout** instead, so it follows the tree as
+you work rather than snapshotting it. `manu install` will not replace a symlink.
+That matters because the first version of this file was hand-copied, the
+checkout it named was later deleted, and the Desktop entry spent four days
+answering `cannot find`.
 
 **6. Uninstall.**
 
@@ -256,9 +271,11 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   of the latch: a release inside `double_tap_ms` waits out the rest of the
   window in case a second press is coming. Anything you hold for longer than
   that window — which is every real dictation — is unaffected. `0` removes both.
-- **The Desktop launcher says `cannot find`.** Its checkout moved or was
-  deleted. Re-run `scripts/start-amanuensis.command --link` from the current
-  one. `--check` shows where it is looking.
+- **The Desktop launcher cannot find `manu`.** The environment it was installed
+  into moved or was deleted. It names the path it was looking for; re-run
+  `manu install` from the environment you want it to use. From a source
+  checkout, `scripts/start-amanuensis.command --link` instead. Either way,
+  `--check` on the launcher shows what it resolved without starting anything.
 - **`manu daemon` refuses and names another daemon.** One at a time, on purpose.
   Two would both hold the microphone, both inject and both persist, and the
   menu-bar glyph on one would read idle while the other recorded.

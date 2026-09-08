@@ -30,6 +30,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "start-amanuensis.command"
+#: The canonical file. `scripts/` is a symlink to it so a checkout keeps the
+#: familiar path while the wheel gets the same bytes.
+PACKAGED = REPO_ROOT / "src" / "amanuensis" / "assets" / "start-amanuensis.command"
 
 #: Any absolute path into a user's home or a checkout. Deliberately broad: the
 #: 2026-09-04 regression was `/Users/<name>/…/worktrees/<branch>`, and a rule
@@ -265,3 +268,242 @@ def test_link_reports_failure_rather_than_printing_success(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert "linked:" not in result.stdout, "claimed success with nothing created"
+
+
+# ---------------------------------------------------------------------------
+# `manu install` writes one — the installed path, where there is no checkout
+# ---------------------------------------------------------------------------
+
+
+def test_the_launcher_is_inside_the_package_so_it_ships_in_the_wheel() -> None:
+    """`pip install` gets `src/amanuensis` and nothing else. A launcher under
+    `scripts/` cannot be written to a Desktop by an installed `manu`, because an
+    installed `manu` has no `scripts/`."""
+    assert PACKAGED.is_file()
+    assert LAUNCHER.is_symlink(), "scripts/ should point at the packaged copy"
+    assert LAUNCHER.resolve() == PACKAGED.resolve(), "one file, not two"
+
+
+def test_the_packaged_launcher_carries_the_marker_and_an_empty_hint() -> None:
+    """The marker is what stops `manu install` deleting somebody else's file,
+    and an empty hint is what makes the repository copy self-locating."""
+    from amanuensis.launcher import LAUNCHER_MARKER
+
+    text = PACKAGED.read_text()
+    assert text.splitlines()[1].startswith(LAUNCHER_MARKER)
+    assert 'MANU_HINT=""' in text
+
+
+def test_a_rendered_launcher_finds_manu_with_no_checkout_above_it(
+    tmp_path: Path,
+) -> None:
+    """The case the whole feature is for, and the one a symlink cannot serve.
+
+    An installed copy sits on a Desktop with no repository anywhere above it,
+    and Finder gives it the bare system PATH — so `manu` is neither beside it
+    nor findable. It works only because `manu install` recorded where `manu`
+    was. This puts a fake `manu` somewhere arbitrary, renders against it, and
+    runs the result from a directory with no checkout in sight.
+    """
+    from amanuensis.launcher import render
+
+    fake_bin = tmp_path / "somewhere" / "bin"
+    fake_bin.mkdir(parents=True)
+    fake_manu = fake_bin / "manu"
+    fake_manu.write_text("#!/bin/bash\nexit 0\n")
+    fake_manu.chmod(0o755)
+
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    entry = desktop / "Start Amanuensis.command"
+    entry.write_text(render(fake_manu))
+    entry.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(entry), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert str(fake_manu) in result.stdout
+    assert "recorded by manu install" in result.stdout, (
+        "it found `manu` some other way, so this test is not exercising the hint"
+    )
+
+
+def test_an_unrendered_launcher_on_a_desktop_finds_nothing_and_says_why(
+    tmp_path: Path,
+) -> None:
+    """The negative control on the test above.
+
+    If the copy on the Desktop worked without the hint, the hint would not be
+    doing anything and the test above would pass for the wrong reason. With an
+    empty hint, no checkout and a bare PATH, there is genuinely nowhere to look.
+    """
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    entry = desktop / "Start Amanuensis.command"
+    entry.write_text(PACKAGED.read_text())
+    entry.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(entry), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(tmp_path)},
+    )
+
+    assert result.returncode != 0
+    assert "NOT FOUND" in result.stdout
+
+
+def test_write_desktop_launcher_produces_something_executable(tmp_path: Path) -> None:
+    """Finder opens a `.command` without the execute bit in a text editor,
+    which a user reads as the launcher doing nothing."""
+    from amanuensis.launcher import is_executable, write_desktop_launcher
+
+    (tmp_path / "Desktop").mkdir()
+    manu = tmp_path / "bin" / "manu"
+    manu.parent.mkdir()
+    manu.touch()
+
+    outcome = write_desktop_launcher(manu, home=tmp_path)
+
+    assert outcome.action == "written"
+    assert is_executable(outcome.path)
+    assert f'MANU_HINT="{manu}"' in outcome.path.read_text()
+
+
+def test_write_desktop_launcher_is_idempotent(tmp_path: Path) -> None:
+    """Re-running `manu install` after moving an environment is the documented
+    repair, so the second write has to replace the first rather than refuse."""
+    from amanuensis.launcher import write_desktop_launcher
+
+    (tmp_path / "Desktop").mkdir()
+    first = tmp_path / "a" / "manu"
+    second = tmp_path / "b" / "manu"
+    for path in (first, second):
+        path.parent.mkdir()
+        path.touch()
+
+    write_desktop_launcher(first, home=tmp_path)
+    outcome = write_desktop_launcher(second, home=tmp_path)
+
+    assert outcome.action == "replaced"
+    assert f'MANU_HINT="{second}"' in outcome.path.read_text()
+    assert str(first) not in outcome.path.read_text()
+
+
+def test_write_desktop_launcher_refuses_a_file_it_did_not_write(
+    tmp_path: Path,
+) -> None:
+    """`manu install` writing into `$HOME` is a side effect on somebody's own
+    space. Deleting a file because it shares a name is not a trade a
+    convenience feature gets to make."""
+    from amanuensis.launcher import write_desktop_launcher
+
+    (tmp_path / "Desktop").mkdir()
+    theirs = tmp_path / "Desktop" / "Start Amanuensis.command"
+    theirs.write_text("#!/bin/bash\n# something a person wrote\n")
+    manu = tmp_path / "manu"
+    manu.touch()
+
+    outcome = write_desktop_launcher(manu, home=tmp_path)
+
+    assert outcome.action == "refused"
+    assert not outcome.ok
+    assert theirs.read_text() == "#!/bin/bash\n# something a person wrote\n"
+
+
+def test_write_desktop_launcher_leaves_a_developers_symlink_alone(
+    tmp_path: Path,
+) -> None:
+    """`--link` points the entry into a checkout so it follows the tree.
+    Replacing that with a copy would silently downgrade it to a snapshot --
+    which is the exact property this area exists to preserve."""
+    from amanuensis.launcher import write_desktop_launcher
+
+    (tmp_path / "Desktop").mkdir()
+    entry = tmp_path / "Desktop" / "Start Amanuensis.command"
+    entry.symlink_to(PACKAGED)
+    manu = tmp_path / "manu"
+    manu.touch()
+
+    outcome = write_desktop_launcher(manu, home=tmp_path)
+
+    assert outcome.action == "kept-symlink"
+    assert entry.is_symlink(), "a developer's link was replaced by a copy"
+    assert entry.resolve() == PACKAGED.resolve()
+
+
+def test_write_desktop_launcher_refuses_when_there_is_no_desktop(
+    tmp_path: Path,
+) -> None:
+    """Creating directories in someone's home is not this command's business."""
+    from amanuensis.launcher import write_desktop_launcher
+
+    manu = tmp_path / "manu"
+    manu.touch()
+
+    outcome = write_desktop_launcher(manu, home=tmp_path)
+
+    assert outcome.action == "refused"
+    assert "Desktop" in outcome.detail
+
+
+def test_render_refuses_a_template_it_cannot_substitute() -> None:
+    """A launcher written with an empty hint fails at double-click time, for a
+    reason nothing observed at install time. Caught where it is cheap."""
+    from amanuensis.launcher import render
+
+    with pytest.raises(ValueError, match="MANU_HINT"):
+        render(Path("/x/manu"), template="#!/bin/bash\nexit 0\n")
+
+
+def test_an_installed_copy_ignores_an_unrelated_checkout_above_it(
+    tmp_path: Path,
+) -> None:
+    """Observed while testing a real wheel install, not reasoned about.
+
+    The launcher walks up looking for a checkout, and a Desktop copy has no
+    business finding one: a clone at `$HOME` makes `$HOME/Desktop` walk into
+    it, and the launcher would then put that tree's `src` on `PYTHONPATH` ahead
+    of the environment the user actually installed — running a stranger's code
+    under the name of theirs. A recorded hint means this copy was written by
+    `manu install`, which settles which situation it is in.
+    """
+    from amanuensis.launcher import render
+
+    # A checkout at the fake home, exactly as a user with a clone at ~ has.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='decoy'\n")
+    (tmp_path / "src" / "amanuensis").mkdir(parents=True)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+
+    manu = tmp_path / "env" / "bin" / "manu"
+    manu.parent.mkdir(parents=True)
+    manu.write_text("#!/bin/bash\nexit 0\n")
+    manu.chmod(0o755)
+
+    entry = desktop / "Start Amanuensis.command"
+    entry.write_text(render(manu))
+    entry.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(entry), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "not used" in result.stdout, (
+        "an installed copy adopted a checkout that merely sits above it:\n"
+        + result.stdout
+    )
+    assert str(manu) in result.stdout
