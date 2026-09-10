@@ -110,6 +110,23 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install .
 ```
 
+This installs two commands that do the same thing: **`manu`** and
+**`amanuensis`**. Every example below uses `manu` because it is shorter; use
+whichever you remember.
+
+**They live in the virtualenv, so a new terminal will not find them.** That is
+how Python virtualenvs work and it catches everyone once — a second terminal
+answers `zsh: command not found: manu` until you `source .venv/bin/activate`
+again. If you would rather have them always available, link one into a
+directory already on your `PATH`:
+
+```sh
+ln -s "$PWD/.venv/bin/manu" ~/.local/bin/manu             # or /usr/local/bin
+```
+
+Check with `echo $PATH` in a **new** terminal that the directory you chose is
+actually on it.
+
 **2. Generate the reference clip.**
 
 ```sh
@@ -271,6 +288,11 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   of the latch: a release inside `double_tap_ms` waits out the rest of the
   window in case a second press is coming. Anything you hold for longer than
   that window — which is every real dictation — is unaffected. `0` removes both.
+- **`zsh: command not found: manu` in a new terminal.** The commands live in
+  the virtualenv and a new shell has not activated it. `source
+  .venv/bin/activate` from the checkout, or link `manu` onto your `PATH` as
+  step 1 describes. The Desktop launcher is unaffected — it resolves the
+  command itself and never relies on your `PATH`.
 - **The Desktop launcher cannot find `manu`.** The environment it was installed
   into moved or was deleted. It names the path it was looking for; re-run
   `manu install` from the environment you want it to use. From a source
