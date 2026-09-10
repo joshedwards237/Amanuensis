@@ -12,48 +12,48 @@ slices:
     decision_focus: "Which surface carries an overlay failure, given §5.4's premise is that the user must not have to open the tray menu. And: does this work ship at all, or does the gate record close with 'ship with it stated'?"
     lens_used: decision-boundary
     sequencing_note: "Blocks S3 hard and S5 hard. §10: findings 1 and 3 → lane 6 → this."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S2
     title: "A double-tap latches without the session ever stopping"
     scope: "`DictationController.restart_session`; the listener's latch branch emitting one `on_latch`; `cli.py` wiring it. Excludes every pixel — `overlay.py` is not edited."
     decision_focus: "Does a UI symptom justify a new operation on the controller? Is `restart_session` a real domain event or a rendering workaround wearing a controller method's name?"
     lens_used: decision-boundary
     sequencing_note: "Independent of S3, S4, S5. Its user-visible effect is invisible until S1."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S3
     title: "The panel outlives the microphone, and nothing on it reacts to sound"
     scope: "`should_show` extended to TRANSCRIBING behind `[feedback] overlay_transcribing`; the hard cut to a time-driven breathing dot; `set_level` ignored — not merely unfed — while transcribing. Excludes the fade (S4) and the controls (S5)."
     decision_focus: "This reverses a documented §5.4 reading. §2 claims the reversal is satisfaction rather than override. Is that distinction real to a user, or only to the author of §2?"
     lens_used: decision-boundary
     sequencing_note: "Hard dependency on S1. Must precede S4."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S4
     title: "The panel fades when the words land, and cuts when nothing is coming"
     scope: "A ~120 ms fade on IDLE from TRANSCRIBING; immediate hide on IDLE from RECORDING; no fade after ERROR; cancellable by a new dictation."
     decision_focus: "'The text has been injected' is not a state. Either the overlay holds transition history — a component §6.2 says renders and reports — or the controller gains a state §5.4 does not have."
     lens_used: decision-boundary
     sequencing_note: "Unbuildable before S3: today IDLE after TRANSCRIBING reaches an already-hidden panel."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S5
     title: "✕ and ✓ in a latched session, and the click-through the panel now costs"
     scope: "The two 16 px controls, `_WIDTH_LATCHED = 114`, the animated width change, `setIgnoresMouseEvents_(False)`, `acceptsFirstMouse`, the `on_cancel`/`on_finish` arguments, `[feedback] overlay_controls`, and the README known-costs entry. Excludes hover, Escape, and ✓ for unlatched holds — all §11 open."
     decision_focus: "How does the overlay learn it is latched? §3 requires latched-only controls; §5 rejects the overlay knowing; §6.2's constructor carries neither parameter nor setter. The spec asks for both and specifies neither."
     lens_used: decision-boundary
     sequencing_note: "Hard dependency on S1. S6's criterion must be written before this is built."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S6
     title: "Can the operator hit the ✕ while speaking — criterion written first, then tried"
     scope: "A written reachability criterion authored *before* S5 is built, then a trial. Excludes all code."
     decision_focus: "A criterion written after the buttons are seen will be written to pass — this repository has that event on record twice."
     lens_used: acceptance-criterion
     sequencing_note: "Criterion before S5. Trial after S5. Needs a person at the keyboard."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
 ---
 
 # Slicing record — overlay controls, the latch transition, the transcribing state

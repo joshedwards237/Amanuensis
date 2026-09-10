@@ -7,58 +7,58 @@ stories:
   - id: 1
     lens: [forces, consequences, coherence]
     title: Controls keyed to the latch, not hands-free
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 2
     lens: [coherence, defaults]
     title: No named channel carries latch to overlay
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 3
     lens: [coherence, consequences]
     title: Panel persists; the confidence test's discriminator changes
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 4
     lens: [forces, consequences]
     title: Mouse acceptance scoped to panel, not state
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 5
     lens: [defaults, patterns, consequences]
     title: The tick inherits the key release's thread and focus sample
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 6
     lens: [patterns, consequences]
     title: Injection completion reconstructed from a two-state history
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 7
     lens: [defaults, consequences]
     title: Three off switches, precedence left unstated
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 8
     lens: [defaults, forces]
     title: Breathing period typed, not read from history
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 9
     lens: [forces, patterns]
     title: Tight inherited from Wispr, forty-four pixels up
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 10
     lens: [consequences, alternatives]
     title: restart_session discards audio; the clocks unstated
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
   - id: 11
     lens: [coherence, defaults]
     title: Geometry re-derived from code, §5.4 unreconciled
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Accepted 2026-09-10 as decision content the spec must state explicitly rather than inherit."
 ---
 
 # Choice stories — overlay controls, the latch transition, the transcribing state
