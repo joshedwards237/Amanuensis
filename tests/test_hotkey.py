@@ -206,7 +206,20 @@ def quartz(monkeypatch: pytest.MonkeyPatch) -> _FakeQuartz:
 
 
 @pytest.fixture
-def listener(quartz: _FakeQuartz) -> Any:
+def listener(quartz: _FakeQuartz, clock: _Clock) -> Any:
+    """The **production** default, which since 2026-09-03 has the latch on.
+
+    It takes the fake clock deliberately. Until 2026-09-10 the latch was gated
+    on an `on_cancel` callback, so every test here that passed only press and
+    release silently ran with the latch **off** — a configuration `cli.py` never
+    uses. Removing that gate (objection O10) surfaced three such tests, which is
+    the useful part: they had been exercising something the product does not do.
+
+    Fake clock rather than real, because a tap under `double_tap_ms` now defers
+    its end through `_schedule`, and a real `threading.Timer` in a unit test is
+    a live thread the suite does not control.
+    """
+    assert clock.now > 0
     made = MacOSHotkeyListener(HotkeyConfig())
     yield made
     if made.is_running:
@@ -280,12 +293,15 @@ def test_starting_twice_is_refused(
 
 
 def test_press_and_release_fire_for_the_bound_key(
-    listener: MacOSHotkeyListener, quartz: _FakeQuartz
+    listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
 ) -> None:
+    """A hold, because a dictation is one. §5.2's latch defers the end of a
+    release under `double_tap_ms` in case a second press is coming."""
     recorder = _Recorder()
     listener.start(recorder.press, recorder.release)
 
     quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    clock.advance(4.0)
     quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
 
     assert recorder.events == ["press", "release"]
@@ -324,7 +340,7 @@ def test_a_repeated_press_does_not_fire_twice(
 
 
 def test_release_fires_while_the_other_option_key_is_held(
-    listener: MacOSHotkeyListener, quartz: _FakeQuartz
+    listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
 ) -> None:
     """The generic alternate bit stays set when left-option is down.
 
@@ -337,6 +353,7 @@ def test_release_fires_while_the_other_option_key_is_held(
     listener.start(recorder.press, recorder.release)
 
     quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    clock.advance(4.0)  # a hold: every real dictation is one (§5.2)
     # Left option goes down: same generic bit, different key and different
     # device bit. Then right option comes up while left is still held — the
     # generic mask is unchanged and only the right-side bit clears.
@@ -349,7 +366,7 @@ def test_release_fires_while_the_other_option_key_is_held(
 
 
 def test_a_raising_callback_does_not_kill_the_tap(
-    listener: MacOSHotkeyListener, quartz: _FakeQuartz
+    listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
 ) -> None:
     """An exception out of the callback would leave the tap installed and dead.
 
@@ -365,6 +382,7 @@ def test_a_raising_callback_does_not_kill_the_tap(
     listener.start(explode, recorder.release)
 
     quartz.deliver(RIGHT_OPTION_KEYCODE, ALTERNATE_MASK | RIGHT_OPTION_BIT)
+    clock.advance(4.0)  # a hold, so the release is not deferred by the latch
     quartz.deliver(RIGHT_OPTION_KEYCODE, 0)
 
     assert recorder.events == ["release"]
@@ -615,14 +633,21 @@ def test_toggle_holding_the_key_does_not_stop_it(
 
 
 def test_push_to_talk_is_unchanged_by_the_toggle_work(
-    listener: MacOSHotkeyListener, quartz: _FakeQuartz
+    listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
 ) -> None:
     """The regression that would matter most: the default mode still ends on
-    release."""
+    release.
+
+    A **hold**, because that is what a dictation is. §5.2's latch defers the end
+    of a release under `double_tap_ms` in case a second press is coming, and
+    that cost is stated there. This test previously used `_tap` and passed only
+    because the latch was accidentally disabled for it."""
     recorder = _Recorder()
     listener.start(recorder.press, recorder.release)
 
-    _tap(quartz)
+    _down(quartz)
+    clock.advance(4.0)
+    _up(quartz)
     assert recorder.events == ["press", "release"]
 
 
@@ -786,14 +811,32 @@ def test_a_tap_defers_its_end_until_the_window_closes(
     assert recorder.events == ["press", "release"], "and arrive when it closes"
 
 
-def test_a_second_press_inside_the_window_cancels_rather_than_ends(
+def test_a_second_press_inside_the_window_never_stops_the_session(
     latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
 ) -> None:
-    """The whole difficulty §5.2 names: the first tap is already a complete
-    push-to-talk dictation, and its fragment must be discarded **before the
-    decoder**. `cancel` reaches `abort_session`, which discards a capture that
-    is still open -- so nothing is queued, nothing decodes, and §8 has nothing
-    to persist. A `release` here instead would queue it."""
+    """**Rewritten 2026-09-10, and the rewrite is the design change.**
+
+    This asserted `["press", "cancel", "press"]` — the latch discarded the
+    first tap's capture and started a new session. §5.2 required that discard
+    to stop a ~100 ms fragment becoming *its own dictation*, decoded and
+    injected as a stray word before the hands-free session began.
+
+    Objection O8 pointed out that the hazard needs a **separately queued
+    session**, and §5's own resolution removes it: the session never ends, so
+    nothing is queued and nothing can be decoded separately. No reason to
+    discard survives. What the discard costs is up to `double_tap_ms` of the
+    user's own speech at the head of the utterance — which §5.2 elsewhere
+    praises push-to-talk for never losing.
+
+    So the latch now emits **nothing at all**. The first press opened the
+    microphone and it stays open; the second press only cancels the pending end
+    and latches. One `press`, and the session the user is speaking into is the
+    one that started when they first pressed the key.
+
+    This also removes `restart_session`, the `AudioCapture` operation O9 showed
+    does not exist, and the session-clock questions story #10 raised — none of
+    them are needed by a session that never restarts.
+    """
     recorder = _Recorder()
     latch_listener.start(recorder.press, recorder.release, recorder.cancel)
 
@@ -803,9 +846,39 @@ def test_a_second_press_inside_the_window_cancels_rather_than_ends(
     clock.advance(0.12)
     _down(quartz)
 
-    assert recorder.events == ["press", "cancel", "press"]
-    assert "release" not in recorder.events, "a release would queue the fragment"
+    assert recorder.events == ["press"], (
+        "the latch stopped and restarted the session the user is speaking into"
+    )
     assert clock.live == [], "the deferred end must be cancelled, not just ignored"
+
+
+def test_the_latch_needs_no_cancel_callback(
+    quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """Objection O10. `_latch_enabled` gated the whole latch on
+    `on_cancel is not None`, with a docstring calling the requirement 'not a
+    convenience' — because the latch used to emit it. It no longer does, so a
+    gate on it would silently disable the latch for any caller that passes
+    none, and read as the gesture not being implemented."""
+    listener = MacOSHotkeyListener(HotkeyConfig(double_tap_ms=350))
+    recorder = _Recorder()
+    listener.start(recorder.press, recorder.release)  # no on_cancel
+    try:
+        _down(quartz)
+        clock.advance(0.08)
+        _up(quartz)
+        clock.advance(0.12)
+        _down(quartz)
+        clock.advance(0.08)
+        _up(quartz)
+        clock.advance(5.0)
+
+        assert recorder.events == ["press"], "the latch did not engage"
+        _tap_at(quartz, clock)
+        assert recorder.events == ["press", "release"], "the latch did not end"
+    finally:
+        if listener.is_running:
+            listener.stop()
 
 
 def test_the_latching_press_does_not_end_on_its_own_release(
@@ -826,7 +899,7 @@ def test_the_latching_press_does_not_end_on_its_own_release(
     _up(quartz)
     clock.advance(1.0)
 
-    assert recorder.events == ["press", "cancel", "press"]
+    assert recorder.events == ["press"]
 
 
 def test_a_latched_session_ends_on_a_single_tap(
@@ -839,7 +912,7 @@ def test_a_latched_session_ends_on_a_single_tap(
     clock.advance(30.0)  # a hands-free dictation
     _tap_at(quartz, clock)  # the ending tap
 
-    assert recorder.events == ["press", "cancel", "press", "release"]
+    assert recorder.events == ["press", "release"]
 
 
 def test_a_hold_during_a_latched_session_is_ignored(
@@ -855,7 +928,7 @@ def test_a_hold_during_a_latched_session_is_ignored(
     _tap_at(quartz, clock, held=2.0)  # a hold, mid-latch
     clock.advance(1.0)
 
-    assert recorder.events == ["press", "cancel", "press"], "the latch survives"
+    assert recorder.events == ["press"], "the latch survives"
 
 
 def test_double_tap_ms_zero_disables_the_latch_and_the_deferral_together(

@@ -453,14 +453,18 @@ class MacOSHotkeyListener(HotkeyListener):
 
         The mode restriction is §5.3's: `toggle` and `vad_auto` have their own
         press semantics and a latch inside either would be two behaviours
-        competing for one press. The `on_cancel` requirement is not a
-        convenience — without it the first tap's fragment would reach the
-        decoder, which is the one outcome §5.2 rejects by name.
+        competing for one press.
+
+        **`on_cancel` is no longer required** (objection O10, 2026-09-10). It
+        was, while the latch discarded the first tap's capture and started a
+        new session — and gating on it meant a caller passing none silently got
+        no latch at all, which reads as the gesture not being implemented. The
+        latch no longer emits it, so the gate would protect nothing and cost
+        that.
         """
         return (
             self._config.mode == "push_to_talk"
             and self._config.double_tap_ms > 0
-            and self._on_cancel is not None
         )
 
     def _cancel_deferred(self) -> None:
@@ -519,18 +523,28 @@ class MacOSHotkeyListener(HotkeyListener):
             if not latching:
                 self._fire(self._on_press)
                 return
-            # Discard first, then open the hands-free session. Order matters:
-            # both touch the capture, and starting before discarding would
-            # abort the session that was just started.
-            self._fire(self._on_cancel)
-            started = self._fire(self._on_press)
+            # **Nothing is emitted here, and that is the whole of the fix.**
+            #
+            # This used to fire `on_cancel` then `on_press` — discard the first
+            # tap's capture, start a fresh session. `abort_session` reports
+            # `IDLE` on the way past, so the panel blinked out and back between
+            # two presses during which the microphone never closed: a state
+            # machine reporting an event that did not happen.
+            #
+            # §5.2 required that discard so a ~100 ms fragment could not become
+            # *its own dictation*, decoded and injected as a stray word. That
+            # hazard needs a **separately queued session** (objection O8), and a
+            # session that never ends never queues one. So the discard buys
+            # nothing and costs up to `double_tap_ms` of the user's own speech
+            # at the head of the utterance — which §5.2 elsewhere praises
+            # push-to-talk for never losing.
+            #
+            # The capture opened on the first press and simply keeps running.
+            # No new controller operation, no `AudioCapture` call that does not
+            # exist (O9), and no session-clock question (choice story #10),
+            # because there is no restart.
             with self._latch_lock:
-                # Committed after the callback, never before. A press that
-                # failed leaves nothing recording, and a listener that had
-                # already latched would answer the next tap for a session that
-                # does not exist — `toggle` carries this rule for the same
-                # reason (see `_callback_for`).
-                self._latched = started
+                self._latched = True
                 self._swallow_release = True
             return
 
