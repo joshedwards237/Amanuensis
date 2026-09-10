@@ -64,10 +64,21 @@ socket, the single-instance guard, and §7.6's checksummed weight download all
 ship. **G1 is met at ten seconds** — p50 312.4 ms / p95 344.5 ms over ten
 dictations recorded for the purpose, `docs/gates/g1-at-ten-seconds.md`.
 
-What remains is operator-only and is the gate: `docs/gates/phase-4-operator-runbook.md`.
-Steps 1 and 3 have PASSED; **2 (the overlay confidence test), 4b (the latch and
-the second daemon), 5 (the gate record) and 6 (the n=1 install) have not.**
-Do not open Phase 5 until step 6 is done and the record is written.
+What remains is operator-only and is the gate: `docs/gates/phase-4-operator-runbook.md`,
+with results in **`docs/gates/phase-4.md`** (opened 2026-09-10). Lanes 1, 2
+(6/6), 3 and 4b have **PASSED**. Lane 4 is unrun and optional. **Lane 6 — the
+n=1 install with a second person — has not been booked, and it is the gate.**
+Do not open Phase 5 until it is done and that record is closed.
+
+**One open defect, and it is a §5.4 violation.** After days of running across a
+sleep cycle the recording panel stopped appearing while dictation kept working —
+a live microphone with a dead indicator, which is the failure §5.4 exists to
+name. Two independent mechanisms are present and neither is eliminated:
+`overlay.py`'s `_failed` is a **one-way latch with no recovery** (one transient
+exception disables the panel for the life of the process), and the panel is
+**built once against `NSScreen.mainScreen()` and never rebuilt** on a display or
+wake change, which fails silently. Lane 2's 6/6 was scored on a fresh session
+and cannot see either. See `docs/gates/phase-4.md` finding 1.
 
 **A branch whose PR has merged is not a branch that is finished** (2026-09-03).
 `phase-3-postprocessing` was squash-merged as PR #9 and had four more commits
