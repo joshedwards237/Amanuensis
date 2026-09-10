@@ -19,7 +19,7 @@ that waits for the record to be written is a finding that gets rounded off.
 | Lane | Result | Date |
 |---|---|---|
 | 1. Daemon starts and stops | **PASS** | 2026-09-03, re-verified 2026-09-08 |
-| 2. Recording panel confidence test (§5.4) | **PASS — 6 / 6**, and see the finding below | 2026-09-08 |
+| 2. Recording panel confidence test (§5.4) | **PASS — 6 / 6**, qualified twice below | 2026-09-08 |
 | 3. Network capture (G3) | **PASS** — 0 sockets, 0 bytes, live control | 2026-09-03 |
 | 4. Ten short corrections | **not run** — optional; the short-utterance punctuation comparison stays unmeasured | — |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
@@ -112,6 +112,42 @@ launched from, the operator restarted the service, and nothing is written to
 disk. Reproducing this means running for days and watching for it, which is the
 opposite of a cheap check.
 
+### Does lane 2's 6/6 still describe the panel that ships?
+
+**Yes, and the reason is worth stating rather than assumed.** Between the score
+on 2026-09-08 and today the overlay changed three times — S1, its stress pass,
+and S2 — and a confidence test scored against a panel that no longer exists
+would be a stale number that reads as a current one.
+
+Every one of those changes is to **failure behaviour or to what the listener
+emits**, and none is to what the panel looks like when it is working:
+
+| change | touches appearance? |
+|---|---|
+| `_failed` becomes a bounded budget | no — only when it stops drawing |
+| re-frame on a screen change | position only, and only after a display moves |
+| discard the panel a render failed on | no — rebuilt identically |
+| guard the level path | no — the drawing is unchanged when it succeeds |
+| a nil screen is not a fault | no |
+| the latch emits nothing | no — it *removes* a hide the panel should never have had |
+
+The bars, the pill, the geometry, the position and the states shown are byte-for
+-byte what was judged. **The one visible difference is a fault mark in the
+menu-bar title**, which is a new signal on a *different* surface and cannot make
+the panel harder to read.
+
+S2 changes the panel's behaviour in the direction lane 2 measures rather than
+against it: the double-tap no longer blinks the panel out and back, so a user
+watching for "is the microphone live" sees one fewer misleading transition.
+
+**Still qualified by finding 1**, unchanged: the score is for a *fresh session*,
+and the failure that started this took days. Fixing the two mechanisms does not
+turn a ten-minute test into a multi-day one. What can now be said that could not
+be said on 2026-09-08 is that a panel which does stop drawing **says so in the
+menu bar**, so a future occurrence is reportable rather than silent.
+
+**Not re-run, and not claimed as re-run.**
+
 ### What was done, 2026-09-10
 
 Both mechanisms are fixed, and finding 3 with them, because finding 3 is why
@@ -138,6 +174,21 @@ neither could be diagnosed.
   readable. It is an addition to the state glyph, never a replacement — trading
   the microphone state away to report a fault would break the requirement in the
   act of reporting that it is broken.
+
+- **The level path was the unguarded one, and it was worse.** Found by a stress
+  pass over S1, not by S1. `set_level` dispatched `_draw_bars` **raw** — outside
+  the wrapper — so an exception out of a `CALayer` call crossed the PyObjC
+  bridge inside an `NSBlockOperation` and **terminated the process**, on the
+  path that runs about thirty times a second while the microphone is open,
+  against layers a display change can invalidate. Verbatim the 2026-09-02
+  failure the wrapper exists for. Both paths now share `_guarded` and the
+  budget. Pre-existing; S1 extended the guard to the state path and never asked
+  about the other one.
+- **A nil `NSScreen.mainScreen()` was charged to the budget**, and S1 introduced
+  that by putting a screen read on every show. Nil is a real state — every
+  display asleep, a clamshell with nothing attached — and three of them disabled
+  the panel. A panel that cannot be positioned because there is no screen has
+  nothing to position on; that is not a fault.
 
 **What this does not do:** it does not prove the reported failure is gone. That
 took days of uptime across a sleep cycle and no diagnostic survived it. What can
@@ -274,9 +325,43 @@ found early by accident rather than by design.
 
 ---
 
+---
+
+## Work landed after this record opened
+
+Sequenced by `docs/superpowers/slices/overlay-controls.md`, which exists because
+§10 of the overlay spec named findings 1 and 3 as blockers and assigned them to
+nobody.
+
+- **S1 — the panel's death becomes visible** (#27, #28). Findings 1 and 3 above.
+- **S2 — the double-tap latches without stopping the session** (#29). The flash
+  was a state machine reporting an event that did not happen: the latch fired a
+  discard, `abort_session` reported `IDLE`, and the overlay hid on the way past
+  — between two presses during which the microphone never closed. The specified
+  fix was a `restart_session`; review found it needed an `AudioCapture`
+  operation that does not exist and left `capture_ms` unstated, and then that
+  **the discard buys nothing** — its hazard requires a separately queued
+  session, which a session that never ends never creates. The latch now emits
+  nothing, and the up-to-350 ms of speech the discard was throwing away is kept.
+  §5.2 records the withdrawal.
+- **S6's criterion** (#30) — `overlay-controls-reachability.md`, written while
+  the controls do not exist, which is the only time it can be written honestly.
+
+**S3, S4 and S5 are not built and should not be**, per the operator's own
+sequencing: they change the panel lane 2 scored, and lane 6 has not run.
+
+**One defect S2 surfaced and closed:** `_latch_enabled` gated the latch on an
+`on_cancel` callback, so any caller passing none silently got **no latch**. That
+surfaced four tests which had been exercising push-to-talk with the latch
+accidentally off — a configuration `cli.py` never runs.
+
+---
+
 ## To close this record
 
-1. Resolve finding 1, or record a decision to ship with it stated.
+1. ~~Resolve finding 1, or record a decision to ship with it stated.~~
+   **Done 2026-09-10** for both known mechanisms and for finding 3. **Finding
+   1c remains open** — it is a decision for S4 and is not reachable today.
 2. Take the G2 decision.
 3. Run lane 6 with a second person, and paste their question list in verbatim —
    that list is the README's defect report and is the output of the gate.

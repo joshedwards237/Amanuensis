@@ -10,7 +10,9 @@ written to pass.
 
 ---
 
-> **Results so far are in [`phase-4.md`](phase-4.md)** (opened 2026-09-10).
+> **Results so far are in [`phase-4.md`](phase-4.md)** (opened 2026-09-10, and
+> current as of the same day — findings 1 and 3 are closed, 1c is open, and
+> lane 2's 6/6 is confirmed to still describe the shipping panel).
 > Lanes 1, 2 (6/6), 3 and 4b have passed. Lane 4 is unrun and optional; lane 6
 > is the gate and has not been booked. **Lane 2's pass is qualified** — the
 > panel was later observed dead on a long-lived daemon while the microphone
