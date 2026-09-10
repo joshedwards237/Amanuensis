@@ -205,6 +205,19 @@ class PostprocessConfig:
     #: so on this engine the key operates on nothing. Kept because a future
     #: engine may be verbatim (§7.5).
     strip_fillers: bool = False
+    #: End every transcript with exactly one space (added 2026-09-10, from use).
+    #: A dictation lands with the caret flush against its last character, so the
+    #: next thing typed runs into the last word. Default `true` because every
+    #: dictation is followed by *something* and only one of those wants no
+    #: separator, and because the cost is a single character the user can
+    #: backspace, against a defect they must notice and repair every time.
+    #:
+    #: Invisible to the edit-rate measurement rather than merely believed to be:
+    #: `gate_phase3.py`'s `_words` tokenises with a bare `.split()`, which
+    #: discards trailing whitespace, so this cannot inflate G2 by one edit per
+    #: dictation. A product change that moves the instrument is the failure this
+    #: repository keeps finding, and it was checked before the key was written.
+    trailing_space: bool = True
     #: Append "." when the transcript ends on a word character. Fires on 7 of 10
     #: real transcripts, which is why it needs a key rather than being assumed:
     #: it also appends into a URL bar, a shell prompt and a filename field.
@@ -462,6 +475,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "strip_fillers": _Rule((bool,)),
         "terminal_punctuation": _Rule((bool,)),
         "spoken_commands": _Rule((bool,)),
+        "trailing_space": _Rule((bool,)),
     },
     "postprocess.llm": {
         "enabled": _Rule((bool,)),

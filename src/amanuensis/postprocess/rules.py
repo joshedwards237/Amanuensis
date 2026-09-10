@@ -312,6 +312,40 @@ def ensure_terminal_punctuation(text: str) -> str:
     return text + "." if text and text[-1].isalnum() else text
 
 
+def ensure_trailing_space(text: str) -> str:
+    """End with exactly one space, so the cursor is ready for the next word.
+
+    Requested from use (2026-09-10): a dictation lands with the caret flush
+    against its last character, so typing immediately afterwards runs the new
+    word into the old one. Every dictation is followed by *something* — another
+    dictation, a typed word, a return — and only one of those wants no space.
+
+    Three things it deliberately does not do.
+
+    **It does not touch text that already ends in whitespace.** `spoken_commands`
+    turns "new paragraph" into a newline pair, and a space hanging off the end of
+    a paragraph break is trailing garbage on the line the user just left. If the
+    text ends in any whitespace, that whitespace is already the separator.
+
+    **It does not act on an empty transcript.** A guard refusal and a
+    zero-length decode both arrive here as `""`, and turning those into `" "`
+    would convert "nothing was said" into a keystroke — `MacOSInjector.inject`
+    treats whitespace-only text as nothing and would skip it anyway, but a rule
+    that manufactures content out of silence is the wrong shape regardless.
+
+    **It runs last, and that ordering is load-bearing.** `collapse_whitespace`
+    strips trailing whitespace and runs first; anything appended before it is
+    removed by it. The vocabulary pass runs after the whole rules chain and does
+    not strip (its only `.strip()` is on a config key), and the injector passes
+    text through unaltered — verified rather than assumed, because a rule whose
+    output is silently removed downstream is a setting that appears to do
+    nothing.
+    """
+    if not text or text != text.rstrip():
+        return text
+    return text + " "
+
+
 def apply_spoken_commands(text: str) -> str:
     """`new paragraph` -> a blank line, when the phrase stands alone.
 
@@ -350,6 +384,11 @@ class RuleBasedPostProcessor(TextPostProcessor):
         )
         if self._config.terminal_punctuation:
             rules.append(("ensure_terminal_punctuation", ensure_terminal_punctuation))
+        # Last, unconditionally last. `collapse_whitespace` removes trailing
+        # whitespace and runs first, so a space added anywhere above this line
+        # is a space that rule deletes.
+        if self._config.trailing_space:
+            rules.append(("trailing_space", ensure_trailing_space))
         self._rules = tuple(rules)
 
     @property

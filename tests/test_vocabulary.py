@@ -402,7 +402,11 @@ def test_the_vocabulary_runs_after_the_rules(tmp_path: Path) -> None:
     text = "the format is csp"
     for processor in chain:
         text = processor.process(text, session)
-    assert text == "The format is CSV."
+    # Trailing space included on purpose. This drives the **shipped** chain,
+    # so it is the only test that shows `trailing_space` surviving the
+    # vocabulary pass — the rules chain adds it and a later processor could
+    # strip it, which would make the key look like it does nothing.
+    assert text == "The format is CSV. "
 
 
 def test_an_empty_vocabulary_is_reported_as_such(tmp_path: Path) -> None:
