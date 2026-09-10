@@ -42,11 +42,12 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import sqlite3
 import sys
 import time
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import numpy as np
 
@@ -91,14 +92,128 @@ def _deletions(injected: str, corrected: str) -> int:
     )
 
 
+#: The band the Phase 4 runbook's lane 4 asks for: "ten ordinary short things,
+#: 8 to 12 seconds each". Widened at the bottom to 6 s because real dictation
+#: does not land where a runbook says it will, and a take of 6.1 s is the same
+#: question as one of 8.0 s. The *upper* bound is the one that matters — above
+#: it the take stops being a short utterance and starts being the long-form
+#: case §7.2 already settled.
+SHORT_BAND_SECONDS: Final = (6.0, 12.0)
+
+
+def emit_corrections(
+    db_path: Path,
+    destination: Path,
+    band: tuple[float, float],
+    since: str | None = None,
+) -> int:
+    """Write a corrections template for every dictation inside `band`.
+
+    `gate_phase3.py` has an emitter and it cannot be used here: its `gate_rows`
+    selects the **long** corpus — ten most recent takes of 60 s or more, which
+    is the Phase 3 gate's own criterion. Lane 4 is the opposite band by
+    construction, so the template it needs did not exist and the lane could not
+    be started without hand-writing JSON from `manu history` output.
+
+    `corrected` is seeded with `injected` rather than left empty, for the same
+    reason the other emitter does it: the operator is correcting a transcript,
+    not transcribing from scratch, and most takes need no edit at all. An empty
+    field invites retyping the whole thing, which introduces differences that
+    are the typist's rather than the decoder's — the failure the 2026-09-02
+    read-aloud reference already demonstrated at 54.09% against a real 8.59%.
+    """
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        # `--since` is not convenience. The Phase 3 gate recorded a corpus
+        # decoded under an `initial_prompt` that had been removed from
+        # `config.toml` eight minutes after the last take, and the whole set had
+        # to be re-recorded. `history.db` carries no `config_sha256` column, so
+        # nothing here can *detect* a configuration change — the only defence is
+        # the operator scoping the window to takes they know were recorded under
+        # one configuration, and the emitter making that easy enough to do.
+        rows = connection.execute(
+            "SELECT id, started_at, duration_seconds, transcript FROM transcripts "
+            "WHERE duration_seconds BETWEEN ? AND ? AND transcript != '' "
+            "AND (? IS NULL OR date(started_at) >= ?) "
+            "ORDER BY started_at ASC",
+            (*band, since, since),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    template = {
+        row["id"]: {
+            "started_at": row["started_at"],
+            "seconds": round(row["duration_seconds"], 1),
+            "injected": row["transcript"],
+            "corrected": row["transcript"],
+        }
+        for row in rows
+    }
+    destination.write_text(json.dumps(template, indent=2) + "\n")
+    return len(template)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corrections", type=Path, required=True)
+    parser.add_argument("--corrections", type=Path)
+    parser.add_argument(
+        "--emit-corrections",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "write a template for every stored dictation of "
+            f"{SHORT_BAND_SECONDS[0]:g}-{SHORT_BAND_SECONDS[1]:g}s, then edit "
+            "each 'corrected' to what you MEANT and re-run with --corrections"
+        ),
+    )
+    parser.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help=(
+            "only emit dictations from this date onward. Use it to scope a set "
+            "to one configuration — history.db records no config digest, so "
+            "nothing else can tell takes either side of a change apart"
+        ),
+    )
     parser.add_argument("--audio-dir", type=Path, default=None)
     parser.add_argument("--models", default="moonshine/tiny,moonshine/base")
     args = parser.parse_args(argv)
 
     config = load_config()
+
+    if args.emit_corrections is not None:
+        from amanuensis.storage.history import HistoryStore
+
+        store = HistoryStore(config.history)
+        written = emit_corrections(
+            store.db_path, args.emit_corrections, SHORT_BAND_SECONDS, args.since
+        )
+        window = f" since {args.since}" if args.since else " (all dates)"
+        print(f"wrote {written} dictation(s){window} to {args.emit_corrections}")
+        if args.since is None and written:
+            print(
+                "  No --since given, so this spans every stored short take. "
+                "Takes recorded either side of a config change measure "
+                "different products and history.db cannot tell you which."
+            )
+        if written == 0:
+            print(
+                f"no stored dictation is {SHORT_BAND_SECONDS[0]:g}-"
+                f"{SHORT_BAND_SECONDS[1]:g}s — record some first",
+                file=sys.stderr,
+            )
+            return 1
+        print("Edit each 'corrected' to what you MEANT to say, then re-run with")
+        print(f"  --corrections {args.emit_corrections}")
+        print()
+        print("This file is gitignored and stays gitignored: it is the verbatim")
+        print("text of your dictation, which is not test data.")
+        return 0
+
+    if args.corrections is None:
+        parser.error("one of --corrections or --emit-corrections is required")
     corrections: dict[str, dict[str, Any]] = json.loads(
         args.corrections.read_text()
     )
