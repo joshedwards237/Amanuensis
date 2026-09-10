@@ -48,6 +48,7 @@ __all__ = [
     "BAR_COUNT",
     "CORNER_RADIUS",
     "MAX_BAR_HEIGHT",
+    "OVERLAY_FAILURE_LIMIT",
     "RecordingOverlay",
     "bar_heights",
     "frame_for",
@@ -100,6 +101,22 @@ _FULL_SCALE: Final = 0.046
 #: measured silence floor of 0.0028 to a quarter of the pill, so a quiet room
 #: would shimmer as though the microphone were hearing something. Set just
 #: above that floor and below the quietest speech.
+#: Consecutive failed renders before the panel is disabled for good.
+#:
+#: `_failed` was a **one-way latch** until 2026-09-10: a single exception out of
+#: `_render` disabled the overlay for the life of the process, and every later
+#: `set_state` and `set_level` returned on it. A daemon that runs for days
+#: across sleep cycles meets a transient AppKit failure eventually, and gate
+#: finding 1 is what that looks like from outside — dictation working, panel
+#: gone, a restart fixing it.
+#:
+#: A budget rather than unlimited retries, because the original argument was
+#: right about the *persistent* case: retrying forever turns a broken panel into
+#: a broken panel that also runs code on every audio block. Reset by any
+#: successful render, or three failures spread across three days would disable a
+#: panel that worked perfectly in between.
+OVERLAY_FAILURE_LIMIT: Final = 3
+
 _NOISE_FLOOR: Final = 0.005
 #: Deflection curve. Linear RMS looks dead because loudness is perceived
 #: roughly logarithmically — a level at 20% of full scale reads as much louder
@@ -182,6 +199,15 @@ class RecordingOverlay:
         #: every time, and retrying it on every state change turns one defect
         #: into a failure on every dictation.
         self._failed = False
+        #: Consecutive failures, reset by any success. See OVERLAY_FAILURE_LIMIT.
+        self._failures = 0
+        #: The screen rect the panel's frame was derived from. Gate finding 1's
+        #: second mechanism is this going stale: the panel is positioned once,
+        #: the display changes under it, and `orderFrontRegardless()` keeps
+        #: succeeding while the panel sits somewhere nobody can see. Nothing
+        #: raises, so nothing is reported — which is why the operator saw no
+        #: error and why the two mechanisms could not be told apart.
+        self._screen: tuple[float, float, float, float] | None = None
         self._on_error = on_error
         #: Recent audio levels, newest last. Bounded, and read on the main
         #: queue while the PortAudio thread appends — a deque with a maxlen is
@@ -274,15 +300,32 @@ class RecordingOverlay:
         try:
             self._render_unguarded(wanted)
         except Exception as exc:
-            self._failed = True
-            if self._on_error is not None:
-                self._on_error(f"the recording overlay failed and is off: {exc}")
+            self._failures += 1
+            # The panel is rebuilt from scratch on the next attempt: a half-built
+            # one is what a mid-`_build` failure leaves behind, and reusing it is
+            # how a transient failure becomes a permanent one.
+            self._panel = None
+            self._screen = None
+            if self._failures >= OVERLAY_FAILURE_LIMIT:
+                self._failed = True
+                if self._on_error is not None:
+                    self._on_error(
+                        f"the recording overlay failed {self._failures} times "
+                        f"and is off: {exc}"
+                    )
+            elif self._on_error is not None:
+                self._on_error(
+                    f"the recording overlay failed and will retry: {exc}"
+                )
+        else:
+            self._failures = 0
 
     def _render_unguarded(self, wanted: bool) -> None:
         panel = self._panel if self._panel is not None else self._build()
         if panel is None:  # pragma: no cover — AppKit returned nil
             return
         if wanted:
+            self._reframe_if_the_screen_moved(panel)
             # Reset before showing. A pill that opens holding the previous
             # dictation's levels looks frozen for the first thirty milliseconds,
             # which is exactly the "is it live or is it stuck" ambiguity.
@@ -293,20 +336,48 @@ class RecordingOverlay:
         else:
             panel.orderOut_(None)
 
+    def _reframe_if_the_screen_moved(self, panel: Any) -> None:
+        """Re-position the panel when the display it was built against changed.
+
+        Checked on show rather than driven by
+        `NSApplicationDidChangeScreenParameters`, because the notification is
+        one more thing to register, unregister and get wrong on a component
+        whose failures are silent — and because a panel that is not visible does
+        not need to be right. On show is the last moment it matters.
+
+        **Conditional, and the condition is the test.** Re-framing on every show
+        would nudge a panel the user is looking at on every dictation, and would
+        make a test of this indistinguishable from a test of nothing.
+        """
+        current = self._screen_rect()
+        if current == self._screen:
+            return
+        from amanuensis.ui.indicator import _appkit
+
+        rect = frame_for(self._config.overlay_position, current)
+        panel.setFrame_display_(_appkit().NSMakeRect(*rect), True)
+        self._screen = current
+
+    @staticmethod
+    def _screen_rect() -> tuple[float, float, float, float]:
+        """The main screen as a flat tuple. `NSRect` unpacks as `((x, y), (w, h))`
+        — two elements, nested — and reading that shape wrong crashed a daemon
+        on 2026-09-02 while every test passed against a flat fake."""
+        from amanuensis.ui.indicator import _appkit
+
+        (origin_x, origin_y), (width, height) = _appkit().NSScreen.mainScreen().frame()
+        return (float(origin_x), float(origin_y), float(width), float(height))
+
     def _build(self) -> Any:
         from amanuensis.ui.indicator import _appkit
 
         appkit = _appkit()
-        screen = appkit.NSScreen.mainScreen()
         # `NSScreen.frame()` is an `NSRect`, which PyObjC unpacks as
         # `((x, y), (width, height))` — two elements, nested. `tuple(...)` of
         # it is therefore length 2, not 4, and this line read the framework's
         # shape wrong until a daemon crashed on it.
-        (origin_x, origin_y), (width, height) = screen.frame()
-        rect = frame_for(
-            self._config.overlay_position,
-            (float(origin_x), float(origin_y), float(width), float(height)),
-        )
+        self._screen = self._screen_rect()
+        rect = frame_for(self._config.overlay_position, self._screen)
 
         panel = appkit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             appkit.NSMakeRect(*rect),

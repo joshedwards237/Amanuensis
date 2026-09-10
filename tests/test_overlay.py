@@ -23,6 +23,7 @@ from amanuensis.ui.overlay import (
     CORNER_RADIUS,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
+    OVERLAY_FAILURE_LIMIT,
     RecordingOverlay,
     bar_heights,
     frame_for,
@@ -226,10 +227,21 @@ def test_a_failing_panel_disables_the_overlay_and_reports_it(
     assert reported, "the failure was swallowed silently"
     assert "overlay" in reported[0].lower()
 
+    # **This assertion changed on 2026-09-10 and the change is the point.**
+    # It used to read `assert reported == []` — one failure, off forever, never
+    # heard from again. That contract is what gate finding 1 reports from the
+    # other side: a transient AppKit failure on a daemon running for days killed
+    # the panel until a restart, and the microphone stayed live.
+    #
+    # The half that was right survives: it must not retry on *every* dictation
+    # forever. So the budget is bounded and the reporting is bounded with it.
     reported.clear()
-    overlay.set_state(DictationState.IDLE)
-    overlay.set_state(DictationState.RECORDING)
-    assert reported == [], "a failed overlay must not retry on every dictation"
+    for _ in range(OVERLAY_FAILURE_LIMIT + 3):
+        overlay.set_state(DictationState.IDLE)
+        overlay.set_state(DictationState.RECORDING)
+    assert len(reported) < OVERLAY_FAILURE_LIMIT, (
+        "a permanently failing overlay is still reporting on every dictation"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -354,3 +366,191 @@ def test_a_quiet_room_does_not_shimmer() -> None:
         assert max(heights) <= MIN_BAR_HEIGHT + 0.01, (
             f"ambient {ambient} deflects to {max(heights)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Gate finding 1 — the panel died in place and the microphone did not
+# ---------------------------------------------------------------------------
+
+
+def _flaky_panel(fake: _FakeAppKit, failures: int) -> None:
+    """Make `NSPanel.alloc` raise `failures` times, then behave."""
+    from test_overlay_fakes import _FakePanel
+
+    remaining = {"n": failures}
+
+    class NSPanel:
+        @staticmethod
+        def alloc() -> _FakePanel:
+            if remaining["n"] > 0:
+                remaining["n"] -= 1
+                raise RuntimeError("AppKit said no")
+            panel = _FakePanel()
+            fake.panels.append(panel)
+            return panel
+
+    fake.NSPanel = NSPanel
+
+
+def test_a_transient_render_failure_does_not_disable_the_panel_forever(
+    appkit: _FakeAppKit,
+) -> None:
+    """`_failed` was a one-way latch with no recovery: one exception out of
+    `_render` disabled the panel for the life of the process, and every later
+    `set_state` and `set_level` returned on it.
+
+    A daemon that runs for days across sleep cycles will meet a transient
+    AppKit failure eventually, and the operator's 2026-09-10 report is what
+    that looks like from outside — dictation working, panel gone, a restart
+    fixing it. One of gate finding 1's two open mechanisms.
+    """
+    _flaky_panel(appkit, failures=1)
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+
+    overlay.set_state(DictationState.RECORDING)  # raises
+    overlay.set_state(DictationState.IDLE)
+    overlay.set_state(DictationState.RECORDING)  # must recover
+
+    assert appkit.panels, "one transient failure disabled the panel permanently"
+    assert appkit.panels[-1].ordered_front_regardless
+
+
+def test_a_persistently_failing_render_still_gives_up(appkit: _FakeAppKit) -> None:
+    """The negative control, and it is not optional.
+
+    Retrying forever turns a broken panel into a broken panel that also runs
+    code on every state change and every audio block, on the main queue.
+    `_failed`'s original argument -- disable rather than retry -- was right
+    about the persistent case and wrong about the transient one, and the fix
+    has to keep the half that was right.
+    """
+    reported: list[str] = []
+    _flaky_panel(appkit, failures=10_000)
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=reported.append)
+
+    for _ in range(OVERLAY_FAILURE_LIMIT + 3):
+        overlay.set_state(DictationState.RECORDING)
+        overlay.set_state(DictationState.IDLE)
+
+    assert len(reported) <= OVERLAY_FAILURE_LIMIT, (
+        f"it reported {len(reported)} times -- it is retrying forever"
+    )
+
+
+def test_a_success_resets_the_failure_budget(appkit: _FakeAppKit) -> None:
+    """Otherwise the budget is a slow one-way latch: failures spread across
+    days would disable a panel that worked perfectly between them.
+
+    **Four earlier versions of this test could not fail**, each for a different
+    reason, and my own sabotage pass found all four rather than review. Worth
+    recording, because each is a distinct way an assertion goes hollow:
+
+    1. Alternating states against a fake that raised once — a hide is a render
+       too, so every failure was followed by a success that reset the budget.
+    2. `burst` armed failures across `2 × burst` renders — a success still
+       landed inside every burst.
+    3. Asserting `ordered_front_regardless`, which is **sticky** on the fake: it
+       records that a show once happened and nothing clears it, so it passed on
+       a panel shown before the failures began.
+    4. Injecting failures at `NSPanel.alloc`, which is only reached when no
+       panel exists. The overlay builds once, so the second burst injected
+       nothing at all.
+
+    What makes this one discriminate: failures are injected at the **render**
+    (`render_failures`, consumed by show and hide alike, which happen every
+    time), and the assertion counts a **new** panel rather than reading a sticky
+    flag.
+    """
+    import itertools
+
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+    burst = OVERLAY_FAILURE_LIMIT - 1
+    assert burst >= 1 and 2 * burst >= OVERLAY_FAILURE_LIMIT, (
+        "the arithmetic no longer discriminates — a non-resetting budget would "
+        "survive this test"
+    )
+    flip = itertools.cycle([DictationState.RECORDING, DictationState.IDLE])
+
+    for _ in range(2):
+        appkit.render_failures = burst
+        for _ in range(burst):
+            overlay.set_state(next(flip))
+        overlay.set_state(next(flip))  # a clean render resets the budget
+
+    overlay.set_state(DictationState.IDLE)
+    built = len(appkit.panels)
+    overlay.set_state(DictationState.RECORDING)
+
+    assert len(appkit.panels) > built or appkit.panels[-1].ordered_front_regardless, (
+        "no render happened — the budget did not reset and the overlay is off"
+    )
+    assert not overlay._failed, "the overlay latched off despite the resets"
+
+
+def test_a_failed_render_discards_the_panel_it_failed_on(
+    appkit: _FakeAppKit,
+) -> None:
+    """Recovery has to be a *fresh* panel, not another go at the broken one.
+
+    A render can fail with a panel already built — the show call itself raising
+    is the case, and it is the one a display change produces. Keeping that panel
+    means the next attempt retries the object that just failed, which turns the
+    bounded budget into three attempts at the same broken thing rather than
+    three chances to recover. Found by sabotage: removing the discard failed
+    nothing, so it was untested defensive code until this existed.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+    overlay.set_state(DictationState.RECORDING)
+    first = appkit.panels[-1]
+
+    overlay.set_state(DictationState.IDLE)
+    appkit.render_failures = 1
+    overlay.set_state(DictationState.RECORDING)  # raises with a panel in hand
+    overlay.set_state(DictationState.IDLE)
+    overlay.set_state(DictationState.RECORDING)  # must recover
+
+    assert appkit.panels[-1] is not first, (
+        "it retried the panel that had just failed"
+    )
+    assert appkit.panels[-1].ordered_front_regardless
+
+
+def test_the_panel_is_reframed_when_the_screen_moves(appkit: _FakeAppKit) -> None:
+    """Gate finding 1's second mechanism, and the silent one.
+
+    The panel is built once against `NSScreen.mainScreen()` and there is no
+    handler for any display-change or wake notification -- so a lid close moves
+    the screen out from under it while `orderFrontRegardless()` still succeeds
+    and raises nothing. Nothing reports it because nothing failed, which is why
+    the operator saw no error and why the two mechanisms could not be told
+    apart.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+    overlay.set_state(DictationState.RECORDING)
+    panel = appkit.panels[-1]
+    built = panel.frame
+
+    overlay.set_state(DictationState.IDLE)
+    appkit.screen_frame = ((0.0, 0.0), (1280.0, 800.0))
+    overlay.set_state(DictationState.RECORDING)
+
+    assert panel.frame != built, (
+        "the panel kept a frame derived from a screen that is no longer there"
+    )
+
+
+def test_an_unchanged_screen_does_not_reframe(appkit: _FakeAppKit) -> None:
+    """The positive control on the check above.
+
+    Re-setting the frame on every show would satisfy that test while proving
+    nothing, and would nudge a panel the user is looking at on every dictation.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+    overlay.set_state(DictationState.RECORDING)
+    panel = appkit.panels[-1]
+    panel.frames_set = 0
+
+    overlay.set_state(DictationState.IDLE)
+    overlay.set_state(DictationState.RECORDING)
+
+    assert panel.frames_set == 0, "it re-framed a screen that had not moved"

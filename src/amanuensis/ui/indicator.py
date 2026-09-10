@@ -37,7 +37,19 @@ from typing import Any, Final
 
 from amanuensis.controllers.dictation_controller import DictationState
 
-__all__ = ["GLYPHS", "RecordingIndicator"]
+__all__ = ["FAULT_MARK", "GLYPHS", "RecordingIndicator"]
+
+#: Appended to the state glyph while something this process renders is broken.
+#: An **addition**, never a replacement: the state is what §5.4 requires to be
+#: readable, and trading it away to report a fault would break the requirement
+#: in the act of reporting that it is broken.
+#:
+#: Added 2026-09-10 for gate finding 3. An overlay failure reached `TrayApp`
+#: and stopped at a *menu row* — so the recording panel could die with the only
+#: notice behind a click nobody has a reason to make. That is also why finding
+#: 1's two mechanisms could not be told apart: the loud path and the silent path
+#: were both, in practice, silent.
+FAULT_MARK: Final = "!"
 
 #: How often the run loop hands control back to Python. This is the *only*
 #: thing that lets a signal handler run while the daemon is idle, so it is a
@@ -102,6 +114,9 @@ class RecordingIndicator:
     def __init__(self) -> None:
         self._item: Any | None = None
         self._state = DictationState.IDLE
+        #: Orthogonal to `_state`: the overlay can be dead while the
+        #: daemon records perfectly, which is gate finding 1's exact shape.
+        self._faulted = False
         #: Guards `_item` only. The status item is created on the main thread
         #: and read by whichever thread reports a state change; the lock is
         #: held for a read and nothing else.
@@ -140,6 +155,26 @@ class RecordingIndicator:
         with self._lock:
             if self._item is None:
                 return
+        _main_queue().addOperationWithBlock_(lambda: self._draw(state))
+
+    def set_fault(self, faulted: bool) -> None:
+        """Mark or unmark the title. Safe from any thread.
+
+        Separate from `set_state` because a fault is orthogonal to what the
+        microphone is doing: the overlay can be dead while the daemon records
+        perfectly, which is exactly the state gate finding 1 reports. Folding
+        it into `DictationState` would need a sixth value, and that enum's
+        docstring forecloses it — "Exactly §5.4's values, and no more."
+
+        Survives state changes on purpose. A marker cleared by the next
+        keypress would appear to have been handled, which is worse than never
+        showing it.
+        """
+        self._faulted = faulted
+        with self._lock:
+            if self._item is None:
+                return
+        state = self._state
         _main_queue().addOperationWithBlock_(lambda: self._draw(state))
 
     def set_menu(self, menu: Any) -> None:
@@ -226,5 +261,9 @@ class RecordingIndicator:
         button = item.button()
         if button is None:  # pragma: no cover — AppKit may return nil
             return
-        button.setTitle_(GLYPHS[state])
-        button.setToolTip_(_TOOLTIPS[state])
+        button.setTitle_(GLYPHS[state] + (FAULT_MARK if self._faulted else ""))
+        button.setToolTip_(
+            f"{_TOOLTIPS[state]} — a fault is reported in the menu"
+            if self._faulted
+            else _TOOLTIPS[state]
+        )

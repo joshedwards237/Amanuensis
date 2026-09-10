@@ -16,6 +16,8 @@ class _FakePanel:
         self.level = 0
         self.frame: tuple[float, float, float, float] | None = None
         self.content: Any = None
+        self.frames_set = 0
+        self.owner: Any = None
 
     def initWithContentRect_styleMask_backing_defer_(
         self, rect: Any, _mask: int, _backing: int, _defer: bool
@@ -46,12 +48,30 @@ class _FakePanel:
 
     def setFrame_display_(self, rect: Any, _display: bool) -> None:
         self.frame = rect
+        self.frames_set += 1
+
+    def _maybe_fail(self) -> None:
+        """Raise if the owning fake is armed. Added 2026-09-10.
+
+        Arming `NSPanel.alloc` only fails a render that *builds*, and the
+        overlay builds once — so a second burst of injected failures silently
+        injected nothing, and a test of the failure budget could not fail. The
+        show and hide calls happen on every render whether or not a panel
+        already exists, which is where a render failure has to be injected to
+        mean anything.
+        """
+        owner = self.owner
+        if owner is not None and getattr(owner, "render_failures", 0) > 0:
+            owner.render_failures -= 1
+            raise RuntimeError("AppKit said no")
 
     def orderFrontRegardless(self) -> None:
+        self._maybe_fail()
         self.ordered_front_regardless = True
         self.ordered_out = False
 
     def orderOut_(self, _sender: Any) -> None:
+        self._maybe_fail()
         self.ordered_out = True
 
     def makeKeyAndOrderFront_(self, _sender: Any) -> None:
@@ -128,11 +148,13 @@ class _FakeView:
 def install(fake: Any) -> None:
     """Give an AppKit fake the panel surface the overlay needs."""
     fake.panels = []
+    fake.render_failures = 0
 
     class NSPanel:
         @staticmethod
         def alloc() -> _FakePanel:
             panel = _FakePanel()
+            panel.owner = fake
             fake.panels.append(panel)
             return panel
 
@@ -181,9 +203,26 @@ def install(fake: Any) -> None:
             """
             return ((0.0, 0.0), (1440.0, 900.0))
 
+    # Swappable, because gate finding 1's second mechanism is the panel being
+    # built once against a screen that later moves. A fake that can only ever
+    # report one screen cannot express the defect, and every overlay test
+    # passed against exactly that fake while the operator's panel sat on a
+    # display that was no longer there.
+    fake.screen_frame = ((0.0, 0.0), (1440.0, 900.0))
+
+    class _MovableScreen:
+        @staticmethod
+        def frame() -> tuple[tuple[float, float], tuple[float, float]]:
+            """The shape PyObjC actually returns for `NSRect` -- `((x, y), (w, h))`.
+
+            Flat 4-tuples here crashed a daemon on 2026-09-02 while every test
+            passed, which is why this stays nested.
+            """
+            return fake.screen_frame
+
     class NSScreen:
         @staticmethod
-        def mainScreen() -> _Screen:
-            return _Screen()
+        def mainScreen() -> _MovableScreen:
+            return _MovableScreen()
 
     fake.NSScreen = NSScreen

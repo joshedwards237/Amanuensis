@@ -79,6 +79,10 @@ eliminated by the report.**
    panel is ordered front somewhere the user cannot see it. **This path is
    silent** — no exception, no tray error, no log line.
 
+> **RESOLVED IN PART, 2026-09-10.** Both mechanisms are fixed and finding 3 with
+> them; a **third** mechanism was found by review and is open. See the closing
+> note at the end of this finding.
+
 **The discriminator was supposed to be whether the tray showed an error.
 Operator observation, 2026-09-10: the menu-bar glyph was present and cycling
 correctly, and no error was visible.** That looks like it eliminates mechanism 1,
@@ -107,6 +111,61 @@ qualification.
 launched from, the operator restarted the service, and nothing is written to
 disk. Reproducing this means running for days and watching for it, which is the
 opposite of a cheap check.
+
+### What was done, 2026-09-10
+
+Both mechanisms are fixed, and finding 3 with them, because finding 3 is why
+neither could be diagnosed.
+
+- **Mechanism 1 — the one-way latch.** `_failed` now has a **budget**:
+  `OVERLAY_FAILURE_LIMIT` consecutive failures disable the panel, and any
+  successful render resets the count. The original argument was right about the
+  persistent case — retrying forever means a broken panel that also runs code on
+  every audio block — and wrong about the transient one. A failed render also
+  discards the panel it failed on, so recovery is a fresh panel rather than
+  another attempt at the broken one.
+- **Mechanism 2 — the never-rebuilt panel.** The screen rect the frame was
+  derived from is remembered and compared on every show; a change re-frames.
+  Checked on show rather than driven by a notification, because a panel that is
+  not visible does not need to be right and a notification is one more thing to
+  register and get wrong on a component whose failures are silent. Conditional,
+  with a control asserting an unchanged screen does **not** re-frame — re-framing
+  unconditionally would pass the first test while proving nothing and would nudge
+  a panel the user is looking at.
+- **Finding 3 — the notice nobody sees.** `TrayApp.set_error` now marks the
+  menu-bar **title** as well as adding the menu row. The words stay in the menu,
+  which has room for them; the *mark* goes where §5.4 requires state to be
+  readable. It is an addition to the state glyph, never a replacement — trading
+  the microphone state away to report a fault would break the requirement in the
+  act of reporting that it is broken.
+
+**What this does not do:** it does not prove the reported failure is gone. That
+took days of uptime across a sleep cycle and no diagnostic survived it. What can
+be claimed is narrower and is what the tests hold — a transient failure now
+recovers, a persistent one still gives up, a moved screen re-frames, and a fault
+is visible without opening a menu.
+
+### Finding 1c — a third mechanism, found by review rather than by use
+
+The sentinel pass over `docs/superpowers/specs/overlay-controls.md` on
+2026-09-10 (objection **O4**) found a third route to this same symptom, and it
+needs no uptime at all.
+
+`DictationState` is a **process-wide** value written by two threads for two
+different sessions — the controller's own preamble says overlap is designed for:
+"sessions can overlap: dictate twice quickly and session N's text can land in
+whatever window has focus when the worker reaches it." The worker sets the
+terminal state for session N while the event tap has already set `RECORDING` for
+session N+1.
+
+Any rule that reads the state *stream* as a per-session sequence is therefore
+wrong. The overlay does not read it that way today, so **this is not currently
+reachable** — but the proposed transcribing-fade rule did, which is how it was
+found, and the same hazard sits under anything that infers an event from a
+transition.
+
+**Open.** The fix is either session identity in the signal or an explicit
+injection event; both are S4's decision and neither is built.
 
 ---
 

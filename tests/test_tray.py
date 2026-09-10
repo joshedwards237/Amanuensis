@@ -280,7 +280,13 @@ def test_show_creates_one_status_item_and_attaches_the_menu(
     assert item.menu is not None, "show() attached no menu"
     titles = [row.title for row in item.menu.items]
     assert any("Accessibility permission was revoked" in t for t in titles)
-    assert item.button().titles[-1] == "○", "the glyph must stay in the title"
+    # Containment, not equality, since 2026-09-10. §5.4's requirement is that
+    # the state is readable in the title without opening the menu; a fault mark
+    # alongside it satisfies that and an equality assertion forbids it. The
+    # requirement is that the glyph stays, not that it is alone -- and this test
+    # is set up with an error outstanding, so it is exactly the case the mark
+    # exists for.
+    assert "○" in item.button().titles[-1], "the glyph must stay in the title"
 
 
 # ---------------------------------------------------------------------------
@@ -587,3 +593,35 @@ def test_a_mode_action_does_not_fire_the_hotkey_handler() -> None:
 
 def test_no_mode_row_before_the_options_are_supplied() -> None:
     assert not any(i.title.startswith("Mode:") for i in TrayApp().menu_items())
+
+
+def test_an_error_marks_the_menu_bar_and_not_only_the_menu() -> None:
+    """Gate finding 3. The words belong in the menu, which has room for them.
+    The *notice* has to be readable without opening it, or §5.4's premise is
+    broken by the surface that reports §5.4 surfaces breaking."""
+    tray = TrayApp()
+    tray.show()
+    before = tray._indicator._faulted
+
+    tray.set_error("the recording overlay failed and is off")
+
+    assert before is False
+    assert tray._indicator._faulted is True, (
+        "an error left the menu-bar title unmarked"
+    )
+    assert any(
+        "overlay" in item.title.lower() for item in tray.menu_items()
+    ), "the words left the menu"
+
+
+def test_clearing_the_error_unmarks_the_menu_bar() -> None:
+    """The negative control. A mark that never comes off is a permanent alarm,
+    which is the 'teaches people to ignore it' failure §5.4 names about
+    over-reporting, arrived at from the other direction."""
+    tray = TrayApp()
+    tray.show()
+    tray.set_error("something broke")
+
+    tray.set_error(None)
+
+    assert tray._indicator._faulted is False

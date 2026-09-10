@@ -228,6 +228,14 @@ class TrayApp:
         # to nothing and render a blank row the user cannot tell from a
         # rendering fault.
         self._error = message if message and message.strip() else None
+        # Gate finding 3: until 2026-09-10 this wrote the words into a menu row
+        # and stopped. §5.4's premise is that the user does not open the tray
+        # menu to learn what the microphone is doing, so a fault reported only
+        # there is a fault reported nowhere — and it is why finding 1's two
+        # mechanisms could not be told apart, the one discriminating signal
+        # having been routed somewhere nobody looks. The words stay in the menu;
+        # the *mark* goes in the title.
+        self._indicator.set_fault(self._error is not None)
         self._refresh()
 
     def set_hotkey_options(

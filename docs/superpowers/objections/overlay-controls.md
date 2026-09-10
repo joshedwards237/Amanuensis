@@ -9,93 +9,95 @@ objections:
     severity: critical
     claim: "Ending a latched session through ✕ or ✓ tells the controller but not the listener, leaving `_latched = True` — after which a hold-to-dictate is ignored indefinitely and the hotkey appears dead."
     evidence: "Spec §6.2 wires the buttons past the listener. hotkey/macos.py:511-560 — a press while `_latched` returns without firing `on_press`; a release with `held >= window` returns without firing anything."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Resolved with O2 — `cli.py` owns the latched flag and clears it on all three exits, so ending through a button and ending through a tap leave the listener in the same state. Blocks S5."
   - id: O2
     category: specification quality
     severity: critical
     claim: "§3 requires the overlay to render differently when latched, §5 rejects the overlay knowing about the latch as a §6.2 violation, and no component outside the listener can observe latch state. The spec adds a signal for the latch opening and none for it closing."
     evidence: "Spec §3 table; spec §5 rejection; spec §6.2 constructor has no latch input. hotkey/macos.py:261 `_latched` private, no accessor. cli.py:848-854 fan-out carries one enum. dictation_controller.py:104-107 — 'Exactly §5.4's values, and no more'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "`cli.py` owns a latched flag and calls `overlay.set_latched()`, fanned out beside `set_state`. §5's rejection is narrowed in the spec to what it actually argued — suppressing an IDLE — rather than reading as a ban on rendering. The missing closing edge is the substance and is now named. Blocks S5."
   - id: O3
     category: risk
     severity: critical
     claim: "A 16 px irreversible discard sits 4 px from a 16 px confirm, on a panel that never takes focus and may have no hover state, guarding the gesture used for the longest dictations — no confirmation, no undo, nothing persisted to recover from."
     evidence: "Spec §4 geometry; spec §11 'the only cancel affordance'; dictation_controller.py:414-427 `abort_session` — 'Nothing is persisted'. PRD §5.2 — the latch exists for 'a seventy-five second dictation'."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The ✕ and ✓ separate by more than `_CONTROL_GAP`, and the ✕ requires a deliberate gesture rather than a single click. Sized at S5, not here; recorded now so it is not decided by geometry defaults."
   - id: O4
     category: implementation
     severity: critical
     claim: "The state stream is not a per-session sequence — the worker sets IDLE for session N while the event tap has already set RECORDING for session N+1 — so §7's two-element history reads that IDLE as an abort and hides the panel over a live microphone."
     evidence: "dictation_controller.py:679-684 (worker sets terminal state) vs 349-361 (`start_session` on the event tap). Controller preamble 26-32: 'sessions can overlap'. PRD §5.4."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The state signal carries session identity, or §7's history rule is dropped for an explicit injection signal. §7 is rewritten at S4. **Also raised as a third mechanism against gate finding 1**, independent of this spec."
   - id: O5
     category: implementation
     severity: high
     claim: "`on_finish → controller.end_session` binds an AppKit click action directly to a method that raises `RuntimeError` when no session is open, on the main queue, where an uncaught Python exception terminates the process."
     evidence: "dictation_controller.py:375-377 'Raises when no session is open'. overlay.py:258-273 — the 2026-09-02 process termination."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "`cli.py` wraps both bindings. `abort_session` is already safe; `end_session` is not, and the asymmetry is invisible at the binding site."
   - id: O6
     category: risk
     severity: high
     claim: "The 'indistinguishable downstream' claim rests on non-activation holding, which §9 lists as unverifiable here. If it does not hold, §6.3's focus guard declines to inject and the words go to history and the dropdown nobody opens."
     evidence: "dictation_controller.py:394 `focus_identity()` read inside `end_session`; 186-197 `deliver` returns 'the focused application changed'. Gate finding 3. INFERRED — depends on AppKit runtime behaviour not observable by reading."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Recorded as a data-delivery risk rather than a UI one, with the fallback named: if non-activation does not hold, the focus identity is captured when the panel is shown rather than at the click."
   - id: O7
     category: premise
     severity: high
     claim: "The transcribing animation is ~3× longer than the measured duration of the state it renders, so on an ordinary dictation the user sees a dim dot appear and vanish, never a breath."
     evidence: "Spec §7 '~900 ms'. docs/gates/phase-4.md:46 — G1 p50 312.4 ms / p95 344.5 ms, which is TRANSCRIBING end to end. dictation_controller.py:88-89."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The period is sized against the measured p50 of 312.4 ms, or the spec states it is for the long-form case and marks the number UNMEASURED."
   - id: O8
     category: alternatives
     severity: high
     claim: "`restart_session` discards audio for a reason that no longer applies once the session never ends. Continuing the same session is simpler, loses nothing, needs no new capture operation — and the spec does not weigh it."
     evidence: "PRD §5.2's discard exists so a fragment does not become its own dictation — a hazard requiring a separately queued session, which §5's own resolution removes. PRD §5.2 praises push-to-talk for losing 'no leading audio'; this discards up to 350 ms of it."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "Weighed in the spec. The discard is kept only if a reason survives that is not the stray-word hazard §5's own resolution removes."
   - id: O9
     category: scope
     severity: high
     claim: "`restart_session` requires an `AudioCapture` operation that does not exist — discarding the buffer without closing the stream — and requires resetting session bookkeeping the spec never mentions."
     evidence: "audio/capture.py:131-134 `start` raises if the stream is live; 150-167 `stop` is the only path clearing `_blocks`. dictation_controller.py:360, 382-389 (`started_at`, `capture_ms`)."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The `AudioCapture` operation and the session bookkeeping are named in the spec before S2 is built."
   - id: O10
     category: specification quality
     severity: high
     claim: "`_latch_enabled` gates the entire latch on `on_cancel is not None`, so replacing the latch's callback pair with `on_latch` silently disables the latch unless that gate moves too. §5's '`on_cancel` remains' conflates the listener's callback with the overlay's new one of the same name."
     evidence: "hotkey/macos.py:450-464. Spec §5 and §6.2 use the name for two different objects."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "`_latch_enabled`'s gate moves in the same edit, and the two `on_cancel` names are disambiguated."
   - id: O11
     category: implementation
     severity: medium
     claim: "§2's invariant is a property of what is on screen; §7 places the guard on the producer (`set_level`). The drawing is dispatched to the main queue and §9's test exercises only the producer path."
     evidence: "overlay.py:227-233 (append, then dispatch), 235-249 (`_draw_bars` guards only on `if not self._bars`)."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "The guard moves to `_draw_bars`, which runs on the thread the invariant is about."
   - id: O12
     category: specification quality
     severity: medium
     claim: "Visibility is a single boolean and `should_show` is public API. Extending it to include TRANSCRIBING makes the RECORDING→TRANSCRIBING transition satisfy `wanted == self._visible` and early-return, leaving the live waveform on screen."
     evidence: "overlay.py:111-117, exported at 54; 202-216 early return."
-    disposition: pending
-    disposition_rationale: null
+    disposition: accepted
+    disposition_rationale: "`should_show` is not extended. The render path takes the state, not a boolean, so the RECORDING→TRANSCRIBING transition cannot early-return."
 ---
 
 # Objection record — overlay controls, the latch transition, the transcribing state
 
 Spec mode, dispatched 2026-09-10 against `docs/superpowers/specs/overlay-controls.md`
 before any implementation exists. Twelve objections; **ten high or critical**.
-Every disposition is `pending` — resolving one is a human act, which the
-read-only tool boundary on this agent enforces.
+**All twelve accepted, 2026-09-10.** The operator disposed on the recommended
+resolutions; the rationale for each is in the frontmatter. Nothing here was
+deferred and nothing was rejected — the spec was wrong in the ways the record
+says, and O4 turned out to be a defect in the *product*, not only in the spec.
 
 No code was executed. Two objections (O6, and part of O3) turn on AppKit runtime
 behaviour that cannot be observed by reading; both are marked inferred.

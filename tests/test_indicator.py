@@ -350,3 +350,80 @@ def test_recovery_is_not_shown_as_success() -> None:
     reading substituted text with no signal."""
     assert GLYPHS[DictationState.RECOVERED] != GLYPHS[DictationState.IDLE]
     assert GLYPHS[DictationState.RECOVERED] != GLYPHS[DictationState.ERROR]
+
+
+# ---------------------------------------------------------------------------
+# Gate finding 3 — a fault must be readable without opening the menu
+# ---------------------------------------------------------------------------
+
+
+def test_a_fault_marks_the_title_not_only_the_menu(appkit: _FakeAppKit) -> None:
+    """§5.4's premise is that the user does not open the tray menu to learn
+    what the microphone is doing. Until 2026-09-10 an overlay failure was
+    reported *only* as a menu row, so the recording panel could die and the
+    only notice lived behind a click nobody has a reason to make. That is gate
+    finding 3, and it is why finding 1's two mechanisms could not be told apart:
+    the discriminating signal was routed somewhere nobody was looking.
+    """
+    indicator = RecordingIndicator()
+    indicator.show()
+    indicator.set_state(DictationState.IDLE)
+    clean = appkit.bar.items[0].button().titles[-1]
+
+    indicator.set_fault(True)
+
+    title = appkit.bar.items[0].button().titles[-1]
+    assert title != clean, "a fault left the title unchanged"
+    assert GLYPHS[DictationState.IDLE] in title, (
+        "the state must remain readable — a fault is an addition, not a "
+        "replacement, or the user loses the microphone state to learn "
+        "about a panel"
+    )
+
+
+def test_clearing_a_fault_restores_the_plain_title(appkit: _FakeAppKit) -> None:
+    """The negative control. A marker that never comes off is a permanent
+    alarm, which is the same 'teaches people to ignore it' failure §5.4 names
+    about over-reporting."""
+    indicator = RecordingIndicator()
+    indicator.show()
+    indicator.set_state(DictationState.IDLE)
+    clean = appkit.bar.items[0].button().titles[-1]
+
+    indicator.set_fault(True)
+    indicator.set_fault(False)
+
+    assert appkit.bar.items[0].button().titles[-1] == clean
+
+
+def test_a_fault_survives_a_state_change(appkit: _FakeAppKit) -> None:
+    """A fault outlives the dictation it was raised during. If the next state
+    change wiped the marker, the notice would vanish on the user's next
+    keypress — which is worse than not showing it, because it would appear to
+    have been handled."""
+    indicator = RecordingIndicator()
+    indicator.show()
+    indicator.set_fault(True)
+    marked = appkit.bar.items[0].button().titles[-1]
+
+    indicator.set_state(DictationState.RECORDING)
+
+    title = appkit.bar.items[0].button().titles[-1]
+    assert title != marked, "the state glyph must still update"
+    assert GLYPHS[DictationState.RECORDING] in title
+    assert title != GLYPHS[DictationState.RECORDING], (
+        "the fault marker was lost on the next state change"
+    )
+
+
+def test_the_tooltip_says_what_the_fault_is(appkit: _FakeAppKit) -> None:
+    """The title carries a mark; the words have to be somewhere a pointer can
+    reach without a click. The menu row remains for the full text."""
+    indicator = RecordingIndicator()
+    indicator.show()
+    indicator.set_state(DictationState.IDLE)
+
+    indicator.set_fault(True)
+
+    tooltip = appkit.bar.items[0].button().tooltips[-1].lower()
+    assert "fault" in tooltip or "problem" in tooltip, tooltip
