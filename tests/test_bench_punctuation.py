@@ -203,13 +203,34 @@ def test_every_fixture_this_suite_reads_is_tracked_by_git() -> None:
         ).stdout.split()
     )
 
-    # Files a *gitignore rule* deliberately excludes are the corpus itself --
-    # audio and databases -- and those are absent from a fresh clone by design.
-    # Anything else missing is this bug.
+    # A whole *directory* that `.gitignore` excludes is a corpus: `asr/`,
+    # `spontaneous/` and `phase3/` hold voice recordings and the verbatim
+    # corrections beside them, are deliberately absent from every clone, and
+    # the tests that read them are gated behind `requires_corpus` skips.
+    #
+    # Filtering by file *extension* was the first attempt and was wrong: it
+    # passed on this machine's `.wav` files and then flagged
+    # `phase3/manifest.json` and two `spontaneous/*.corrections.json` -- corpus
+    # metadata that is corpus by virtue of where it lives, not what it is named.
+    # Caught by running the merged guard against the operator's real tree, which
+    # is the only tree that has a corpus in it.
+    #
+    # The discriminator is the parent directory. `tests/fixtures/` itself is not
+    # ignored, so a file sitting directly in it must be tracked -- which is
+    # exactly the case that shipped red.
+    def _in_ignored_directory(path: str) -> bool:
+        parent = (ROOT / path).parent
+        while parent != ROOT and ROOT in parent.parents:
+            probe = subprocess.run(
+                ["git", "check-ignore", "-q", str(parent)], cwd=ROOT
+            )
+            if probe.returncode == 0:
+                return True
+            parent = parent.parent
+        return False
+
     untracked = {
-        path
-        for path in present - tracked
-        if not path.endswith((".wav", ".m4a", ".flac", ".db", ".db-wal", ".db-shm"))
+        path for path in present - tracked if not _in_ignored_directory(path)
     }
     assert not untracked, (
         "fixtures on disk but not in the repository — the suite would be red on "
