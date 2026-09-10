@@ -7,6 +7,22 @@ measuring a panel nobody has lived with for more than a day.
 
 **Origin:** operator request, 2026-09-10, from use. Four changes, one component.
 
+> **REVIEWED 2026-09-10, and it does not survive review unamended.** Three
+> sentinels ran against this document before any code existed.
+> [`objections/overlay-controls.md`](../objections/overlay-controls.md) returns
+> **twelve objections, ten high or critical**, and four of the criticals are
+> cases where a test written from §9's own list would pass.
+> [`stories/overlay-controls.md`](../stories/overlay-controls.md) returns eleven
+> decisions this spec takes without recording that it takes them.
+> [`slices/overlay-controls.md`](../slices/overlay-controls.md) returns six
+> slices and a blocker this spec names but assigns to nobody.
+>
+> **Do not build from this document until the critical dispositions are taken.**
+> O1 and O2 mean the design as written leaves the hotkey dead after a click; O4
+> is a **third mechanism** for gate finding 1's symptom — a live microphone with
+> a hidden panel — reachable in seconds rather than days. Every disposition is
+> `pending`; taking one is a human act.
+
 ---
 
 ## 1. What is being asked for
