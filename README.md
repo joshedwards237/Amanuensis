@@ -60,6 +60,11 @@ mid-sentence capital (indistinguishable from a proper noun without a model) and
 folding spoken numbers into digits (measured harmful — *one thought ends* became
 *1 thought ends*).
 
+Every transcript ends with **exactly one space** so the next thing you type does
+not run into the last word (`trailing_space`, on by default). Text that already
+ends in whitespace is left alone, so a "new paragraph" break does not gain a
+stray space, and an empty transcript stays empty.
+
 What the guard cannot see: a transcript that is too *long*, and one that covers
 the audio and gets the words wrong. It catches a decoder that stopped early,
 which is the failure that was observed. The false-positive direction — refusing

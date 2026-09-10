@@ -25,13 +25,17 @@ the only reason to trust them here.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
 from amanuensis.config import PostprocessConfig
 from amanuensis.models.session import DictationSession
 from amanuensis.postprocess.base import TextPostProcessor, TracedPostProcessor
-from amanuensis.postprocess.rules import RuleBasedPostProcessor
+from amanuensis.postprocess.rules import (
+    RuleBasedPostProcessor,
+    ensure_trailing_space,
+)
 
 # The experiment's closed-class list, so "content word" means here what it meant
 # there. A check whose definition drifted from the one that produced the 0/6
@@ -62,8 +66,24 @@ def _session() -> DictationSession:
 
 
 def _processor(**overrides: object) -> RuleBasedPostProcessor:
+    """A processor for asserting one rule's exact output.
+
+    `trailing_space` is **off** here unless a test asks for it, and that is
+    isolation rather than convenience: these tests each assert the whole-chain
+    string produced by one rule, and folding a trailing space into nineteen
+    unrelated expectations would couple every one of them to a rule they are
+    not about. The shipped default is asserted by `_shipped()` below, so
+    turning it off here hides nothing — flipping the default back to `False`
+    still fails `test_a_dictation_ends_with_exactly_one_space`.
+    """
+    overrides.setdefault("trailing_space", False)
     config = PostprocessConfig(**overrides)  # type: ignore[arg-type]
     return RuleBasedPostProcessor(config)
+
+
+def _shipped() -> RuleBasedPostProcessor:
+    """The processor exactly as it ships — every default, nothing overridden."""
+    return RuleBasedPostProcessor(PostprocessConfig())
 
 
 # ---------------------------------------------------------------------------
@@ -499,3 +519,102 @@ def test_a_candidate_is_not_counted_for_a_sentence_that_merely_starts_with_it() 
         "Add a note. New line items are on order.", _session()
     )
     assert not any("spoken_commands" in entry for entry in fired)
+
+
+# ---------------------------------------------------------------------------
+# §5.3 `trailing_space` — added 2026-09-10, from use
+# ---------------------------------------------------------------------------
+
+
+def test_a_dictation_ends_with_exactly_one_space() -> None:
+    """The reported defect: the caret lands flush against the last character,
+    so the next thing typed runs into the last word."""
+    assert _shipped().process("hello there", _session()) == "Hello there. "
+
+
+def test_the_trailing_space_is_added_after_whitespace_collapsing_not_before(
+) -> None:
+    """The ordering is the whole implementation.
+
+    `collapse_whitespace` strips trailing whitespace and runs *first*, so a
+    space appended anywhere above it in the chain is a space it deletes. Driven
+    through the full processor rather than the bare function, because calling
+    `ensure_trailing_space` directly would pass no matter where it sits.
+    """
+    result = _shipped().process("  hello   there  ", _session())
+
+    assert result == "Hello there. "
+    assert result.endswith(" ")
+    assert not result.endswith("  "), "collapse ran after, or it ran twice"
+
+
+def test_it_is_idempotent() -> None:
+    """Text that already ends in a space is not given a second one."""
+    processor = _shipped()
+    once = processor.process("hello there", _session())
+
+    assert processor.process(once, _session()) == once
+
+
+def test_text_ending_in_a_newline_is_left_alone() -> None:
+    """`spoken_commands` turns "new paragraph" into a newline pair. A space
+    hanging off the end of a paragraph break is trailing garbage on the line the
+    user just left, and the newline is already the separator."""
+    assert ensure_trailing_space("first line.\n\n") == "first line.\n\n"
+    assert ensure_trailing_space("first line.\n") == "first line.\n"
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\n"])
+def test_nothing_is_manufactured_out_of_silence(empty: str) -> None:
+    """A guard refusal and a zero-length decode both arrive as empty. Turning
+    those into a lone space would convert "nothing was said" into a keystroke."""
+    assert ensure_trailing_space(empty) == empty
+
+
+def test_the_key_turns_it_off() -> None:
+    """§5.3: a decision that could reasonably go either way is a config key.
+    The negative control on every assertion above — without this, they would all
+    pass against a rule that was unconditionally on."""
+    assert _processor(trailing_space=False).process(
+        "hello there", _session()
+    ) == "Hello there."
+
+
+def test_the_trailing_space_is_invisible_to_the_edit_rate_measurement() -> None:
+    """**The one that matters, and it is about the instrument rather than the
+    rule.**
+
+    A product change that adds a character to every transcript could add one
+    edit to every dictation in the Phase 3 gate's corpus — inflating G2 by a
+    constant while looking like a decoder regression. This repository's recurring
+    failure is a change that moves the instrument it is measured by, so this is
+    asserted against `gate_phase3.py`'s **own** tokeniser rather than against a
+    reimplementation of it: `_words` is a bare `.split()`, which discards
+    trailing whitespace.
+
+    Both directions. The pair must compare equal, and a genuine one-word
+    difference must still be visible — otherwise a tokeniser that returned `[]`
+    for everything would pass.
+    """
+    import sys as _sys
+
+    root = Path(__file__).resolve().parent.parent
+    _sys.path.insert(0, str(root / "scripts"))
+    try:
+        from gate_phase3 import _words
+    finally:
+        _sys.path.remove(str(root / "scripts"))
+
+    spaced = _shipped().process("hello there", _session())
+    unspaced = _processor(trailing_space=False).process(
+        "hello there", _session()
+    )
+
+    assert spaced != unspaced, "the rule did nothing; this test proves nothing"
+    assert _words(spaced) == _words(unspaced), (
+        "the trailing space is a word to the gate — it would add one edit to "
+        "every dictation in the corpus"
+    )
+    assert _words(spaced) != _words(unspaced + " and more"), (
+        "the tokeniser cannot tell any two texts apart"
+    )
