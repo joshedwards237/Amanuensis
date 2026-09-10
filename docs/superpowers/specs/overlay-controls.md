@@ -307,6 +307,15 @@ Verify against real AppKit before believing any of these:
 which is the only question that decides if the feature works. That is lane
 2-shaped and needs the operator.
 
+**The criterion for it is written and dated:
+[`docs/gates/overlay-controls-reachability.md`](../../gates/overlay-controls-reachability.md),
+2026-09-10 — before any control exists.** Twenty latched sessions over two days,
+18/20 for reachability, **zero** wrong-control hits for discrimination, and the
+response to each failure decided in advance. It also adds the question §9 did
+not ask: not only whether the ✕ can be *reached*, but whether the control you
+get is the one you meant — which matters because ✕ is irreversible and
+unguarded (objection O3). Do not amend it after seeing the buttons.
+
 ---
 
 ## 10. Sequencing, and a blocker worth stating
