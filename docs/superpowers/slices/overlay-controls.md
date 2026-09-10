@@ -48,7 +48,7 @@ slices:
     disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S6
     title: "Can the operator hit the ✕ while speaking — criterion written first, then tried"
-    scope: "A written reachability criterion authored *before* S5 is built, then a trial. Excludes all code."
+    scope: "A written reachability criterion authored *before* S5 is built, then a trial. Excludes all code. **The criterion is written: `docs/gates/overlay-controls-reachability.md`, 2026-09-10, before any control exists. The trial waits on S5.**"
     decision_focus: "A criterion written after the buttons are seen will be written to pass — this repository has that event on record twice."
     lens_used: acceptance-criterion
     sequencing_note: "Criterion before S5. Trial after S5. Needs a person at the keyboard."
@@ -122,7 +122,9 @@ report this slice complete on green fakes.**
 1. `S1 → S3` and `S1 → S5`. Not advisory: both add surface to a component that
    fails without saying so.
 2. `S3 → S4`. No IDLE-after-TRANSCRIBING to fade until the panel survives it.
-3. `S6's criterion → S5`. Written, not measured. Free today.
+3. `S6's criterion → S5`. **Done 2026-09-10** —
+   `docs/gates/overlay-controls-reachability.md`, written while the controls do
+   not exist, which is the only time it can be written honestly.
 4. `S5 → S6's trial`.
 
 **Recommended order:** S6's criterion (one sitting), then S1, then S2 and S5 in
