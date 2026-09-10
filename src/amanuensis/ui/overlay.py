@@ -117,6 +117,11 @@ _FULL_SCALE: Final = 0.046
 #: panel that worked perfectly in between.
 OVERLAY_FAILURE_LIMIT: Final = 3
 
+#: Used only when `NSScreen.mainScreen()` is nil at build time. Arbitrary and
+#: never seen: `_screen` stays `None`, so the next show re-frames against a real
+#: screen the moment one exists.
+_FALLBACK_SCREEN: Final = (0.0, 0.0, 1440.0, 900.0)
+
 _NOISE_FLOOR: Final = 0.005
 #: Deflection curve. Linear RMS looks dead because loudness is perceived
 #: roughly logarithmically — a level at 20% of full scale reads as much louder
@@ -256,7 +261,7 @@ class RecordingOverlay:
                 return
         from amanuensis.ui.indicator import _main_queue
 
-        _main_queue().addOperationWithBlock_(self._draw_bars)
+        _main_queue().addOperationWithBlock_(lambda: self._guarded(self._draw_bars))
 
     def _draw_bars(self) -> None:
         """Main thread only. Resize the bar layers in place.
@@ -297,8 +302,27 @@ class RecordingOverlay:
         the surface built in this same phase for exactly this: saying what
         happened in words.
         """
+        self._guarded(lambda: self._render_unguarded(wanted))
+
+    def _guarded(self, action: Callable[[], None]) -> None:
+        """Run `action` on the main queue's behalf, absorbing anything it raises.
+
+        **Both dispatch paths go through here, and until 2026-09-10 only one
+        did.** `set_level` dispatched `_draw_bars` raw, so an exception out of a
+        `CALayer` call crossed the PyObjC bridge inside an `NSBlockOperation`
+        and terminated the process — on the path that runs about thirty times a
+        second while the microphone is open, against layers a display change can
+        invalidate. Found by a stress pass, not by the change that added the
+        guard: the guard was extended to the state path and the level path was
+        never asked about.
+
+        They share the failure budget deliberately. A draw that keeps raising is
+        a broken panel by the same definition as a show that keeps raising, and
+        a budget covering one path while the other retries forever is not a
+        budget.
+        """
         try:
-            self._render_unguarded(wanted)
+            action()
         except Exception as exc:
             self._failures += 1
             # The panel is rebuilt from scratch on the next attempt: a half-built
@@ -350,7 +374,13 @@ class RecordingOverlay:
         make a test of this indistinguishable from a test of nothing.
         """
         current = self._screen_rect()
-        if current == self._screen:
+        if current is None or current == self._screen:
+            # `None` means `NSScreen.mainScreen()` gave nil — every display
+            # asleep, or a clamshell with nothing attached. A panel that cannot
+            # be positioned because there is no screen has nothing to position
+            # on; that is not a fault, and charging it to the failure budget
+            # spends what exists for faults. Added 2026-09-10 after S1 put this
+            # call on every show.
             return
         from amanuensis.ui.indicator import _appkit
 
@@ -359,13 +389,16 @@ class RecordingOverlay:
         self._screen = current
 
     @staticmethod
-    def _screen_rect() -> tuple[float, float, float, float]:
+    def _screen_rect() -> tuple[float, float, float, float] | None:
         """The main screen as a flat tuple. `NSRect` unpacks as `((x, y), (w, h))`
         — two elements, nested — and reading that shape wrong crashed a daemon
         on 2026-09-02 while every test passed against a flat fake."""
         from amanuensis.ui.indicator import _appkit
 
-        (origin_x, origin_y), (width, height) = _appkit().NSScreen.mainScreen().frame()
+        screen = _appkit().NSScreen.mainScreen()
+        if screen is None:
+            return None
+        (origin_x, origin_y), (width, height) = screen.frame()
         return (float(origin_x), float(origin_y), float(width), float(height))
 
     def _build(self) -> Any:
@@ -376,8 +409,13 @@ class RecordingOverlay:
         # `((x, y), (width, height))` — two elements, nested. `tuple(...)` of
         # it is therefore length 2, not 4, and this line read the framework's
         # shape wrong until a daemon crashed on it.
+        # A nil screen at build time is the same non-fault as at re-frame
+        # time; fall back to a rect that is at least on-screen if one ever
+        # appears, and leave `_screen` unset so the next show re-frames.
         self._screen = self._screen_rect()
-        rect = frame_for(self._config.overlay_position, self._screen)
+        rect = frame_for(
+            self._config.overlay_position, self._screen or _FALLBACK_SCREEN
+        )
 
         panel = appkit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             appkit.NSMakeRect(*rect),

@@ -13,6 +13,8 @@ indicator.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from amanuensis.config import FeedbackConfig
@@ -554,3 +556,128 @@ def test_an_unchanged_screen_does_not_reframe(appkit: _FakeAppKit) -> None:
     overlay.set_state(DictationState.RECORDING)
 
     assert panel.frames_set == 0, "it re-framed a screen that had not moved"
+
+
+def test_a_raising_layer_on_the_level_path_does_not_escape(
+    appkit: _FakeAppKit,
+) -> None:
+    """The hottest path in the module was the unguarded one.
+
+    `set_level` dispatched `_draw_bars` **raw** — not through `_render`'s
+    wrapper — so an exception out of a `CALayer` call crossed the PyObjC bridge
+    inside an `NSBlockOperation` and terminated the process. That is verbatim
+    the 2026-09-02 failure the wrapper was written for, on the path that runs
+    about thirty times a second while the microphone is open, against layers
+    that a display change can invalidate.
+
+    Found by a stress pass over S1, not by the work that added the wrapper: the
+    guard was extended to the state path and the level path was never asked
+    about.
+    """
+    reported: list[str] = []
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=reported.append)
+    overlay.set_state(DictationState.RECORDING)
+
+    def explode() -> Any:
+        raise RuntimeError("CALayer said no")
+
+    for layer in overlay._bars:
+        layer.frame = explode
+
+    overlay.set_level(0.02)  # must not raise
+
+    assert reported, "the failure was swallowed with no report at all"
+
+
+def test_a_draw_failure_discards_the_panel_rather_than_redrawing_it(
+    appkit: _FakeAppKit,
+) -> None:
+    """One failure per panel, not thirty a second.
+
+    A draw runs ~30×/s while recording, so "report and carry on" would mean a
+    broken panel reporting thirty times a second. The failure discards the
+    panel, and `set_level` returns early once there is none — so a broken draw
+    costs one report and stops until the next show rebuilds.
+    """
+    reported: list[str] = []
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=reported.append)
+    overlay.set_state(DictationState.RECORDING)
+
+    def explode() -> Any:
+        raise RuntimeError("CALayer said no")
+
+    for layer in overlay._bars:
+        layer.frame = explode
+    for _ in range(30):
+        overlay.set_level(0.02)
+
+    assert len(reported) == 1, (
+        f"a broken draw reported {len(reported)} times — it is redrawing a "
+        "panel it already knows is broken"
+    )
+
+
+def test_a_draw_that_fails_every_show_reports_every_show(
+    appkit: _FakeAppKit,
+) -> None:
+    """A broken draw is loud once per dictation, and that is the design.
+
+    **This test first asserted that repeated draw failures spend the budget and
+    disable the panel. They do not, and the code is right.** Each show ends with
+    a successful *hide*, and any success resets the budget — which is the same
+    transient-failure rule that makes the budget worth having. Alternating
+    failure and success never escalates, by construction.
+
+    So the property that matters is not escalation, it is **visibility**: a
+    draw that fails on every dictation raises the fault mark on every dictation.
+    Since 2026-09-10 that mark is in the menu-bar title, so a user watching the
+    bar sees it without opening anything. Silent degradation is what gate
+    finding 1 was; this is the opposite and it is what should be asserted.
+    """
+    reported: list[str] = []
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=reported.append)
+
+    def explode() -> Any:
+        raise RuntimeError("CALayer said no")
+
+    shows = OVERLAY_FAILURE_LIMIT + 2
+    for _ in range(shows):
+        overlay.set_state(DictationState.RECORDING)
+        for layer in overlay._bars:
+            layer.frame = explode
+        overlay.set_level(0.02)
+        overlay.set_state(DictationState.IDLE)
+
+    assert len(reported) == shows, (
+        f"{len(reported)} reports across {shows} broken dictations — a draw "
+        "that fails every time must say so every time"
+    )
+    assert not overlay._failed, (
+        "it disabled the panel on transient failures separated by successes"
+    )
+
+
+def test_a_nil_main_screen_is_not_a_render_failure(appkit: _FakeAppKit) -> None:
+    """`NSScreen.mainScreen()` returns nil when no display is active, which is
+    a real state — every display asleep, or a clamshell with nothing attached.
+
+    S1 introduced a call to it on **every show**, so a nil there cost a render
+    failure, and three in a row disabled the panel. A panel that cannot be
+    positioned because there is no screen has nothing to position on; that is
+    not a fault, and treating it as one spends the budget that exists for
+    faults.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_state(DictationState.IDLE)
+
+    class _NoScreen:
+        @staticmethod
+        def mainScreen() -> None:
+            return None
+
+    appkit.NSScreen = _NoScreen
+    overlay.set_state(DictationState.RECORDING)
+
+    assert overlay._failures == 0, "a nil screen was charged to the failure budget"
+    assert not overlay._failed
