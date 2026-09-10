@@ -144,8 +144,14 @@ def test_the_emitted_shape_is_the_one_the_consumer_reads(tmp_path: Path) -> None
     emit_corrections(db, out, SHORT_BAND_SECONDS)
     entry = json.loads(out.read_text())["one"]
 
+    # NOT named `corrections-*.json`. `.gitignore:62` ignores that glob to keep
+    # verbatim dictation out of a public repository, and it matched this fixture
+    # too — so `git add -A` skipped it, the test passed against a file that
+    # existed only on one machine, and `main` shipped red. See
+    # `test_every_fixture_is_tracked` below, which is the guard rather than the
+    # apology.
     reference = json.loads(
-        (ROOT / "tests" / "fixtures" / "corrections-shape.json").read_text()
+        (ROOT / "tests" / "fixtures" / "short-band-template-shape.json").read_text()
     )
     assert set(entry) == set(next(iter(reference.values())))
 
@@ -159,3 +165,53 @@ def test_the_band_matches_what_the_runbook_asks_for(
     the ceiling is the one that carries meaning."""
     assert band[1] == 12.0
     assert band[0] <= 8.0
+
+
+def test_every_fixture_this_suite_reads_is_tracked_by_git() -> None:
+    """A fixture the repository does not contain is a test that passes only
+    where it was written.
+
+    `tests/fixtures/corrections-shape.json` was added on 2026-09-10 and silently
+    skipped by `git add -A`, because `.gitignore` ignores `corrections*.json` to
+    keep verbatim dictation out of a public repository — a rule that is right,
+    and that matched a fixture containing no dictation at all. The suite was
+    green on the machine that wrote it and red on `main`, and CI did not catch
+    it because CI does not run the suite.
+
+    So this asks git, rather than asking the filesystem. The generalisation is
+    deliberate: the specific fix is a rename, and a rename does not stop the
+    next fixture from landing on a pattern somebody added for a good reason.
+    """
+    import subprocess
+
+    fixtures = ROOT / "tests" / "fixtures"
+    present = {
+        p.relative_to(ROOT).as_posix()
+        for p in fixtures.rglob("*")
+        if p.is_file() and not p.name.startswith(".")
+    }
+    if not present:  # pragma: no cover — the directory always has files
+        pytest.skip("no fixtures on disk")
+
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files", "tests/fixtures"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    )
+
+    # Files a *gitignore rule* deliberately excludes are the corpus itself --
+    # audio and databases -- and those are absent from a fresh clone by design.
+    # Anything else missing is this bug.
+    untracked = {
+        path
+        for path in present - tracked
+        if not path.endswith((".wav", ".m4a", ".flac", ".db", ".db-wal", ".db-shm"))
+    }
+    assert not untracked, (
+        "fixtures on disk but not in the repository — the suite would be red on "
+        f"a fresh clone: {sorted(untracked)}"
+    )

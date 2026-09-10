@@ -1,0 +1,8 @@
+{
+  "0123456789abcdef": {
+    "started_at": "2026-01-01T00:00:00",
+    "seconds": 9.0,
+    "injected": "what the decoder produced",
+    "corrected": "what the speaker meant"
+  }
+}
