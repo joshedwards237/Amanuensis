@@ -336,12 +336,22 @@ difficulty.** A double-tap is two press/release pairs; a naive implementation
 records, decodes and injects a ~100 ms fragment before the latch engages. Three
 resolutions were weighed and the ordering matters:
 
-- **Capture, then discard on latch** — *chosen*. Capture starts on the first
-  press exactly as it does today, so push-to-talk keeps its latency and loses no
-  leading audio. If a second press arrives inside `double_tap_ms`, the fragment
-  is dropped **before it reaches the decoder**. It costs nothing to discard:
-  nothing was transcribed, so §8 has nothing to persist and no guarantee is
-  touched.
+- **Capture, then discard on latch** — *chosen 2026-08-09, and the discard is
+  **withdrawn 2026-09-10*** (objection O8). Capture starts on the first press
+  exactly as it does today, so push-to-talk keeps its latency and loses no
+  leading audio.
+
+  The discard existed so a ~100 ms fragment could not become **its own
+  dictation** — decoded and injected as a stray word before the hands-free
+  session began. **That hazard requires a separately queued session, and the
+  resolution below removes it:** the session never ends, so nothing is queued
+  and nothing can be decoded separately. No reason to discard survives.
+
+  What the discard cost was up to `double_tap_ms` of the user's own speech at
+  the head of the utterance — which this same paragraph praises push-to-talk for
+  never losing. So the capture opened on the first press simply keeps running,
+  and the latch emits nothing at all. Nothing was transcribed either way, so §8
+  is untouched.
 - **Defer the start until the window expires** — rejected. It silently drops the
   first ~300 ms of *every ordinary dictation* to serve the new gesture, which
   regresses the default path to improve the exception.
@@ -393,6 +403,20 @@ mid-sentence, which is the exact case the latch exists to serve.
 
 `max_duration_seconds` (§5.3) already bounds a latched session. It needs no
 second ceiling.
+
+**How the flash was removed** (added 2026-09-10). The double-tap used to blink
+the panel out and back, and that was the state machine doing what it was told:
+the latch fired a discard, `abort_session` reported `IDLE`, and the overlay hid
+on the way past — between two presses during which the microphone never closed.
+A state machine reporting an event that did not happen.
+
+Rejected: debouncing the hide. A timing rule that suppresses an `IDLE` because
+another `RECORDING` followed would also hide a genuine close, which is §5.4's
+failure with a stopwatch attached. Also rejected: a `restart_session` on the
+controller, which was specified and then found to need an `AudioCapture`
+operation that does not exist (objection O9) and to raise unanswered questions
+about the session clocks (choice story #10) — both of which stop existing once
+nothing restarts.
 
 **§5.4 binds this and sequences it.** Hands-free means the user's hand is off the
 key, which removes the physical proof that the microphone is live — so the latch
@@ -3443,6 +3467,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-10 | **The double-tap latch stops discarding the first tap, and stops blinking the panel** (§5.2, objections O8/O9/O10, choice story #10). The flash was a state machine reporting an event that did not happen: the latch fired a discard, `abort_session` reported `IDLE`, and the overlay hid — between two presses during which the microphone never closed. The specified fix was a new `restart_session`; review found it needed an `AudioCapture` operation that **does not exist** and left the session clocks unstated, and that **the discard itself buys nothing**. §5.2 required it so a ~100 ms fragment could not become its own dictation, and that hazard needs a separately queued session — which a session that never ends never creates. So the latch now emits **nothing**: the capture opened on the first press keeps running, no controller operation is added, and the up-to-350 ms of the user's own speech the discard was throwing away is kept, which is what the same paragraph praises push-to-talk for. **`_latch_enabled` no longer gates on `on_cancel`** — it did while the latch emitted one, and the gate meant any caller passing none silently got no latch. That surfaced three tests which had been exercising push-to-talk with the latch accidentally off, a configuration `cli.py` never uses; they now hold rather than tap, which is what a dictation is. |
 | 2026-09-10 | **The recording overlay gains controls, a transcribing state, and the click-through it was built to preserve** (§5.4, §5.3, `docs/superpowers/specs/overlay-controls.md`). Specified, **not built** — sequenced after lane 6, because lane 2's 6/6 describes the panel as it exists now. §5.4's rule that nothing may outlive the microphone is **satisfied rather than overruled**: the argument is against a panel that *means recording* persisting, not against the panel, so the bars are replaced in one frame — never cross-faded, since a dimming waveform is still a waveform — by a dot whose motion is time-driven. The invariant is testable: **no audio-reactive element is visible while the microphone is closed**, and `set_level` must be *ignored* while transcribing rather than merely unused, because the capture thread stops delivering blocks and "no data arrives" would make it look correct without being it. **Two costs accepted rather than removed.** The panel stops ignoring mouse events, so a 114 × 22 region swallows clicks meant for the application beneath — README known-costs material. And **there is no Escape equivalent and cannot cheaply be one**: §7.3's tap watches `flagsChanged` and refuses `keyDown` because a tap that watched it would see every character typed, so the ✕ is the *only* cancel affordance the product has. The double-tap flash is a state machine reporting an event that did not happen — `abort_session` emits `IDLE` between the two presses while the microphone never closed — and is fixed by a new `restart_session` rather than by debouncing the hide, which would be a timing rule that hides a genuine close. **Blocked on gate findings 1 and 3**: this adds surface to a component that already stops rendering silently, and a ✕ that silently vanishes is worse than none, because the user believes they have a way out of a latched session and does not. |
 | 2026-09-10 | **Every transcript ends with one space, and the rule was checked against the measurement before it was written** (§5.3, §7.5). Reported from use: a dictation leaves the caret flush against its last character, so typing immediately afterwards runs the new word into the old one. On by default — every dictation is followed by *something* and only one of those wants no separator, so the cost is one character the user can backspace against a defect they must notice and repair every time. **The question asked first was not whether the rule works but whether it moves the instrument**: a character added to every transcript could add one edit to every dictation in the Phase 3 corpus, inflating G2 by a constant while reading as a decoder regression. It cannot — `gate_phase3.py`'s `_words` is a bare `.split()`, which discards trailing whitespace — and that is asserted against the gate's **own** tokeniser rather than a reimplementation of it, with a control proving the tokeniser can still tell two texts apart. Ordering is load-bearing and independently tested: `collapse_whitespace` strips trailing whitespace and runs first, so the rule registered anywhere above it is deleted by it, and registering it first fails the ordering test rather than passing quietly. Two refusals: text already ending in whitespace is untouched, because a space after a `spoken_commands` paragraph break is garbage on the line the user just left; and an empty transcript stays empty, because a guard refusal and a zero-length decode both arrive as `""` and a rule that manufactures a keystroke out of silence is the wrong shape. Nineteen existing tests asserted whole-chain strings and now build their processor with the key off — isolation, not concealment: the shipped default is asserted separately, and flipping it back still fails. |
 | 2026-09-08 | **The CLI answers to `amanuensis` as well as `manu`, and reports whichever was typed** (§6.4, README). One entry point, two names in `[project.scripts]`. `manu` is what every document in this repository types and is unchanged; `amanuensis` exists because the product's name is the thing a user remembers, and someone returning a week after installing types what it is called rather than the abbreviation. **The cost was not the second name, it was the two hard-coded strings it exposed**: `prog="manu"` and `version=f"manu {__version__}"`, so `amanuensis --help` printed usage lines naming a command the user had not typed and `amanuensis --version` answered `manu 0.1.0` — in the two places a confused person looks and the one string they paste into a bug report. argparse threads `prog` through every subparser and every error message, so `_program_name()` is the single point that decides it; `python -m amanuensis` falls back rather than printing `__main__.py` as though it were a command. The version defect was found by **building a wheel and running the installed command**, not by reading the diff — the usage line was already correct at that point, which is exactly how a second string hard-coding the same fact survives. Tested against `pyproject.toml` itself rather than a constant in the code, because packaging metadata is what creates the commands and a constant agreeing with itself proves nothing about what `pip install` puts on the PATH. |
