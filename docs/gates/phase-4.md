@@ -79,11 +79,21 @@ eliminated by the report.**
    panel is ordered front somewhere the user cannot see it. **This path is
    silent** — no exception, no tray error, no log line.
 
-**The discriminator is whether the tray showed an error**, and it was not
-observed either way. Mechanism 1 is loud, mechanism 2 is silent, and the report
-does not mention an error appearing. That is weak evidence for mechanism 2 and it
-is not enough to close either. **Both are defects on their own terms regardless
-of which caused this instance**, and both are open.
+**The discriminator was supposed to be whether the tray showed an error.
+Operator observation, 2026-09-10: the menu-bar glyph was present and cycling
+correctly, and no error was visible.** That looks like it eliminates mechanism 1,
+and it does not — which is finding 3 below, and is the more useful result.
+
+`TrayApp.set_error` appends a **menu item** (`tray.py:283`). It does not change
+the glyph, the title, or anything else visible without opening the dropdown. So
+"no error was visible in the menu bar" is not an observation about whether an
+error was raised; it is an observation about a surface that never displays one.
+**Absence of evidence, from an instrument that cannot produce that evidence.**
+
+Both mechanisms therefore remain open. What the observation *does* establish is
+that the glyph kept cycling — so the main queue was alive, AppKit was working,
+and `RecordingIndicator.set_state` was being reached throughout. Whatever failed
+was specific to the overlay, not to the UI thread.
 
 **What this does to lane 2.** The 6/6 was scored in a **fresh daemon session**,
 minutes after start. The failure mode is time- and sleep-dependent, so six trials
@@ -97,6 +107,29 @@ qualification.
 launched from, the operator restarted the service, and nothing is written to
 disk. Reproducing this means running for days and watching for it, which is the
 opposite of a cheap check.
+
+---
+
+## Finding 3 — the affordance's own failure is reported where §5.4 says not to look
+
+`TrayApp.set_error` renders into the dropdown and nowhere else. The glyph does
+not change, so **a user learns the recording overlay has died only by opening a
+menu they have no reason to open** — and §5.4's entire premise is that the user
+should not have to open the tray menu to know whether the microphone is live.
+
+The overlay is the affordance §5.4 asked for; its failure notice is delivered
+through the surface §5.4 exists to avoid depending on. That is a design defect
+independent of finding 1's cause, and it is what made finding 1 undiagnosable:
+the one signal that would have separated the two mechanisms was routed somewhere
+nobody was looking.
+
+It also means `_failed`'s comment — "the failure is reported through `on_error`
+… the surface built in this same phase for exactly this: saying what happened in
+words" — is true about the mechanism and wrong about the outcome. The words are
+written; nobody reads them.
+
+**Any fix to finding 1 should make the failure loud before it makes the panel
+robust**, because a silent failure of a privacy affordance is the worse half.
 
 ---
 
@@ -142,6 +175,12 @@ found early by accident rather than by design.
 - **Parakeet has never been benchmarked.** NeMo has no CoreML or Metal path on
   macOS. ADR 0001 named it; nothing has ever run it.
 - **The short-utterance punctuation comparison is unmeasured** (lane 4, not run).
+  The dictations now exist — **nine takes of 6.1–11.9 s recorded 2026-09-10**,
+  decode cost 12–25 ms per second of audio with no outliers, so nothing was
+  competing for the machine. What is missing is the corrections half, which is
+  the operator's. `bench_punctuation.py --emit-corrections --since` writes the
+  template as of 2026-09-10; before that, lane 4 had no starting point, because
+  the only emitter in the repository selects the *long* corpus by construction.
 - **CI does not run the test suite.** `harness.yml` enforces constraints;
   `site.yml` runs `ruff` and `mypy` over four site scripts. Nothing in CI runs
   `pytest`, `mypy --strict src/`, or `ruff check src/ tests/`. **A green PR

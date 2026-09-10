@@ -191,13 +191,23 @@ usual dictation length*. Long-form is already settled — Moonshine collapses at
    attempt was ruined this way.
 2. Start the daemon. Dictate **ten ordinary short things** — 8 to 12 seconds
    each, whatever you actually needed to write today. Real work, not read aloud.
-3. For each one: `manu history --last` right after, and note the row id.
-4. Create `corrections-short-2026-09-XX.json` shaped like the existing
-   `corrections-2026-09-01.json`:
-   ```json
-   {"<row id>": {"started_at": "...", "seconds": 9.4,
-                 "injected": "<what appeared>", "corrected": "<what you meant>"}}
+3. **Emit the template rather than writing JSON by hand** (added 2026-09-10 —
+   before this, `--emit-corrections` existed only on `gate_phase3.py` and that
+   one selects the *long* corpus, so lane 4 had no starting point at all):
+   ```sh
+   python scripts/bench_punctuation.py \
+       --emit-corrections corrections-short-2026-09-XX.json \
+       --since 2026-09-XX
    ```
+   It picks up every stored dictation of 6–12 s and seeds `corrected` with what
+   was injected, so you edit only the takes that were actually wrong.
+
+   **Use `--since`, and set it to the day you recorded.** `history.db` carries
+   no configuration digest, so nothing can tell takes recorded either side of a
+   config change apart — the Phase 3 gate lost a whole corpus to exactly that
+   and had to re-record it. Without the flag you get every short take ever
+   stored, which spans every config this machine has run.
+4. Edit each `corrected` to what you **meant**. Most will need no change.
 5. Then: `python scripts/bench_punctuation.py --corrections corrections-short-2026-09-XX.json`
 
 > **Do not use a script you read aloud as the reference.** That was tried and
