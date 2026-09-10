@@ -10,6 +10,12 @@ written to pass.
 
 ---
 
+> **Results so far are in [`phase-4.md`](phase-4.md)** (opened 2026-09-10).
+> Lanes 1, 2 (6/6), 3 and 4b have passed. Lane 4 is unrun and optional; lane 6
+> is the gate and has not been booked. **Lane 2's pass is qualified** — the
+> panel was later observed dead on a long-lived daemon while the microphone
+> still worked, which is finding 1 there.
+
 ## Timeline
 
 | When | Step | Your time | Needs |
