@@ -30,6 +30,10 @@ from bench_punctuation import (  # noqa: E402
 
 sys.path.remove(str(ROOT / "scripts"))
 
+#: Named once, so the tracked-ness assertion below and the reader above cannot
+#: drift onto different paths.
+SHAPE_FIXTURE = ROOT / "tests" / "fixtures" / "short-band-template-shape.json"
+
 
 def _database(tmp_path: Path, rows: list[tuple[str, str, float, str]]) -> Path:
     path = tmp_path / "history.db"
@@ -150,9 +154,7 @@ def test_the_emitted_shape_is_the_one_the_consumer_reads(tmp_path: Path) -> None
     # existed only on one machine, and `main` shipped red. See
     # `test_every_fixture_is_tracked` below, which is the guard rather than the
     # apology.
-    reference = json.loads(
-        (ROOT / "tests" / "fixtures" / "short-band-template-shape.json").read_text()
-    )
+    reference = json.loads(SHAPE_FIXTURE.read_text())
     assert set(entry) == set(next(iter(reference.values())))
 
 
@@ -167,72 +169,55 @@ def test_the_band_matches_what_the_runbook_asks_for(
     assert band[0] <= 8.0
 
 
-def test_every_fixture_this_suite_reads_is_tracked_by_git() -> None:
+def test_the_fixtures_this_module_reads_are_in_the_repository() -> None:
     """A fixture the repository does not contain is a test that passes only
     where it was written.
 
     `tests/fixtures/corrections-shape.json` was added on 2026-09-10 and silently
     skipped by `git add -A`, because `.gitignore` ignores `corrections*.json` to
-    keep verbatim dictation out of a public repository — a rule that is right,
-    and that matched a fixture containing no dictation at all. The suite was
-    green on the machine that wrote it and red on `main`, and CI did not catch
-    it because CI does not run the suite.
+    keep verbatim dictation out of a public repository. Green on the machine
+    that wrote it, `FileNotFoundError` on `main`. CI did not catch it because CI
+    does not run the suite.
 
-    So this asks git, rather than asking the filesystem. The generalisation is
-    deliberate: the specific fix is a rename, and a rename does not stop the
-    next fixture from landing on a pattern somebody added for a good reason.
+    **This assertion is deliberately narrow, and two wider versions were tried
+    and withdrawn on the operator's tree.**
+
+    The first scanned `tests/fixtures/` and excluded corpus by *file extension*.
+    It flagged `phase3/manifest.json` and two `spontaneous/*.corrections.json` —
+    corpus metadata that is corpus by where it lives, not what it is named.
+
+    The second excluded any file inside a gitignored *directory*. It flagged
+    `asr/*.wav`, because `.gitignore` ignores those as **files** and says why:
+    "NOT `tests/fixtures/asr` bare — that directory holds the committed
+    reference transcripts." The directory is deliberately not ignored.
+
+    Both failed for the same reason, and it is not a missing clause. My fixture
+    was *ignored and wanted*; the corpus is *ignored and correctly absent*, and
+    **git cannot tell intent apart**. The only thing that distinguishes them is
+    whether the suite still passes without the file — which is not a question a
+    unit test can ask about itself. It is `pytest` on a fresh clone, and that is
+    a CI job this repository does not have (`harness.yml` enforces constraints,
+    `site.yml` lints four site scripts, nothing runs the tests).
+
+    So this asserts the one thing it can assert truthfully: the fixture *this
+    module* reads is tracked. Narrow and correct beats general and crying wolf —
+    a guard that fails on the operator's tree every morning is a guard that gets
+    deleted, and then it protects nothing.
     """
     import subprocess
 
-    fixtures = ROOT / "tests" / "fixtures"
-    present = {
-        p.relative_to(ROOT).as_posix()
-        for p in fixtures.rglob("*")
-        if p.is_file() and not p.name.startswith(".")
-    }
-    if not present:  # pragma: no cover — the directory always has files
-        pytest.skip("no fixtures on disk")
+    read_by_this_module = [SHAPE_FIXTURE]
 
-    tracked = set(
-        subprocess.run(
-            ["git", "ls-files", "tests/fixtures"],
+    for fixture in read_by_this_module:
+        assert fixture.is_file(), f"{fixture} is missing from disk"
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(fixture.relative_to(ROOT))],
             cwd=ROOT,
             capture_output=True,
             text=True,
-            check=True,
-        ).stdout.split()
-    )
-
-    # A whole *directory* that `.gitignore` excludes is a corpus: `asr/`,
-    # `spontaneous/` and `phase3/` hold voice recordings and the verbatim
-    # corrections beside them, are deliberately absent from every clone, and
-    # the tests that read them are gated behind `requires_corpus` skips.
-    #
-    # Filtering by file *extension* was the first attempt and was wrong: it
-    # passed on this machine's `.wav` files and then flagged
-    # `phase3/manifest.json` and two `spontaneous/*.corrections.json` -- corpus
-    # metadata that is corpus by virtue of where it lives, not what it is named.
-    # Caught by running the merged guard against the operator's real tree, which
-    # is the only tree that has a corpus in it.
-    #
-    # The discriminator is the parent directory. `tests/fixtures/` itself is not
-    # ignored, so a file sitting directly in it must be tracked -- which is
-    # exactly the case that shipped red.
-    def _in_ignored_directory(path: str) -> bool:
-        parent = (ROOT / path).parent
-        while parent != ROOT and ROOT in parent.parents:
-            probe = subprocess.run(
-                ["git", "check-ignore", "-q", str(parent)], cwd=ROOT
-            )
-            if probe.returncode == 0:
-                return True
-            parent = parent.parent
-        return False
-
-    untracked = {
-        path for path in present - tracked if not _in_ignored_directory(path)
-    }
-    assert not untracked, (
-        "fixtures on disk but not in the repository — the suite would be red on "
-        f"a fresh clone: {sorted(untracked)}"
-    )
+        )
+        assert tracked.returncode == 0, (
+            f"{fixture.relative_to(ROOT)} is on disk but not in the repository — "
+            "the suite would be red on a fresh clone. Check whether a .gitignore "
+            "rule matched it."
+        )
