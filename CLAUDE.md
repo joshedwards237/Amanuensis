@@ -51,13 +51,23 @@ Three things from this sprint that outlive it.
   session, which a session that never ends never creates. The latch emits
   nothing and the leading audio is kept.
 
-**The microphone is pickable from the tray** (2026-09-11, §5.4 and §11.6). A
-`Device:` row with every input on the machine, closing the discoverability half
-of §11.6 — `[audio] device` already removed the Bluetooth playback interruption
-and was in no menu, which is the argument that put the binding and the mode
-there in Phase 4. The other half does not close: **the accuracy cost of the
-built-in microphone at arm's length is unmeasured**, and the menu makes that
-unpriced trade one click away rather than one file edit away.
+**The microphone is pickable from the tray, and `manu status` names it**
+(2026-09-11, §5.4 and §11.6). A `Device:` row with every input on the machine,
+closing the discoverability half of §11.6 — `[audio] device` already removed the
+Bluetooth playback interruption and was in no menu, which is the argument that
+put the binding and the mode there in Phase 4. The other half does not close:
+**the accuracy cost of the built-in microphone at arm's length is unmeasured**,
+and the menu makes that unpriced trade one click away rather than one file edit
+away.
+
+**Adding one live field to `manu status` exposed two that were not**, now a
+HARNESS constraint. `mode` was read from the frozen start-up config, so one tray
+click made it permanently stale; `model` printed `auto` while `tiny.en` was
+loaded. Both were true about `config.toml` and wrong about the daemon, which is
+what makes the shape invisible in review. **Every setting the tray learns to
+change creates a new instance of it.** `_status` is still a closure inside
+`_daemon` and **nothing tests the string it assembles** — extracting it is the
+open item.
 
 **S3, S4 and S5 of `docs/superpowers/slices/overlay-controls.md` are specified
 and must not be built before lane 6** — they change the panel lane 2 scored.

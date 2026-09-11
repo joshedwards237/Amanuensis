@@ -200,6 +200,36 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   Falsifiable: remove the report from any error path and its test fails; remove
   the clear and the control fails. Both verified by sabotage at the time.
 
+### A status surface reports live state, not the configuration it started with
+
+- **Rule**: Any surface that answers "what is this process doing right now" —
+  `manu status`, the tray, a log line — reads the value the process is using,
+  never the frozen start-up config. A field that can change after start-up and
+  is read from `config` is a defect whether or not it is currently stale.
+- **Enforcement**: none
+- **Tool**: none yet. The mechanical version is a check that the `status`
+  handler's response string contains no `config.` read; today nothing tests the
+  assembled string at all, because `_status` is a closure inside `_daemon` and
+  cannot be reached without starting one.
+- **Scope**: pr
+- **Notes**: Added 2026-09-11. `manu status` was asked to report the
+  microphone. It already reported two other things and **both were answers
+  about `config.toml` rather than about the daemon**: `mode` came from the
+  start-up snapshot, so one tray click made it permanently stale, and `model`
+  printed the literal string `auto` while `tiny.en` was loaded.
+
+  Neither was *wrong*. Both were true statements about the configuration, which
+  is precisely what makes the shape hard to see — the field looks correct in
+  review, has a plausible source, and only a running daemon disagrees with it.
+  The trigger for finding them was adding a third field beside them; nobody
+  went looking.
+
+  The corollary is the reason this is a constraint and not a fixed bug. **Every
+  setting the tray learns to change creates a new instance of it.** Three §5.3
+  keys are pickable from the menu now and the argument that admitted them does
+  not stop, so each new picker is a new chance for a surface to keep reporting
+  the value the daemon booted with.
+
 ### A gate's reject path has a control of its own
 
 - **Rule**: Every gate that can refuse must have a control demonstrating it
