@@ -1040,3 +1040,71 @@ def test_the_raw_transcript_is_readable_back(tmp_path: Path) -> None:
     assert found is not None
     assert found.transcript == "the spreadsheet"
     assert found.raw_transcript == "the breadshoe"
+
+
+def test_stored_audio_is_not_counted_as_pending_transcripts(tmp_path: Path) -> None:
+    """Reported from a running daemon, 2026-09-11.
+
+    Startup printed `pending transcripts: 0 expired, 137 still recoverable in
+    .../pending` on a machine whose **pending directory did not exist** and
+    whose 137 files were recordings of the operator's voice. `sweep` seeded its
+    transcript counters from `_sweep_audio` — one clock, one number, on the
+    argument that the two artefacts expire together.
+
+    The clock is shared and the sentence must not be. Every word of that line
+    was wrong in the direction that matters for a product whose claim is about
+    where your voice goes: it named plaintext transcripts that were not there,
+    and it hid audio that was.
+    """
+    store = HistoryStore(
+        HistoryConfig(retain=True, store_audio=True, retain_days=30),
+        data_dir=tmp_path,
+    )
+    # Distinct ids: `_session`'s default id is fixed, so three sessions would
+    # overwrite one file and the test would assert against a count of 1 while
+    # believing it had made three.
+    for n in range(3):
+        store.write_pending(
+            _session(id=f"01J000000000000000000{n}", audio=_audible(0.2))
+        )
+    assert not store.pending_dir.exists(), (
+        "this test is about the no-pending-directory case and there is one"
+    )
+
+    swept = store.sweep()
+
+    assert swept.remaining == 0, (
+        f"{swept.remaining} pending transcripts reported, and there are none"
+    )
+    assert swept.audio_remaining == 3, "the recordings went unreported"
+
+
+def test_audio_and_pending_are_counted_separately_when_both_exist(
+    tmp_path: Path,
+) -> None:
+    """The positive control. Zeroing the transcript counter unconditionally
+    would pass the test above while making the pending count useless — and that
+    count is what tells a user their words survived a failed injection.
+
+    The pending file is written directly rather than through `write_pending`,
+    because `retain = false` is the only mode that leaves one behind and it
+    deliberately stores no audio (§5.5). Getting both artefacts from one config
+    is not something the product does.
+    """
+    import json
+
+    store = HistoryStore(
+        HistoryConfig(retain=True, store_audio=True, retain_days=30),
+        data_dir=tmp_path,
+    )
+    for n in range(2):
+        store.write_pending(
+            _session(id=f"01J000000000000000000{n}", audio=_audible(0.2))
+        )
+    store.pending_dir.mkdir(parents=True, exist_ok=True)
+    (store.pending_dir / "leftover.json").write_text(json.dumps({"id": "x"}))
+
+    swept = store.sweep()
+
+    assert swept.remaining == 1, "pending transcripts stopped being counted"
+    assert swept.audio_remaining == 2, "the recordings went unreported"
