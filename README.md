@@ -205,6 +205,20 @@ description:
 - **Press to start, silence ends it** — needs VAD, and it is the mode most
   likely to misfire.
 
+**The same menu picks your microphone.** `Device:` lists every input on the
+machine, plus `System default`, which is what a fresh install follows. Two
+reasons to change it. Dictating on Bluetooth headphones **interrupts whatever
+is playing** — opening an input drops the headset out of A2DP into the mono
+headset profile, which is macOS doing its job, not this product misbehaving —
+and pinning the built-in microphone leaves the headset in A2DP and the music
+alone. And a pinned microphone stays pinned when you plug something else in.
+
+The cost is not measured and you should assume there is one: the built-in
+microphone at arm's length is a worse recording than a headset at your mouth,
+and no figure in this project describes how much worse. A microphone that is
+pinned and then unplugged shows as `⚠ not connected` in the menu, and the next
+dictation fails naming the devices you do have.
+
 **Double-tap right-option to dictate hands-free**, then single-tap to finish.
 This works inside hold-to-talk without giving it up, so both gestures live on
 one key. A hold during a hands-free session is ignored on purpose. The window is

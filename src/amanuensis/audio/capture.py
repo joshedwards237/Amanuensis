@@ -7,7 +7,7 @@ module is deliberately the dumb end of that: it opens a stream, accumulates
 float32 samples, and hands back an array. It does not decide when to record,
 does not know what a hotkey is, and does not transcribe.
 
-Three decisions are worth stating.
+Four decisions are worth stating.
 
 **PortAudio is imported lazily.** `import sounddevice` loads the PortAudio
 shared library, which enumerates Core Audio devices and can write to stderr
@@ -26,6 +26,13 @@ Bluetooth headset dropped off gets a list they can copy a name out of, not
 `PortAudioError -9996`. This costs one `query_devices` call on a path that has
 already failed.
 
+**The device can change while the daemon holds the microphone.** §6.1 gives
+this object the life of the process, so the tray's picker (§11.6) has to reach
+the instance rather than the config file it was built from — `set_device`,
+which rebinds the name and lets `resolve_device` run at the next `start()`. It
+never touches an open stream: a device chosen mid-dictation costing the words
+already spoken is the trade §8 exists to refuse.
+
 What this module does *not* do: resample, convert channels, or apply gain. It
 opens the stream at the one rate the rest of the pipeline accepts (`config.py`
 pins `[audio] sample_rate` to 16000 — Whisper and Silero agree on nothing else)
@@ -34,6 +41,7 @@ and lets Core Audio do the conversion in the driver, where it is done properly.
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from collections.abc import Callable
@@ -45,7 +53,7 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:  # pragma: no cover — import-time cost, not behaviour
     from amanuensis.config import AudioConfig
 
-__all__ = ["AudioCapture", "DeviceNotFoundError"]
+__all__ = ["AudioCapture", "DeviceNotFoundError", "input_device_names"]
 
 #: Frames per PortAudio callback. 1024 at 16 kHz is 64 ms — small enough that
 #: the tail of an utterance is not lost to a partially-filled block, large
@@ -55,6 +63,30 @@ _BLOCKSIZE = 1024
 
 class DeviceNotFoundError(Exception):
     """`[audio] device` names a microphone this machine does not have."""
+
+
+def input_device_names() -> tuple[str, ...]:
+    """Every device on this machine that can record, in PortAudio's order.
+
+    What the tray's device picker offers (§11.6). Output-only devices are
+    excluded for the same reason `resolve_device` excludes them: "MacBook Pro
+    Speakers" opens a stream that records nothing, forever, with no error, and
+    a menu row is a much easier way to pick one than a config file is.
+
+    Duplicates are dropped, keeping the first. Core Audio reports an aggregate
+    device under the same name as one of its members often enough that a menu
+    would show two identical rows, and §5.3's key is a substring match — the
+    two rows would do the same thing anyway.
+    """
+    devices = _sounddevice().query_devices()
+    names: list[str] = []
+    for device in devices:
+        if device["max_input_channels"] <= 0:
+            continue
+        name = str(device["name"])
+        if name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def _sounddevice() -> Any:
@@ -96,6 +128,32 @@ class AudioCapture:
     @property
     def is_recording(self) -> bool:
         return self._stream is not None
+
+    @property
+    def device(self) -> str:
+        """The configured device name, or `"default"`. What the tray ticks."""
+        return self._config.device
+
+    def set_device(self, name: str) -> None:
+        """Pin a different microphone from the next `start()` onward (§11.6).
+
+        The daemon holds one `AudioCapture` for its life (§6.1), so a device
+        chosen from the tray has to reach this object — reloading the config
+        would mean rebuilding the controller around a live microphone.
+
+        **It does not touch an open stream.** A device chosen mid-dictation
+        takes effect on the next one, because swapping the stream underneath a
+        running capture discards the words already spoken, and §8 exists to
+        refuse exactly that trade. `resolve_device` runs at `start()`, so
+        nothing else is needed to make the change take.
+
+        No validation here. A device can be unplugged between the menu being
+        built and the row being clicked, so a check at this point would be
+        answering a question that is already stale; `start()` raises
+        `DeviceNotFoundError` with the list of what is actually present, which
+        is the answer a user can act on.
+        """
+        self._config = dataclasses.replace(self._config, device=name)
 
     def resolve_device(self) -> int | None:
         """Turn `[audio] device` into a PortAudio index, or None for the default.

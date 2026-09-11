@@ -255,3 +255,68 @@ def test_a_test_that_supplies_its_own_device_is_unaffected(
 
     monkeypatch.setattr(capture_module, "_sounddevice", lambda: "a fake device")
     assert capture_module._sounddevice() == "a fake device"
+
+
+# --------------------------------------------------------------------------
+# Choosing a device while the daemon runs (§11.6)
+# --------------------------------------------------------------------------
+
+
+def test_the_input_device_names_are_the_ones_with_inputs(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """What the tray picker offers. "MacBook Pro Speakers" in that list is a
+    row that opens a stream recording nothing, forever, with no error — the
+    same reason `resolve_device` filters."""
+    from amanuensis.audio.capture import input_device_names
+
+    names = input_device_names()
+
+    assert "MacBook Pro Microphone" in names
+    assert "MacBook Pro Speakers" not in names
+    assert len(names) == 3
+
+
+def test_setting_the_device_changes_what_the_next_capture_opens(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """The daemon holds one `AudioCapture` for its life (§6.1), so a device
+    chosen from the tray has to reach the object rather than the config file
+    the object was built from."""
+    capture = _capture(device="default")
+    capture.set_device("MacBook Pro Microphone")
+
+    capture.start()
+    try:
+        assert fake_sd.streams[-1].kwargs["device"] == 1
+    finally:
+        capture.stop()
+
+
+def test_setting_the_device_does_not_disturb_an_open_stream(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """A device chosen mid-dictation takes effect on the next one. Swapping
+    the stream under a running capture loses the words already spoken, and §8
+    is the whole argument against ever doing that."""
+    capture = _capture(device="default")
+    capture.start()
+    fake_sd.streams[-1].feed(blocks=2)
+    capture.set_device("BoomAudio")
+
+    audio = capture.stop()
+
+    assert len(audio) == 2 * fake_sd.streams[-1]._blocksize
+    assert len(fake_sd.streams) == 1, "the open stream was replaced"
+
+
+def test_an_unknown_device_still_fails_at_the_next_start(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """`set_device` does not validate: a device can be unplugged between the
+    menu being built and the row being clicked, so the only honest check is
+    the one at `start()`, which already lists what is present."""
+    capture = _capture()
+    capture.set_device("A Microphone That Left")
+    with pytest.raises(DeviceNotFoundError):
+        capture.start()

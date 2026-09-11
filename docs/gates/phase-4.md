@@ -21,7 +21,7 @@ that waits for the record to be written is a finding that gets rounded off.
 | 1. Daemon starts and stops | **PASS** | 2026-09-03, re-verified 2026-09-08 |
 | 2. Recording panel confidence test (§5.4) | **PASS — 6 / 6**, qualified twice below | 2026-09-08 |
 | 3. Network capture (G3) | **PASS** — 0 sockets, 0 bytes, live control | 2026-09-03 |
-| 4. Ten short corrections | **not run** — optional; the short-utterance punctuation comparison stays unmeasured | — |
+| 4. Ten short corrections | **RUN — n = 9, not 10.** Shipped chain **4.38%**; Moonshine 14.37% / 16.25% | 2026-09-11 |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
 | 5. This record | open | — |
 | 6. The install gate | **not run** — this is the gate | — |
@@ -47,6 +47,49 @@ download, `engines/moonshine.py`, and the Desktop launcher.
 dictations of 7.5–10.0 s recorded for the purpose, full shipped chain, config
 digest recorded. `docs/gates/g1-at-ten-seconds.md` carries the conditions and the
 contaminated first attempt.
+
+---
+
+## Lane 4 — the short-utterance engine comparison (2026-09-11)
+
+**It is nine takes, not ten.** `--emit-corrections --since 2026-09-10` found
+nine stored dictations in the 6–12 s window; all nine had audio. The operator
+edited six of the nine. 160 reference words in total, which is a corpus small
+enough that every figure below is a direction, not a rate.
+
+    python scripts/bench_punctuation.py --corrections corrections-short-2026-09-10.json
+
+| engine | edit rate | missing marks | stray caps | deletions | p50 | p95 |
+|---|---|---|---|---|---|---|
+| `faster_whisper:auto` (as shipped, not re-decoded) | **4.38%** (7 / 160) | 2 | 1 | 0 | shipped | shipped |
+| `moonshine/tiny` | 14.37% | 5 | 3 | **9** | 82 ms | 91 ms |
+| `moonshine/base` | 16.25% | 7 | 2 | **12** | 143 ms | 161 ms |
+
+**§7.2's open engine question is answered in the same direction short as long.**
+It was left open because ADR 0001 declined Moonshine on *deletions* over 67–97 s
+utterances and nobody had asked whether it **punctuates** better at the length
+this operator actually dictates. It does not: 3.3× the edit rate on the same
+classifier and the same chain, and the deletion axis ADR 0001 decided on is
+worse here too — 9 and 12 deleted words against faster-whisper's **0**. §7.2
+froze the Phase 4 default before this ran, so this table could not have moved
+the shipped engine in any case; what it removes is the possibility that the
+freeze was hiding something.
+
+**What this is not.** It is not a G2 verdict. G2's 5% is defined over the Phase 3
+long corpus (67–97 s, 8.59%), and 4.38% here is a **different corpus measured
+with the same instrument** — 160 words against that gate's 1,991. Reading it as
+"G2 is met" would be selecting the corpus that clears the bar, which is the
+failure §7.2 was frozen to prevent. The honest statement is narrower and still
+useful: **at this operator's ordinary dictation length the chain is not the
+constraint, and neither Moonshine size is an alternative.**
+
+Two caveats that travel with the number. `history.db` still carries no config
+digest, so `--since` is the only thing separating these takes from every other
+short take ever stored — and the shipped column is *what was injected on the
+day*, not a re-decode, which is the only way to avoid scoring yesterday's
+corrections against today's config. Transcript text is not reproduced here; the
+corrections file is the operator's own speech and stays out of the repository
+(`.gitignore:62`).
 
 ---
 
@@ -349,6 +392,13 @@ nobody.
 
 **S3, S4 and S5 are not built and should not be**, per the operator's own
 sequencing: they change the panel lane 2 scored, and lane 6 has not run.
+
+- **The microphone picker** (2026-09-11, §5.4 and §11.6). A `Device:` row in the
+  tray with every input on the machine beneath it, closing the discoverability
+  half of §11.6 the day after it was recorded. **It does not touch the panel**,
+  which is why it is here and S3–S5 are not: lane 2 scored the overlay, and this
+  adds a menu row. Lane 6's install walk-through now has one more menu to
+  explain, which is a question for the second person rather than a defect.
 
 **One defect S2 surfaced and closed:** `_latch_enabled` gated the latch on an
 `on_cancel` callback, so any caller passing none silently got **no latch**. That

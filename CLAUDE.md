@@ -15,12 +15,18 @@ PRD, the PRD wins.
 
 ## Status: **Phase 4 built; its gate is unrun** — `docs/gates/phase-4.md`
 
-**Sprint closed 2026-09-11.** Lanes 1, 2 (6/6), 3 and 4b of the Phase 4 runbook
-have PASSED and are recorded. **Lane 6 — a second person installing from the
-README unaided — has not been booked, and it is the gate.** Lane 4 (ten short
-corrections) is unrun and optional; its template is emitted and waiting for the
-operator's edits. Lane 5's two open items are G2's disposition and gate finding
-1c.
+**Sprint closed 2026-09-11.** Lanes 1, 2 (6/6), 3, 4 and 4b of the Phase 4
+runbook have PASSED and are recorded. **Lane 6 — a second person installing from
+the README unaided — has not been booked, and it is the gate.** Lane 5's two
+open items are G2's disposition and gate finding 1c.
+
+**Lane 4 ran 2026-09-11 and it is nine takes, not ten** — 160 reference words,
+so every figure is a direction rather than a rate. The shipped chain scores
+**4.38%**, `moonshine/tiny` 14.37% and `moonshine/base` 16.25%, with 9 and 12
+deleted words against faster-whisper's 0. §7.2's open engine question is
+answered in the same direction short as long. **It is not a G2 verdict**: G2's
+5% is defined over the Phase 3 long corpus, and reading 4.38% as "G2 is met"
+selects the corpus that clears the bar.
 
 **Do not open Phase 5.** §9's Phase 4 gate has not run.
 
@@ -44,6 +50,14 @@ Three things from this sprint that outlive it.
   could not become its own dictation; that hazard needs a separately queued
   session, which a session that never ends never creates. The latch emits
   nothing and the leading audio is kept.
+
+**The microphone is pickable from the tray** (2026-09-11, §5.4 and §11.6). A
+`Device:` row with every input on the machine, closing the discoverability half
+of §11.6 — `[audio] device` already removed the Bluetooth playback interruption
+and was in no menu, which is the argument that put the binding and the mode
+there in Phase 4. The other half does not close: **the accuracy cost of the
+built-in microphone at arm's length is unmeasured**, and the menu makes that
+unpriced trade one click away rather than one file edit away.
 
 **S3, S4 and S5 of `docs/superpowers/slices/overlay-controls.md` are specified
 and must not be built before lane 6** — they change the panel lane 2 scored.

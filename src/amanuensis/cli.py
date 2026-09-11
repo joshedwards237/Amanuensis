@@ -857,6 +857,11 @@ def _daemon(config: AppConfig) -> int:
     # the process — which it did on 2026-09-02, over a confidence feature.
     overlay = RecordingOverlay(config.feedback, on_error=tray.set_error)
 
+    # Bound further down, once `capture` and the tray picker exist. A box
+    # rather than a `nonlocal` because `_on_state_change` is handed to the
+    # controller before the picker is wired and must be safe to call meanwhile.
+    device_refresh_box: dict[str, Any] = {"refresh": None}
+
     def _on_state_change(state: DictationState) -> None:
         # Two surfaces, one state, and the fan-out lives here rather than in
         # either of them: §6.2 makes the tray a status surface, and a tray that
@@ -864,6 +869,14 @@ def _daemon(config: AppConfig) -> int:
         # lifetime.
         tray.set_state(state)
         overlay.set_state(state)
+        if state is DictationState.IDLE:
+            # Devices come and go while the daemon runs — a headset connected
+            # after start-up is in no menu built at start-up. Idle is the one
+            # moment with no deadline attached, and `_device_refresh` is only
+            # bound once the picker is wired, so this does nothing until then.
+            refresher = device_refresh_box["refresh"]
+            if refresher is not None:
+                refresher()
 
     def _on_session_error(message: str | None) -> None:
         """What failed, in words, on both surfaces that claim to carry it.
@@ -1007,8 +1020,10 @@ def _daemon(config: AppConfig) -> int:
     # application's shortcut). The tray renders a list and hands back a name;
     # everything that changing a binding actually involves lives here, which is
     # §6.2's boundary.
+    from amanuensis.audio.capture import input_device_names
     from amanuensis.config import (
         default_config_path,
+        write_audio_device,
         write_hotkey_binding,
         write_hotkey_mode,
     )
@@ -1071,10 +1086,51 @@ def _daemon(config: AppConfig) -> int:
             watcher.reset()
             tray.set_mode_options(available_modes(), name)
 
+    # The microphone picker (§5.3's `[audio] device`, §11.6). Same shape as the
+    # other two: the tray renders a list and hands back a name, and everything
+    # that pinning a microphone involves lives here.
+    def _refresh_devices() -> None:
+        """Re-read what is plugged in, keeping the current list if that fails.
+
+        Enumerating devices is a PortAudio call and it is not on the G1 path —
+        this runs at start-up and when a session returns to idle, never between
+        the hotkey and the first character.
+
+        A failure here is deliberately silent, and it is the one place in this
+        daemon where that is right: an unreadable device list is not a failure
+        state the user is in, and reporting it through `tray.set_error` would
+        overwrite whatever *did* fail with a message about a menu.
+        """
+        try:
+            names = input_device_names()
+        except Exception:
+            return
+        tray.set_device_options(names, capture.device)
+
+    def _change_device(name: str) -> None:
+        try:
+            # Persist first, for the reason `_rebuild_listener` does: a setting
+            # that works this session and is gone after a restart teaches the
+            # user not to trust the menu.
+            write_audio_device(default_config_path(), name)
+        except Exception as exc:
+            tray.set_error(f"could not pin the microphone to {name}: {exc}")
+            return
+        # Never mid-dictation — `set_device` takes effect at the next `start()`
+        # and leaves an open stream alone, so a device chosen while recording
+        # does not cost the words already spoken (§8).
+        capture.set_device(name)
+        tray.set_error(None)
+        _refresh_devices()
+        print(f"microphone is now {name} (written to {default_config_path()})")
+
     tray.set_on_hotkey(_change_hotkey)
     tray.set_on_mode(_change_mode)
+    tray.set_on_device(_change_device)
+    device_refresh_box["refresh"] = _refresh_devices
     tray.set_hotkey_options(available_bindings(), config.hotkey.binding)
     tray.set_mode_options(available_modes(), config.hotkey.mode)
+    _refresh_devices()
     tray.set_on_quit(tray.stop)
     signal.signal(signal.SIGINT, lambda *_: tray.stop())
     signal.signal(signal.SIGTERM, lambda *_: tray.stop())
