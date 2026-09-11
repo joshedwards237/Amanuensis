@@ -286,6 +286,14 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   decoder stopped early. `manu history --last` has what it got.
 - **`manu install` says the reference clip is missing.** Step 2 — the clip is
   generated locally and is not in the repository.
+- **Starting a dictation pauses my music / my AirPods sound worse.** macOS
+  moves a Bluetooth headset out of playback mode when anything opens its
+  microphone. Pin a different input and the headset is never touched:
+  `[audio] device` takes any substring of a device name, so
+  `device = "MacBook Pro Microphone"` in `config.toml` keeps dictation on the
+  built-in mic. **The trade is unmeasured** — every accuracy figure here was
+  recorded on a desk mic, and none describes a laptop microphone at arm's
+  length. `manu daemon` lists the devices it can see if the name does not match.
 - **My double-tap does not latch.** 350 ms is a default, not a measurement of
   your hand. Raise `double_tap_ms` in the config file; set it to `0` to turn the
   latch off entirely and keep hold-to-talk.
