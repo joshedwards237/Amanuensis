@@ -74,8 +74,15 @@ class _FakeStream:
 class _FakeSoundDevice:
     def __init__(self) -> None:
         self.streams: list[_FakeStream] = []
+        #: Which of `_DEVICES` PortAudio would call the default input. Real
+        #: `query_devices(kind="input")` answers this and the no-argument call
+        #: does not, so a fake that ignored `kind` would let `describe_device`
+        #: report the first device on the machine and pass.
+        self.default_input = _DEVICES[0]
 
-    def query_devices(self) -> list[dict[str, Any]]:
+    def query_devices(self, kind: str | None = None) -> Any:
+        if kind == "input":
+            return self.default_input
         return _DEVICES
 
     def InputStream(self, **kwargs: Any) -> _FakeStream:  # mirrors the sounddevice API
@@ -320,3 +327,60 @@ def test_an_unknown_device_still_fails_at_the_next_start(
     capture.set_device("A Microphone That Left")
     with pytest.raises(DeviceNotFoundError):
         capture.start()
+
+
+def test_the_described_device_is_the_one_that_would_open(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """What `manu status` answers. §5.3's key takes a *substring*, so the
+    config value is not the answer to "which microphone is live" — a `device =
+    "MacBook"` that quietly matched the wrong input would read as correct."""
+    capture = _capture(device="macbook pro mic")
+    assert capture.describe_device() == "MacBook Pro Microphone"
+
+
+def test_the_system_default_is_named_as_well_as_labelled(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """`default` is the shipped value and the one that tells the user least.
+    It is also the state in which the Bluetooth playback gap of §11.6 happens,
+    so the useful answer says *which* device the system chose."""
+    fake_sd.default_input = _DEVICES[1]
+    capture = _capture(device="default")
+
+    described = capture.describe_device()
+
+    assert "system default" in described
+    assert "MacBook Pro Microphone" in described
+
+
+def test_a_pinned_device_that_is_gone_describes_itself_as_gone(
+    fake_sd: _FakeSoundDevice,
+) -> None:
+    """A status line that named a device this machine does not have, with no
+    qualifier, would be the §5.4 failure in text: a confident answer about a
+    microphone that cannot open."""
+    capture = _capture(device="A Microphone That Left")
+    described = capture.describe_device()
+    assert "A Microphone That Left" in described
+    assert "not connected" in described
+
+
+def test_describing_the_device_never_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`manu status` exists to answer when things are wrong, and enumerating
+    devices is a PortAudio call that can fail on its own. A `status` that
+    raised because the *device list* was unreadable would withhold the model,
+    the mode and the state — every other thing it knows — over the one field
+    that failed."""
+    from amanuensis.audio import capture as capture_module
+
+    class _Broken:
+        def query_devices(self, kind: str | None = None) -> Any:
+            raise OSError("PortAudio said no")
+
+    monkeypatch.setattr(capture_module, "_sounddevice", lambda: _Broken())
+
+    assert "default" in _capture(device="default").describe_device()
+    assert _capture(device="BoomAudio").describe_device() == "BoomAudio"

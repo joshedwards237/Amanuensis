@@ -229,7 +229,7 @@ gesture and nothing else.
 From another terminal, while the daemon runs:
 
 ```sh
-manu status                         # is it up, which model, which mode
+manu status                         # is it up, and on which model, mode and microphone
 manu toggle                         # start or stop a dictation without the hotkey
 ```
 
@@ -343,7 +343,7 @@ which is acceptable.
 ```sh
 manu install                        # download the model once, measure this machine's tier
 manu daemon                         # hold right-option, speak, release
-manu status                         # is a daemon running, and in which mode
+manu status                         # is a daemon running, and on what
 manu toggle                         # start or stop a dictation without the hotkey
 manu history --last                 # the last transcript, even if injection failed
 manu history --purge                # delete transcripts, stored audio and the database

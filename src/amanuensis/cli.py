@@ -997,11 +997,22 @@ def _daemon(config: AppConfig) -> int:
         # Deliberately no transcript content. §7.6 forbids it — a `status` that
         # returned the last transcript would open an egress path G3's packet
         # capture cannot see.
+        # **Every field is read live, and two of them used to be read from
+        # `config`** — the frozen start-up snapshot. `mode` is switchable from
+        # the tray, so after one menu click `status` reported the mode the
+        # daemon started with, indefinitely. `model` was worse in a quieter
+        # way: `auto` is the shipped value and the answer was literally
+        # "model auto" while `tiny.en` was loaded. Neither was wrong about the
+        # config; both were wrong about the daemon, which is the only thing
+        # `status` is for. `describe_device` is built to the same rule — the
+        # microphone that would open, not the substring that selects it.
         return Response(
             ok=True,
             detail=(
-                f"running: model {config.engine.model}, "
-                f"mode {config.hotkey.mode}, state {tray.state.value}"
+                f"running: model {engine.model_name}, "
+                f"mode {hotkey_state['mode']}, "
+                f"microphone {capture.describe_device()}, "
+                f"state {tray.state.value}"
             ),
         )
 
