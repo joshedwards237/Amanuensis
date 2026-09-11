@@ -113,6 +113,18 @@ class SweepResult:
     removed: int
     remaining: int
     failed: int = 0
+    #: Stored **audio** kept and expired, counted apart from transcripts.
+    #:
+    #: They used to share `removed`/`remaining`, on the argument that the two
+    #: artefacts expire on one clock and should be reported as one number. The
+    #: clock is shared; the *sentence* must not be. On 2026-09-11 a daemon
+    #: reported "pending transcripts: 0 expired, 137 still recoverable in
+    #: .../pending" on a machine whose pending directory **did not exist** and
+    #: whose 137 files were recordings of the operator's voice. Every word of
+    #: that was wrong in the direction that matters: it named plaintext
+    #: transcripts that were not there, and it hid audio that was.
+    audio_removed: int = 0
+    audio_remaining: int = 0
     #: Rows expired from `history.db`. Separate from `removed`, which counts
     #: files: the two live on different paths and a user asking "what happened
     #: to my transcripts" is asking about whichever one they use.
@@ -420,7 +432,8 @@ class HistoryStore:
         # Audio seeds the totals so the two artefacts expire on one clock and
         # are reported as one number. They are swept together because a caller
         # who has to remember a second sweep will eventually not.
-        removed, remaining, failed = self._sweep_audio(cutoff)
+        audio_removed, audio_remaining, failed = self._sweep_audio(cutoff)
+        removed = remaining = 0
 
         if not self.pending_dir.exists():
             return SweepResult(
@@ -428,6 +441,8 @@ class HistoryStore:
                 remaining=remaining,
                 failed=failed,
                 rows_removed=rows_removed,
+                audio_removed=audio_removed,
+                audio_remaining=audio_remaining,
             )
 
         # Globbed by the pattern this module writes, never by directory. A
@@ -447,6 +462,8 @@ class HistoryStore:
             remaining=remaining,
             failed=failed,
             rows_removed=rows_removed,
+            audio_removed=audio_removed,
+            audio_remaining=audio_remaining,
         )
 
     def _expire_rows(self, cutoff: float) -> int:

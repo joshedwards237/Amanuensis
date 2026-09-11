@@ -795,10 +795,22 @@ def _daemon(config: AppConfig) -> int:
 
     history = HistoryStore(config.history)
     swept = history.sweep()
+    # Two sentences, because they are two artefacts and one of them is the
+    # user's voice. Until 2026-09-11 these shared a counter and the line read
+    # "pending transcripts: 0 expired, 137 still recoverable in .../pending" on
+    # a machine with no pending directory and 137 recordings — naming plaintext
+    # that was not there while hiding audio that was.
     if swept.removed or swept.remaining:
         print(
             f"pending transcripts: {swept.removed} expired, "
             f"{swept.remaining} still recoverable in {history.pending_dir}",
+            flush=True,
+        )
+    if swept.audio_removed or swept.audio_remaining:
+        print(
+            f"stored audio: {swept.audio_removed} expired, "
+            f"{swept.audio_remaining} recordings kept in {history.audio_dir} "
+            f"([history] store_audio, retain_days = {config.history.retain_days})",
             flush=True,
         )
 
