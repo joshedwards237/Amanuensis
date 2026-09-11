@@ -579,3 +579,99 @@ def test_a_binding_in_a_later_table_is_not_mistaken_for_the_hotkey(
     text = path.read_text()
     assert text.index("[hotkey]") < text.index('binding = "fn"')
     assert load_config(path).hotkey.binding == "fn"
+
+
+# --------------------------------------------------------------------------
+# `[audio] device`, written from the tray (§11.6)
+# --------------------------------------------------------------------------
+
+
+def test_writing_the_device_leaves_the_comments_alone(tmp_path: Path) -> None:
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[audio]\n"
+        'device = "default"   # whatever Sound preferences says\n'
+        "max_duration_seconds = 300\n"
+    )
+
+    write_audio_device(path, "MacBook Pro Microphone")
+
+    after = path.read_text()
+    assert '# whatever Sound preferences says' in after, "the comment was lost"
+    assert load_config(path).audio.device == "MacBook Pro Microphone"
+    assert load_config(path).audio.max_duration_seconds == 300
+
+
+def test_writing_the_device_adds_the_table_when_absent(tmp_path: Path) -> None:
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "config.toml"
+    path.write_text('[hotkey]\nbinding = "right_option"\n')
+    write_audio_device(path, "BoomAudio")
+    assert load_config(path).audio.device == "BoomAudio"
+    assert load_config(path).hotkey.binding == "right_option"
+
+
+def test_writing_the_device_creates_the_file(tmp_path: Path) -> None:
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "nested" / "config.toml"
+    write_audio_device(path, "MacBook Pro Microphone")
+    assert load_config(path).audio.device == "MacBook Pro Microphone"
+
+
+def test_the_engine_device_is_not_mistaken_for_the_microphone(
+    tmp_path: Path,
+) -> None:
+    """`device` is a key in two tables — `[engine] device` selects cpu or cuda.
+    A file-wide line match would pin the decoder to a microphone name and
+    leave the microphone exactly as it was."""
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[engine]\n"
+        'device = "auto"\n'
+        "\n"
+        "[audio]\n"
+        'device = "default"\n'
+    )
+
+    write_audio_device(path, "BoomAudio")
+
+    config = load_config(path)
+    assert config.audio.device == "BoomAudio"
+    assert config.engine.device == "auto", "the decoder was pinned to a microphone"
+
+
+def test_a_device_name_that_would_corrupt_the_file_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Unlike a hotkey binding, a device name is unbounded — it is whatever
+    Core Audio reports, and the tray hands it straight through. A name
+    carrying a quote or a newline writes TOML that will not parse, which
+    breaks a daemon in a file the user never edited."""
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "config.toml"
+    path.write_text('[audio]\ndevice = "default"\n')
+
+    for bad in ('a "quoted" mic', "two\nlines", "back\\slash", "  "):
+        with pytest.raises(ConfigError):
+            write_audio_device(path, bad)
+
+    assert 'device = "default"' in path.read_text(), "the file was modified"
+
+
+def test_an_absent_device_may_still_be_written(tmp_path: Path) -> None:
+    """§11.6's second open question, decided here: the writer does not check
+    the device exists. A user configuring a machine for a microphone they will
+    plug in tomorrow is doing something reasonable, and the honest check is
+    the one at `start()`, which lists what is actually present."""
+    from amanuensis.config import write_audio_device
+
+    path = tmp_path / "config.toml"
+    write_audio_device(path, "A Microphone Not Plugged In")
+    assert load_config(path).audio.device == "A Microphone Not Plugged In"

@@ -27,8 +27,17 @@ render wrongly and still pass.
 class does not know what stopping means, which is the boundary CLAUDE.md names
 first among the ones that get violated.
 
-What it deliberately does not do: preferences (§11.2 puts a settings UI
-post-v1), history browsing (`manu history` owns that), and mode switching.
+What it deliberately does not do: a settings UI (§11.2 puts one post-v1) and
+history browsing (`manu history` owns that).
+
+**That sentence used to end "and mode switching", and the drift is worth
+naming.** Three §5.3 keys are now pickable here — `[hotkey] binding`,
+`[hotkey] mode` and, since 2026-09-11, `[audio] device` — each admitted on the
+same argument: a setting a user must edit a TOML file to try is a setting most
+users never try. That argument does not stop, so the boundary is **not** "no
+preferences". It is §6.2's: the tray renders a list and hands back a name, and
+every consequence of the name lives in the daemon. A key arrives here when
+trying it is how a user decides, and never with the code that applies it.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ from amanuensis.models.results import ClipboardExposure
 from amanuensis.ui.indicator import _TOOLTIPS, GLYPHS, RecordingIndicator
 
 __all__ = [
+    "DEVICE_ACTION_PREFIX",
     "HOTKEY_ACTION_PREFIX",
     "MODE_ACTION_PREFIX",
     "MenuItem",
@@ -135,6 +145,19 @@ def _mode_label(name: str) -> str:
     return label
 
 
+#: Prefix distinguishing a microphone row. Same scheme as the other two.
+DEVICE_ACTION_PREFIX: Final = "device:"
+
+#: §5.3's spelling for "follow Sound preferences". A menu saying `default`
+#: leaves the user guessing what it defaults to.
+DEFAULT_DEVICE: Final = "default"
+_DEFAULT_DEVICE_LABEL: Final = "System default"
+
+
+def _pretty_device(name: str) -> str:
+    return _DEFAULT_DEVICE_LABEL if name == DEFAULT_DEVICE else name
+
+
 def _binding_label(name: str) -> str:
     """A binding's menu title, with its cost attached.
 
@@ -180,6 +203,7 @@ class TrayApp:
         on_quit: Callable[[], None] | None = None,
         on_hotkey: Callable[[str], None] | None = None,
         on_mode: Callable[[str], None] | None = None,
+        on_device: Callable[[str], None] | None = None,
     ) -> None:
         self._indicator = indicator if indicator is not None else RecordingIndicator()
         self._on_quit = on_quit
@@ -189,6 +213,9 @@ class TrayApp:
         self._on_mode = on_mode
         self._modes: tuple[str, ...] = ()
         self._mode_current = ""
+        self._on_device = on_device
+        self._devices: tuple[str, ...] = ()
+        self._device_current = ""
         self._state = DictationState.IDLE
         self._error: str | None = None
         self._exposure: ClipboardExposure | None = None
@@ -271,6 +298,28 @@ class TrayApp:
     def set_on_mode(self, on_mode: Callable[[str], None]) -> None:
         self._on_mode = on_mode
 
+    def set_device_options(self, available: Sequence[str], current: str) -> None:
+        """Offer the microphones this machine has and mark the pinned one.
+
+        §11.6: dictating on a Bluetooth headset drops it out of A2DP and
+        interrupts whatever was playing. `[audio] device` already fixes that by
+        pinning the built-in microphone — it was simply in no menu, and a
+        setting a user must edit a file to try is a setting most users never
+        try. That is the argument that put the binding and the mode here in
+        Phase 4, applied to the third key of the same kind.
+
+        `available` is what is plugged in *now*. The pinned device is rendered
+        whether or not it is in that list, because a pinned device that has
+        been unplugged is the state the user most needs to see: the next
+        dictation will fail, and this menu is the way out.
+        """
+        self._devices = tuple(available)
+        self._device_current = current
+        self._refresh()
+
+    def set_on_device(self, on_device: Callable[[str], None]) -> None:
+        self._on_device = on_device
+
     def set_clipboard_exposure(self, exposure: ClipboardExposure | None) -> None:
         """§5.4 and §7.3 both assign this row to Phase 4.
 
@@ -337,8 +386,49 @@ class TrayApp:
                 )
             )
 
+        if self._devices or self._device_current:
+            items.append(self._device_row())
+
         items.append(MenuItem("Quit Amanuensis", action="quit", enabled=True))
         return tuple(items)
+
+    def _device_row(self) -> MenuItem:
+        """`Device: …` and its submenu.
+
+        Two things here are not decoration. The system-default row is offered
+        explicitly, because without it a user who pinned a microphone has no
+        way back to following Sound preferences. And a pinned device that is
+        not among the ones present is appended, marked, and the **mark is
+        repeated in the parent title** — §5.4's rule is that a fault is
+        readable without opening anything, and a warning hidden one level down
+        is a warning at the depth that made gate finding 1 undiagnosable.
+        """
+        current = self._device_current or DEFAULT_DEVICE
+        offered = [DEFAULT_DEVICE, *self._devices]
+        missing = current != DEFAULT_DEVICE and current not in self._devices
+        if missing:
+            offered.append(current)
+
+        rows = []
+        for name in offered:
+            label = _one_line(_pretty_device(name))
+            if missing and name == current:
+                label = f"{label}  ⚠ not connected"
+            rows.append(
+                MenuItem(
+                    label,
+                    action=f"{DEVICE_ACTION_PREFIX}{name}",
+                    enabled=True,
+                    checked=name == current,
+                )
+            )
+
+        title = f"Device: {_one_line(_pretty_device(current))}"
+        return MenuItem(
+            f"{title}  ⚠ not connected" if missing else title,
+            enabled=True,
+            submenu=tuple(rows),
+        )
 
     def set_on_hotkey(self, on_hotkey: Callable[[str], None]) -> None:
         """Supply the binding-change handler after construction, as `on_quit`
@@ -368,6 +458,15 @@ class TrayApp:
             name = action[len(MODE_ACTION_PREFIX) :]
             if self._on_mode is not None and name in self._modes:
                 self._on_mode(name)
+            return
+        if action and action.startswith(DEVICE_ACTION_PREFIX):
+            name = action[len(DEVICE_ACTION_PREFIX) :]
+            # The pinned device is offered even when it is not plugged in, so
+            # it is a legitimate target too — re-picking it is how a user
+            # retries after plugging the thing back in.
+            known = (DEFAULT_DEVICE, *self._devices, self._device_current)
+            if self._on_device is not None and name in known:
+                self._on_device(name)
             return
         if action and action.startswith(HOTKEY_ACTION_PREFIX):
             name = action[len(HOTKEY_ACTION_PREFIX) :]

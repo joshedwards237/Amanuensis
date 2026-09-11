@@ -67,6 +67,7 @@ __all__ = [
     "default_history_path",
     "load_config",
     "resolve_cpu_threads",
+    "write_audio_device",
     "write_hotkey_binding",
     "write_hotkey_mode",
 ]
@@ -817,6 +818,41 @@ def write_hotkey_mode(path: Path, mode: str) -> None:
     _write_hotkey_key(path, "mode", mode, available_modes(), "hotkey.mode")
 
 
+def write_audio_device(path: Path, device: str) -> None:
+    """Persist `[audio] device`. See `write_hotkey_binding` for the mechanics.
+
+    Added 2026-09-11 for the tray's device picker. §11.6 recorded the gap it
+    closes: dictating on a Bluetooth headset drops it from A2DP to the mono
+    headset profile and audibly interrupts playback, `[audio] device` already
+    removes that by pinning the built-in microphone, and the key was in no menu
+    — the same argument that put the capture mode and the binding in the tray
+    in Phase 4.
+
+    **It does not check the device exists**, which is the one place this
+    departs from the hotkey writers and is deliberate. Their values come from a
+    closed list the listener defines; a microphone name comes from Core Audio
+    and the set changes while the daemon runs. Configuring a machine for a
+    microphone that will be plugged in tomorrow is reasonable, and the honest
+    check is `AudioCapture.start()`, which raises with the devices actually
+    present rather than the ones present when the file was written.
+
+    What it does refuse is a name that would not survive the round trip. The
+    value is written as a basic TOML string, so a quote, a backslash or a
+    newline in a device name produces a file that will not parse — a daemon
+    broken in a file the user never edited, which is the failure
+    `write_hotkey_binding` validates ahead of the open for.
+    """
+    stripped = device.strip()
+    if not stripped:
+        raise ConfigError("audio.device: a device name cannot be empty")
+    if any(ch in stripped for ch in '"\\') or not stripped.isprintable():
+        raise ConfigError(
+            f"audio.device: {device!r} cannot be written to config.toml — a "
+            'device name must not contain a quote, a backslash or a line break.'
+        )
+    _write_table_key(path, "audio", "device", stripped)
+
+
 def write_hotkey_binding(path: Path, binding: str) -> None:
     """Persist `[hotkey] binding` without disturbing anything else.
 
@@ -853,30 +889,37 @@ def _write_hotkey_key(
     known: tuple[str, ...],
     label: str,
 ) -> None:
-    """One key under `[hotkey]`, rewritten in place.
-
-    Shared by the two public writers rather than duplicated: the delicate part
-    is the table scoping, and two copies of it would drift.
-    """
+    """One key under `[hotkey]`, validated against what the listener accepts."""
     if value not in known:
         raise ConfigError(
             f"{label}: {value!r} is not one this listener recognises. "
             f"Known: {', '.join(known)}"
         )
+    _write_table_key(path, "hotkey", key, value)
 
+
+def _write_table_key(path: Path, table: str, key: str, value: str) -> None:
+    """One key under one table, rewritten in place.
+
+    Shared by every writer rather than duplicated: the delicate part is the
+    table scoping, and copies of it would drift. **Validation is the caller's**
+    — what a legal value is differs by key (a hotkey binding comes from a
+    closed list; a microphone name does not), and a writer that guessed would
+    either refuse legitimate values or corrupt the file.
+    """
     text = path.read_text() if path.is_file() else ""
     lines = text.splitlines(keepends=True)
     new_line = f'{key} = "{value}"'
 
     header = None
     for index, line in enumerate(lines):
-        if line.strip() == "[hotkey]":
+        if line.strip() == f"[{table}]":
             header = index
             break
 
     if header is None:
         suffix = "" if not text or text.endswith("\n") else "\n"
-        text = f"{text}{suffix}\n[hotkey]\n{new_line}\n"
+        text = f"{text}{suffix}\n[{table}]\n{new_line}\n"
     else:
         # Only within this table: these are plausible key names elsewhere, and
         # a file-wide match would rewrite another table's value and leave the

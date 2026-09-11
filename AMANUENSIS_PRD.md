@@ -463,7 +463,9 @@ double_tap_ms = 350         # 0 disables the latch. push_to_talk only — see §
                             # UNMEASURED.
 
 [audio]
-device = "default"          # or a substring match on device name
+device = "default"          # or a substring match on device name.
+                            # Selectable from the tray (added 2026-09-11) —
+                            # see §5.4 and §11.6.
 sample_rate = 16000         # 16000 ONLY — see the note below the block
 max_duration_seconds = 300
 
@@ -660,6 +662,20 @@ is ambiguous about recording state is a privacy problem regardless of where the 
 - Tray/menubar icon state: idle / recording / transcribing / error
 - Optional audio cue on start and stop (`[feedback] sounds = true`)
 - Recording state must be visible without the tray menu open
+- **Which microphone is live, and the means to change it** (added 2026-09-11).
+  The tray carries a `Device:` row naming the current input, with every input
+  this machine has beneath it and `System default` among them. §11.6 argued the
+  case: `[audio] device` already removes the Bluetooth playback interruption,
+  and a setting that requires editing a TOML file to try is a setting most
+  users never try — the same argument that put `[hotkey] binding` and §5.2's
+  capture mode in the menu in Phase 4.
+
+  A pinned device that is **not currently present** is still listed, ticked,
+  and marked `⚠ not connected`, and the mark is repeated on the parent row. The
+  alternative — dropping it from the list — leaves a menu whose ticked entry
+  does not exist, on a daemon whose next dictation will fail, with the way out
+  one level down and unlabelled. §5.4's rule that a fault is readable without
+  opening anything applies to the menu's own rows too.
 - **A recording affordance with more presence than a menu-bar glyph** (added
   2026-08-03, Phase 2b finding 4). The minimum indicator built in Phase 2b
   satisfies the line above — the glyph fills on press and empties on release,
@@ -3407,20 +3423,32 @@ Resolve before or at the stated gate. Do not guess.
 
    What is open is not the capability but its **discoverability and its cost**:
 
-   - The key is invisible. It is in the config file and in no menu, while §5.2's
-     capture mode and `[hotkey] binding` both reached the tray in Phase 4 on the
-     argument that a setting a user must edit a file to try is a setting two of
-     three users never try.
-   - A pinned device is wrong when it is absent. §5.3 has no answer for
-     `device = "MacBook Pro Microphone"` on a machine where that has been
-     renamed, and `DeviceNotFoundError` refusing to start the daemon is a
-     defensible answer but not an obviously correct one.
-   - **The accuracy cost is unmeasured.** Pinning the built-in microphone while
-     wearing a headset means dictating across a room into a laptop, and §2 is
-     explicit that a corpus recorded on one microphone measures that one. No
-     figure in this repository describes the built-in microphone at arm's
-     length, so the trade — uninterrupted playback for an unknown edit rate — is
-     currently unpriced.
+   - ~~The key is invisible.~~ **Closed 2026-09-11.** The tray carries a
+     `Device:` row and a submenu of every input this machine has (§5.4), on the
+     same argument that put §5.2's capture mode and `[hotkey] binding` there in
+     Phase 4. Picking one writes `[audio] device` through
+     `config.write_audio_device` and calls `AudioCapture.set_device`, which
+     takes effect at the next `start()` and leaves an open stream alone — a
+     device chosen mid-dictation does not cost the words already spoken (§8).
+   - ~~A pinned device is wrong when it is absent.~~ **Decided 2026-09-11, and
+     not the way this entry implied.** `DeviceNotFoundError` at `start()`
+     stands — it already lists the devices that *are* present, which is the one
+     answer a user can act on — but nothing refuses earlier. `set_device` does
+     not validate, because a device can be unplugged between the menu being
+     built and the row being clicked; `write_audio_device` does not validate
+     existence either, because configuring a machine for a microphone that gets
+     plugged in tomorrow is reasonable. It refuses only names that would not
+     survive the round trip into TOML (a quote, a backslash, a line break),
+     which is a broken config file in a file the user never edited. The visible
+     consequence is the `⚠ not connected` row in §5.4.
+   - **The accuracy cost is still unmeasured**, and pinning it from a menu does
+     not price it. Pinning the built-in microphone while wearing a headset
+     means dictating across a room into a laptop, and §2 is explicit that a
+     corpus recorded on one microphone measures that one. No figure in this
+     repository describes the built-in microphone at arm's length. **The menu
+     makes the untraded trade one click away rather than one file edit away,
+     which is the point and is also the risk** — a user who takes it gets
+     uninterrupted playback for an edit rate nobody here has measured.
 
 ---
 
@@ -3526,6 +3554,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-11 | **The microphone reached the tray** (§5.3, §5.4, §11.6). `[audio] device` is now a `Device:` row with every input on the machine beneath it, closing the first of §11.6's two open questions the same day it was recorded — the key existed, it was in no menu, and mode and binding had reached the tray in Phase 4 on precisely that argument. The second question is **decided against the entry's own suggestion**: nothing validates that a device exists, at either the writer or `set_device`, because the set of devices changes while the daemon runs and a check at write time answers a question that is already stale. `AudioCapture.start()` keeps raising `DeviceNotFoundError` with the devices actually present, and a pinned device that is gone is shown ticked and marked `⚠ not connected` rather than dropped. **The third is not closed and gets no easier:** the accuracy cost of the built-in microphone at arm's length is still unmeasured, and a menu makes that unpriced trade one click away. |
 | 2026-09-11 | **Two deferred items from use, both recorded rather than fixed** (§11.5, §11.6). **Error surfacing is inadequate and the immediate hole is closed.** A daemon sat in `ERROR` through a morning showing *"something failed; see the terminal"* while nothing had been told to the terminal — `session.error` held the exception and no surface carried it. `DictationController.on_error` now reaches the tray and stderr, and that is not the same as the surfacing being adequate: one truncated menu row with no history, nothing on disk, and `⚠` now meaning two unrelated things. A log file is the obvious answer and is a **§7.6 decision first** — failure text can contain a transcript, which puts it under `pending/`'s rules. **And dictating interrupts Bluetooth playback**, because opening an input moves a headset from A2DP to the headset profile. The lever already exists — `[audio] device` takes a substring and pinning the built-in microphone removes the gap with no code change — so what is open is discoverability (the key is in no menu, while mode and binding both reached the tray in Phase 4 on exactly that argument) and an **unmeasured accuracy cost**: no figure here describes the built-in microphone at arm's length, so the trade is currently unpriced. |
 | 2026-09-10 | **The double-tap latch stops discarding the first tap, and stops blinking the panel** (§5.2, objections O8/O9/O10, choice story #10). The flash was a state machine reporting an event that did not happen: the latch fired a discard, `abort_session` reported `IDLE`, and the overlay hid — between two presses during which the microphone never closed. The specified fix was a new `restart_session`; review found it needed an `AudioCapture` operation that **does not exist** and left the session clocks unstated, and that **the discard itself buys nothing**. §5.2 required it so a ~100 ms fragment could not become its own dictation, and that hazard needs a separately queued session — which a session that never ends never creates. So the latch now emits **nothing**: the capture opened on the first press keeps running, no controller operation is added, and the up-to-350 ms of the user's own speech the discard was throwing away is kept, which is what the same paragraph praises push-to-talk for. **`_latch_enabled` no longer gates on `on_cancel`** — it did while the latch emitted one, and the gate meant any caller passing none silently got no latch. That surfaced three tests which had been exercising push-to-talk with the latch accidentally off, a configuration `cli.py` never uses; they now hold rather than tap, which is what a dictation is. |
 | 2026-09-10 | **The recording overlay gains controls, a transcribing state, and the click-through it was built to preserve** (§5.4, §5.3, `docs/superpowers/specs/overlay-controls.md`). Specified, **not built** — sequenced after lane 6, because lane 2's 6/6 describes the panel as it exists now. §5.4's rule that nothing may outlive the microphone is **satisfied rather than overruled**: the argument is against a panel that *means recording* persisting, not against the panel, so the bars are replaced in one frame — never cross-faded, since a dimming waveform is still a waveform — by a dot whose motion is time-driven. The invariant is testable: **no audio-reactive element is visible while the microphone is closed**, and `set_level` must be *ignored* while transcribing rather than merely unused, because the capture thread stops delivering blocks and "no data arrives" would make it look correct without being it. **Two costs accepted rather than removed.** The panel stops ignoring mouse events, so a 114 × 22 region swallows clicks meant for the application beneath — README known-costs material. And **there is no Escape equivalent and cannot cheaply be one**: §7.3's tap watches `flagsChanged` and refuses `keyDown` because a tap that watched it would see every character typed, so the ✕ is the *only* cancel affordance the product has. The double-tap flash is a state machine reporting an event that did not happen — `abort_session` emits `IDLE` between the two presses while the microphone never closed — and is fixed by a new `restart_session` rather than by debouncing the hide, which would be a timing rule that hides a genuine close. **Blocked on gate findings 1 and 3**: this adds surface to a component that already stops rendering silently, and a ✕ that silently vanishes is worse than none, because the user believes they have a way out of a latched session and does not. |

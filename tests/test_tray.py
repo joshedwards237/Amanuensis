@@ -625,3 +625,93 @@ def test_clearing_the_error_unmarks_the_menu_bar() -> None:
     tray.set_error(None)
 
     assert tray._indicator._faulted is False
+
+
+# -- the device picker (§11.6) --------------------------------------------
+
+
+def test_no_device_row_before_the_options_are_supplied() -> None:
+    assert not any(i.title.startswith("Device:") for i in TrayApp().menu_items())
+
+
+def test_the_device_submenu_offers_the_system_default_and_every_input() -> None:
+    """§5.3's `device = "default"` is a real choice and the shipped one, so it
+    is a row rather than an absence. Without it a user who pinned a microphone
+    has no way back to following Sound preferences."""
+    tray = TrayApp()
+    tray.set_device_options(("MacBook Pro Microphone", "BoomAudio"), "default")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Device:"))
+
+    titles = [s.title for s in row.submenu]
+    assert len(titles) == 3
+    assert any("System default" in t for t in titles)
+    assert "MacBook Pro Microphone" in titles
+    assert sum(s.checked for s in row.submenu) == 1
+    assert "System default" in row.title
+
+
+def test_choosing_a_device_hands_the_name_to_the_daemon() -> None:
+    chosen: list[str] = []
+    tray = TrayApp(on_device=chosen.append)
+    tray.set_device_options(("MacBook Pro Microphone", "BoomAudio"), "default")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Device:"))
+    picked = next(s for s in row.submenu if s.title == "MacBook Pro Microphone")
+    tray.activate(picked.action)
+    assert chosen == ["MacBook Pro Microphone"]
+
+
+def test_the_system_default_row_hands_back_the_config_spelling() -> None:
+    """The row says "System default" because that is what it means; the daemon
+    is handed `default`, which is what §5.3's key takes."""
+    chosen: list[str] = []
+    tray = TrayApp(on_device=chosen.append)
+    tray.set_device_options(("BoomAudio",), "BoomAudio")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Device:"))
+    default_row = next(s for s in row.submenu if "System default" in s.title)
+    tray.activate(default_row.action)
+    assert chosen == ["default"]
+
+
+def test_a_pinned_device_that_is_gone_is_still_shown_and_marked() -> None:
+    """§11.6's second open question. A device pinned in the config and since
+    unplugged is the state the user most needs to see: dictation is about to
+    fail with `DeviceNotFoundError` and the menu is where the way out is. An
+    absent device dropped from the list leaves a `Device:` row whose ticked
+    entry does not exist."""
+    tray = TrayApp()
+    tray.set_device_options(("BoomAudio",), "Josh's AirPods Pro")
+    row = next(i for i in tray.menu_items() if i.title.startswith("Device:"))
+
+    pinned = next(s for s in row.submenu if "AirPods" in s.title)
+    assert pinned.checked
+    assert "⚠" in pinned.title
+    assert sum(s.checked for s in row.submenu) == 1
+    assert "⚠" in row.title, "the fault is invisible without opening the submenu"
+
+
+def test_a_device_action_does_not_fire_the_other_handlers() -> None:
+    """Three prefixes now share one `activate`. A `device:` verb reaching
+    `on_hotkey` would try to rebind the key to a microphone name."""
+    hotkeys: list[str] = []
+    modes: list[str] = []
+    devices: list[str] = []
+    tray = TrayApp(
+        on_hotkey=hotkeys.append, on_mode=modes.append, on_device=devices.append
+    )
+    tray.set_hotkey_options(("right_option",), "right_option")
+    tray.set_mode_options(("push_to_talk", "toggle"), "push_to_talk")
+    tray.set_device_options(("BoomAudio",), "default")
+
+    tray.activate("device:BoomAudio")
+    assert devices == ["BoomAudio"] and hotkeys == [] and modes == []
+
+
+def test_an_unoffered_device_is_not_handed_to_the_daemon() -> None:
+    """Same guard the other two pickers have: AppKit hands back whatever tag
+    it was given, and writing an unoffered name into the config is how a
+    daemon ends up pinned to a device nobody chose."""
+    devices: list[str] = []
+    tray = TrayApp(on_device=devices.append)
+    tray.set_device_options(("BoomAudio",), "default")
+    tray.activate("device:Some Other Microphone")
+    assert devices == []
