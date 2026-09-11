@@ -155,6 +155,38 @@ class AudioCapture:
         """
         self._config = dataclasses.replace(self._config, device=name)
 
+    def describe_device(self) -> str:
+        """The microphone that would open right now, named. For `manu status`.
+
+        Not the config value. §5.3's key takes a **substring**, so `device =
+        "MacBook"` and the device it actually matched are different strings,
+        and the whole question a user asks the status line is which microphone
+        is live. `default` is worse still: it is the shipped value, it is the
+        state §11.6's Bluetooth playback gap happens in, and on its own it
+        names nothing.
+
+        **It never raises.** `status` exists to answer when things are wrong,
+        and enumerating devices is a PortAudio call that can fail by itself —
+        withholding the model, the mode and the state over the one field that
+        failed would be the opposite of the point. Each failure degrades to the
+        most specific true statement left: a pinned device that is absent says
+        so, and an unreadable device list falls back to the configured value.
+        """
+        wanted = self._config.device
+        try:
+            index = self.resolve_device()
+            if index is None:
+                # `kind="input"` is what asks PortAudio which device the
+                # *system* default is; the no-argument call returns every
+                # device and answers a different question.
+                name = str(_sounddevice().query_devices(kind="input")["name"])
+                return f"system default ({name})"
+            return str(_sounddevice().query_devices()[index]["name"])
+        except DeviceNotFoundError:
+            return f"{wanted} (not connected)"
+        except Exception:
+            return "system default" if wanted == "default" else wanted
+
     def resolve_device(self) -> int | None:
         """Turn `[audio] device` into a PortAudio index, or None for the default.
 
