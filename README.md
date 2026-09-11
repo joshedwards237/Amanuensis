@@ -5,95 +5,8 @@ your words appear as text at the cursor in whatever application has focus.
 
 No account. No network at runtime. No audio leaving the machine.
 
----
-
-## Status: Phase 3 gate **PASSED** 2026-09-01. Phase 4 in progress.
-
-**The loop is closed.** Run `manu daemon`, hold right-option, speak, release —
-your words appear at the cursor in whatever application has focus.
-
-The Phase 3 gate ran on ten real dictations of 67–97 s and **passed**: edit rate
-**8.59%**, of which 163 of 171 edits are the decoder's and 8 are the rules
-chain's. That misses goal G2's 5% and the threshold was **deliberately not
-moved** — the gap is carried as debt and revisited at the Phase 4 gate.
-[`docs/gates/phase-3.md`](docs/gates/phase-3.md) has the full record, including
-what the measurement cannot see.
-
-Working: model download with checksum verification and the install-time tier
-check (`manu install`), the global hotkey, the resident daemon, microphone
-capture, silence trimming, transcription, the collapse guard, the pre-injection
-history write, injection with clipboard save/restore, `manu history`, and the
-menu-bar indicator.
-
-**Phase 4 built 2026-09-03** and added the surface around that loop: a tray menu
-that switches capture mode and hotkey binding without editing a file, a
-recording panel with more presence than a glyph (§5.4), all three capture modes
-— hold-to-talk, press-to-start-press-to-stop, and press-to-start-silence-ends —
-a **double-tap latch** so a long dictation does not pin your hand to a key, and
-`manu status` and `manu toggle` over a local unix socket. **Nothing refuses by
-phase any more**; every verb in `manu --help` does what it says.
-
-Its **gate has not run.** That gate is a second person installing from this
-README with no help, and until it does, treat everything below as tested by the
-person who wrote it.
-
-**The collapse guard** (2026-08-07, PRD §5.7) exists because `initial_prompt`
-can silently destroy a transcript, and shipped in Phase 1 with nothing watching
-it. A 30.5-second dictation returned two words, no error, injected at the
-cursor. The guard measures how much of your speech the decoder actually got
-through; below half, the audio is decoded again with the vocabulary bias
-dropped, and if that fails too the text is **not** injected — `manu history
---last` gives you the words. Verified on real audio: fires at 8.3% coverage on a
-reproduced collapse, silent on all six corpus samples with a floor of 82.8%.
-[`docs/gates/phase-2b-followup.md`](docs/gates/phase-2b-followup.md).
-
-Two menu-bar states are worth knowing: `◍` means the guard recovered a
-transcript, so what landed was decoded without your `initial_prompt` and is less
-reliable at proper nouns. `⚠` after a dictation means the words were withheld.
-
-**Post-processing** shipped 2026-08-08. A deterministic rules pass cleans
-whitespace, sentence capitalisation and punctuation spacing before the transcript
-is injected; `manu history --raw` shows what the model emitted before it ran. It
-is measured at p50 0.0445 ms against the Phase 1 corpus — an experiment figure,
-not a gate figure. Two rules are deliberately absent: lowercasing a spurious
-mid-sentence capital (indistinguishable from a proper noun without a model) and
-folding spoken numbers into digits (measured harmful — *one thought ends* became
-*1 thought ends*).
-
-Every transcript ends with **exactly one space** so the next thing you type does
-not run into the last word (`trailing_space`, on by default). Text that already
-ends in whitespace is left alone, so a "new paragraph" break does not gain a
-stray space, and an empty transcript stays empty.
-
-What the guard cannot see: a transcript that is too *long*, and one that covers
-the audio and gets the words wrong. It catches a decoder that stopped early,
-which is the failure that was observed. The false-positive direction — refusing
-something you actually said — is **untested**, because six corpus samples from
-one speaker cannot produce a speaker it is wrong about.
-
-Injection is verified in TextEdit, Terminal, VS Code and Chrome, on both
-strategies, by reading the text back out of each application rather than by eye.
-Zero failures. See [`docs/gates/phase-2a.md`](docs/gates/phase-2a.md) and
-[`docs/gates/phase-2b.md`](docs/gates/phase-2b.md).
-
-The specification behind it has been adversarially reviewed twice — 41
-dispositions across two rounds, all resolved — and every phase since has
-measured rather than assumed. See [`docs/gates/`](docs/gates/).
-
-| | |
-|---|---|
-| [`AMANUENSIS_PRD.md`](AMANUENSIS_PRD.md) | The standing specification — what and why |
-| [`HARNESS.md`](HARNESS.md) | The operating contract — how work is allowed to proceed |
-| [`CLAUDE.md`](CLAUDE.md) | Project conventions for AI-assisted development |
-| [`docs/superpowers/`](docs/superpowers/) | Adversarial review records — 41 dispositions across two rounds, all resolved |
-| [`docs/gates/`](docs/gates/) | One measurement record per phase gate, plus the probe and the Phase 5 experiments |
-| [`docs/adr/`](docs/adr/) | Architecture decisions — 0001 selects the ASR engine |
-
-It is usable now, if you are willing to run it from a source checkout. There is
-no packaged app, no installer and no signed binary, and **no phase currently
-schedules one** — PRD §5.4 makes an `.app` bundle the fallback if the recording
-panel fails its confidence test, which is a decision the Phase 4 gate has not
-taken yet.
+**There is no packaged app, no installer and no signed binary.** You run it from
+a source checkout, and the install is six steps.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
@@ -102,11 +15,9 @@ this exists alongside them.
 
 ## Install
 
-macOS only (PRD §3) and Python **3.12 or later**. There is no packaged app, no
-installer and no signed binary yet — Phase 4 is where that lands. What follows is
-the whole path from nothing to a first dictation.
+**Requirements:** macOS (PRD §3) and Python **3.12 or later**.
 
-**1. Get the source and install it.**
+### 1. Get the source and install it
 
 ```sh
 git clone https://github.com/joshedwards237/Amanuensis.git
@@ -119,166 +30,88 @@ This installs two commands that do the same thing: **`manu`** and
 **`amanuensis`**. Every example below uses `manu` because it is shorter; use
 whichever you remember.
 
-**They live in the virtualenv, so a new terminal will not find them.** That is
-how Python virtualenvs work and it catches everyone once — a second terminal
-answers `zsh: command not found: manu` until you `source .venv/bin/activate`
-again. If you would rather have them always available, link one into a
-directory already on your `PATH`:
+**They live in the virtualenv, so a new terminal will not find them.** A second
+terminal answers `zsh: command not found: manu` until you
+`source .venv/bin/activate` again. To have them always available, link them into
+a directory already on your `PATH`:
 
 ```sh
-ln -s "$PWD/.venv/bin/manu" ~/.local/bin/manu             # or /usr/local/bin
+ln -s "$PWD/.venv/bin/manu" ~/.local/bin/manu                    # or /usr/local/bin
+ln -s "$PWD/.venv/bin/amanuensis" ~/.local/bin/amanuensis
 ```
 
 Check with `echo $PATH` in a **new** terminal that the directory you chose is
 actually on it.
 
-**2. Generate the reference clip.**
+### 2. Generate the reference clip
 
 ```sh
 scripts/make_tier_clip.sh
 ```
 
 The install measures your machine against a ten-second speech clip, and **the
-repository does not ship one**. That is not an oversight: PRD §7.2 requires a
-clip that is not your voice and needs no microphone permission before first use,
-which leaves synthesised speech — and the redistribution grant for a macOS
-system voice is not clear enough to commit one. So you generate it locally with
-`say`. No microphone, no network. Settling this is an open Phase 4 item.
+repository does not ship one.** PRD §7.2 requires a clip that is not your voice
+and needs no microphone permission before first use, which leaves synthesised
+speech — and the redistribution grant for a macOS system voice is not clear
+enough to commit one. So you generate it locally with `say`. No microphone, no
+network.
 
-If you are not on macOS-with-`say`, or you would rather use your own recording:
+Not on macOS-with-`say`, or you would rather use your own recording:
 `manu install --clip /path/to/ten-seconds.wav`.
 
-**3. Download the model and measure this machine.**
+### 3. Download the model and measure this machine
 
 ```sh
 manu install
 ```
 
-This is **the only network access Amanuensis ever makes**, and it happens once.
+**This is the only network access Amanuensis ever makes**, and it happens once.
 It fetches the ASR weights from Hugging Face over HTTPS at a pinned revision,
 then re-hashes every downloaded file against a SHA-256 this project recorded
 itself — a mismatch is refused, not warned about (§7.6). Then it runs nine timed
-decodes on the clip from step 2 to find which speed tier your machine is in.
+decodes on the clip from step 2 to find your machine's speed tier.
 
 Expect a few minutes; the download was measured at 185 s on the author's
 connection and yours will differ. It prints `checksums verified`, then your tier
 and the p50 and p95 it measured. Those are your numbers, not ours.
 
 It also writes **`~/Desktop/Start Amanuensis.command`**, a double-clickable
-launcher — see below. `manu install --no-desktop-launcher` skips it.
+launcher. `manu install --no-desktop-launcher` skips it.
 
-**4. Grant two macOS permissions.**
+### 4. Grant two macOS permissions
 
 The daemon needs **Accessibility** (to type into other applications) and **Input
 Monitoring** (to see the hotkey). They are separate panes in System Settings →
 Privacy & Security, and granting one does not grant the other.
 
-**The entry you are looking for carries your terminal's name, not "Amanuensis".**
-macOS attaches these grants to whatever launched the process, so look for
-Terminal, iTerm, Ghostty, or VS Code — whichever you ran `manu` from. This is a
-real wart and **it does not currently go away.** An `.app` bundle would fix it
-and none is scheduled: PRD §5.4 holds it in reserve as the fallback if the
-recording panel fails its confidence test, so it ships only if that test fails.
-Said plainly here because an earlier revision of this file promised the bundle
-as a Phase 4 deliverable, which was never what §9 scoped. `manu daemon` names
-both permissions and tells you which is missing if you skip this step.
+**The entry you are looking for carries your terminal's name, not
+"Amanuensis".** macOS attaches these grants to whatever launched the process, so
+look for Terminal, iTerm, Ghostty or VS Code — whichever you ran `manu` from.
+This is a real wart and it does not currently go away; an `.app` bundle would
+fix it and none is scheduled (PRD §5.4 holds it in reserve as the fallback if
+the recording panel fails its confidence test).
 
-**5. Dictate.**
+`manu daemon` names both permissions and tells you which is missing if you skip
+this step.
+
+### 5. Dictate
 
 ```sh
 manu daemon
 ```
 
 Hold **right-option**, speak, release. The text appears at your cursor in
-whatever application has focus. A glyph appears in your menu bar while the daemon
-runs: `○` idle, `●` recording, `◐` transcribing, and a panel appears near the
-edge of the screen while the microphone is open. Stop the daemon with Ctrl-C, or
-from the tray menu.
+whatever application has focus. While the daemon runs there is a glyph in your
+menu bar — `○` idle, `●` recording, `◐` transcribing — and a panel near the edge
+of the screen whenever the microphone is open. Stop with Ctrl-C, or from the
+tray menu.
 
-**If right-option is taken on your machine, change it from the tray menu** —
-it lists every supported binding and writes your choice to the config file. The
-same menu switches capture mode, so you can try one rather than decide from a
-description:
+Two more menu-bar states worth knowing: `◍` means the collapse guard recovered a
+transcript, so what landed was decoded without your `initial_prompt` and is less
+reliable at proper nouns. `⚠` after a dictation means the words were withheld —
+`manu history --last` has them.
 
-- **Hold to talk** (default) — record while held. Nothing starts by accident.
-- **Press to start, press to stop** — for long-form dictation.
-- **Press to start, silence ends it** — needs VAD, and it is the mode most
-  likely to misfire.
-
-**The same menu picks your microphone.** `Device:` lists every input on the
-machine, plus `System default`, which is what a fresh install follows. Two
-reasons to change it. Dictating on Bluetooth headphones **interrupts whatever
-is playing** — opening an input drops the headset out of A2DP into the mono
-headset profile, which is macOS doing its job, not this product misbehaving —
-and pinning the built-in microphone leaves the headset in A2DP and the music
-alone. And a pinned microphone stays pinned when you plug something else in.
-
-The cost is not measured and you should assume there is one: the built-in
-microphone at arm's length is a worse recording than a headset at your mouth,
-and no figure in this project describes how much worse. A microphone that is
-pinned and then unplugged shows as `⚠ not connected` in the menu, and the next
-dictation fails naming the devices you do have.
-
-**Double-tap right-option to dictate hands-free**, then single-tap to finish.
-This works inside hold-to-talk without giving it up, so both gestures live on
-one key. A hold during a hands-free session is ignored on purpose. The window is
-`double_tap_ms` in the config file and defaults to 350 ms, which is **a guess
-about your hand, not a measurement** — set it to `0` if you want the hold
-gesture and nothing else.
-
-From another terminal, while the daemon runs:
-
-```sh
-manu status                         # is it up, and on which model, mode and microphone
-manu toggle                         # start or stop a dictation without the hotkey
-```
-
-Only one daemon can run at a time; a second refuses and names the first.
-
-If you would rather check the pieces before binding a hotkey:
-
-```sh
-manu transcribe --seconds 10        # record and print, inject nothing
-```
-
-**A Desktop launcher — `manu install` already put one there.**
-
-Step 3 wrote **`~/Desktop/Start Amanuensis.command`**. Double-click it and the
-daemon starts in a Terminal window. Skip it next time with
-`manu install --no-desktop-launcher`; delete the file whenever you like, and
-re-run `manu install` to get it back.
-
-There is **no application icon and no login item.** `manu daemon` in a terminal
-is the whole product, and the launcher is a shell script that runs it for you —
-not an `.app`. The daemon does not start at login and does not survive a reboot.
-
-**The permission consequence is real, and it is why this is not simply better
-than a terminal.** macOS attaches Accessibility and Input Monitoring to
-**whatever launches the process**. Double-clicking makes that **Terminal.app** —
-not the terminal you normally type in. Grant them to whichever you actually use,
-or to both.
-
-`manu install` writes the launcher with the path of the `manu` that wrote it,
-because a Finder launch inherits no shell profile: `manu` is not on `PATH` and
-cannot be found by looking. If you later move or delete that environment the
-launcher says so and names `manu install` as the repair, rather than failing
-with `cannot find`. It never overwrites a file it did not write, and it leaves a
-symlink alone.
-
-Two commands on the launcher itself:
-
-```sh
-~/Desktop/Start\ Amanuensis.command --check   # what it resolved; starts nothing
-```
-
-**From a source checkout**, `scripts/start-amanuensis.command --link` makes the
-Desktop entry a **symlink into the checkout** instead, so it follows the tree as
-you work rather than snapshotting it. `manu install` will not replace a symlink.
-That matters because the first version of this file was hand-copied, the
-checkout it named was later deleted, and the Desktop entry spent four days
-answering `cannot find`.
-
-**6. Uninstall.**
+### 6. Uninstall
 
 ```sh
 manu history --purge                # transcripts, stored audio, and the database
@@ -290,7 +123,108 @@ The model weights live in the Hugging Face cache (`~/.cache/huggingface`) and ar
 shared with anything else that uses them; delete that separately if you want the
 disk back. Revoke the two permissions in System Settings — uninstalling does not.
 
-### If it does not work
+---
+
+## Everyday use
+
+```sh
+manu install                        # download the model once, measure this machine's tier
+manu daemon                         # hold right-option, speak, release
+manu status                         # is it up, and on which model, mode and microphone
+manu toggle                         # start or stop a dictation without the hotkey
+manu history --last                 # the last transcript, even if injection failed
+manu history --purge                # delete transcripts, stored audio and the database
+manu vocab check                    # validate your replacement dictionary
+manu transcribe --seconds 10        # one-shot diagnostic: record and print, inject nothing
+manu transcribe --inject            # one-shot: record, persist, paste at the cursor
+```
+
+`manu status` and `manu toggle` talk to a running daemon over a unix socket at
+mode `0600`. Any process running as you can send those; nothing on the network
+can, and no transcript text ever crosses that socket. Only one daemon runs at a
+time; a second refuses and names the first.
+
+### Capture modes and the hotkey
+
+**If right-option is taken on your machine, change it from the tray menu** — it
+lists every supported binding and writes your choice to the config file. The
+same menu switches capture mode, so you can try one rather than decide from a
+description:
+
+- **Hold to talk** (default, `push_to_talk`) — record while held. Nothing starts
+  by accident.
+- **Press to start, press to stop** (`toggle`) — for long-form dictation.
+- **Press to start, silence ends it** (`vad_auto`) — needs VAD, and it is the
+  mode most likely to misfire. It has its own `[vad_auto]` silence window and a
+  `max_seconds` hard stop, because a detector that misses the end would
+  otherwise leave the microphone open.
+
+**Double-tap right-option to dictate hands-free**, then single-tap to finish.
+This works inside hold-to-talk without giving it up, so both gestures live on one
+key; a hold during a hands-free session is ignored on purpose. The window is
+`double_tap_ms` and defaults to 350 ms, which is **a guess about your hand, not a
+measurement** — set it to `0` for the hold gesture and nothing else.
+
+### Picking your microphone
+
+**The same menu picks your microphone.** `Device:` lists every input on the
+machine, plus `System default`, which is what a fresh install follows. Two
+reasons to change it. Dictating on Bluetooth headphones **interrupts whatever is
+playing** — opening an input drops the headset out of A2DP into the mono headset
+profile, which is macOS doing its job, not this product misbehaving — and pinning
+the built-in microphone leaves the headset in A2DP and the music alone. And a
+pinned microphone stays pinned when you plug something else in.
+
+**The cost is not measured and you should assume there is one:** the built-in
+microphone at arm's length is a worse recording than a headset at your mouth, and
+no figure in this project describes how much worse. A microphone that is pinned
+and then unplugged shows as `⚠ not connected` in the menu, and the next dictation
+fails naming the devices you do have.
+
+### The Desktop launcher
+
+Step 3 wrote **`~/Desktop/Start Amanuensis.command`**. Double-click it and the
+daemon starts in a Terminal window. Skip it next time with
+`manu install --no-desktop-launcher`; delete the file whenever you like, and
+re-run `manu install` to get it back.
+
+There is **no application icon and no login item.** `manu daemon` in a terminal
+is the whole product, and the launcher is a shell script that runs it for you —
+not an `.app`. The daemon does not start at login and does not survive a reboot.
+
+**The permission consequence is real.** macOS attaches Accessibility and Input
+Monitoring to **whatever launches the process**. Double-clicking makes that
+**Terminal.app** — not the terminal you normally type in. Grant them to whichever
+you actually use, or to both.
+
+`manu install` writes the launcher with the path of the `manu` that wrote it,
+because a Finder launch inherits no shell profile: `manu` is not on `PATH` and
+cannot be found by looking. If you later move or delete that environment the
+launcher says so and names `manu install` as the repair, rather than failing with
+`cannot find`. It never overwrites a file it did not write, and it leaves a
+symlink alone.
+
+```sh
+~/Desktop/Start\ Amanuensis.command --check   # what it resolved; starts nothing
+```
+
+**From a source checkout**, `scripts/start-amanuensis.command --link` makes the
+Desktop entry a **symlink into the checkout** instead, so it follows the tree as
+you work rather than snapshotting it. `manu install` will not replace a symlink.
+That matters because the first version of this file was hand-copied, the checkout
+it named was later deleted, and the Desktop entry spent four days answering
+`cannot find`.
+
+### Spoken commands
+
+Say "new paragraph" as a complete sentence and you get a blank line. **It
+frequently will not fire**, and the reason is documented in PRD §7.5: the rule
+needs sentence marks on both sides of the phrase, and the decoder often supplies
+neither.
+
+---
+
+## Troubleshooting
 
 - **Nothing happens when I hold right-option.** Input Monitoring is not granted
   to the terminal you launched from. `manu daemon` says so on startup.
@@ -300,151 +234,47 @@ disk back. Revoke the two permissions in System Settings — uninstalling does n
   decoder stopped early. `manu history --last` has what it got.
 - **`manu install` says the reference clip is missing.** Step 2 — the clip is
   generated locally and is not in the repository.
-- **Starting a dictation pauses my music / my AirPods sound worse.** macOS
-  moves a Bluetooth headset out of playback mode when anything opens its
-  microphone. Pin a different input and the headset is never touched:
-  `[audio] device` takes any substring of a device name, so
-  `device = "MacBook Pro Microphone"` in `config.toml` keeps dictation on the
-  built-in mic. **The trade is unmeasured** — every accuracy figure here was
-  recorded on a desk mic, and none describes a laptop microphone at arm's
-  length. `manu daemon` lists the devices it can see if the name does not match.
+- **Starting a dictation pauses my music / my AirPods sound worse.** macOS moves
+  a Bluetooth headset out of playback mode when anything opens its microphone.
+  Pin a different input and the headset is never touched: `[audio] device` takes
+  any substring of a device name, so `device = "MacBook Pro Microphone"` in
+  `config.toml` keeps dictation on the built-in mic. **The trade is unmeasured**
+  — every accuracy figure here was recorded on a desk mic. `manu daemon` lists
+  the devices it can see if the name does not match.
 - **My double-tap does not latch.** 350 ms is a default, not a measurement of
   your hand. Raise `double_tap_ms` in the config file; set it to `0` to turn the
   latch off entirely and keep hold-to-talk.
 - **A short deliberate tap feels slow to appear.** Expected, and it is the price
-  of the latch: a release inside `double_tap_ms` waits out the rest of the
-  window in case a second press is coming. Anything you hold for longer than
-  that window — which is every real dictation — is unaffected. `0` removes both.
-- **`zsh: command not found: manu` in a new terminal.** The commands live in
-  the virtualenv and a new shell has not activated it. `source
-  .venv/bin/activate` from the checkout, or link `manu` onto your `PATH` as
-  step 1 describes. The Desktop launcher is unaffected — it resolves the
-  command itself and never relies on your `PATH`.
+  of the latch: a release inside `double_tap_ms` waits out the rest of the window
+  in case a second press is coming. Anything you hold for longer than that window
+  — which is every real dictation — is unaffected. `0` removes both.
+- **`zsh: command not found: manu` in a new terminal.** The commands live in the
+  virtualenv and a new shell has not activated it. `source .venv/bin/activate`
+  from the checkout, or link them onto your `PATH` as step 1 describes. The
+  Desktop launcher is unaffected — it resolves the command itself and never
+  relies on your `PATH`.
 - **The Desktop launcher cannot find `manu`.** The environment it was installed
   into moved or was deleted. It names the path it was looking for; re-run
-  `manu install` from the environment you want it to use. From a source
-  checkout, `scripts/start-amanuensis.command --link` instead. Either way,
-  `--check` on the launcher shows what it resolved without starting anything.
+  `manu install` from the environment you want it to use. From a source checkout,
+  `scripts/start-amanuensis.command --link` instead. Either way, `--check` on the
+  launcher shows what it resolved without starting anything.
 - **`manu daemon` refuses and names another daemon.** One at a time, on purpose.
   Two would both hold the microphone, both inject and both persist, and the
   menu-bar glyph on one would read idle while the other recorded.
-- **I said "new paragraph" and got the words instead of a break.** Known, and
-  the cause is documented in PRD §7.5: the rule fires only when the decoder
-  supplied sentence marks on both sides of the phrase, and it frequently does
-  not.
+- **I said "new paragraph" and got the words instead of a break.** Known; see
+  Spoken commands above and PRD §7.5.
 
-## What it does
-
-Press and hold a hotkey, speak, release. The transcript is post-processed and
-injected at the cursor. A daemon keeps the ASR model resident in memory, because
-loading a model per invocation costs 3–8 seconds and there is no version of that
-which is acceptable.
-
-```sh
-manu install                        # download the model once, measure this machine's tier
-manu daemon                         # hold right-option, speak, release
-manu status                         # is a daemon running, and on what
-manu toggle                         # start or stop a dictation without the hotkey
-manu history --last                 # the last transcript, even if injection failed
-manu history --purge                # delete transcripts, stored audio and the database
-manu vocab check                    # validate your replacement dictionary
-manu transcribe --seconds 10        # one-shot diagnostic: record and print
-manu transcribe --inject            # one-shot: record, persist, paste at the cursor
-```
-
-The daemon needs **two separate macOS permissions** and will name both if
-either is missing: **Accessibility** to type into other applications, and
-**Input Monitoring** to see the hotkey. They live in different Settings panes
-and granting one does not grant the other. macOS attaches both to whatever
-launched `manu`, so the entry you are looking for carries your terminal's name.
-
-While the daemon runs there is a glyph in your menu bar — `○` idle, `●`
-recording, `◐` transcribing — and a panel near the edge of the screen whenever
-the microphone is open, because §5.4 treats "is it listening right now" as a
-privacy requirement rather than a nicety. macOS shows its own microphone
-indicator too, and that one is not ours to get wrong.
-
-- **Batch transcription**, not streaming, for v1 (PRD §7.1)
-- **faster-whisper** by default, behind an abstraction so the engine can be
-  swapped (§7.2)
-- **Clipboard paste** by default with a keystroke fallback (§7.3)
-- **Deterministic post-processing** first. An optional local LLM cleanup pass —
-  the Wispr-style "remove my false starts" behaviour — is specified but **does
-  not work yet**: tested 2026-07-31, it made transcription 5–28× worse on real
-  output. Four alternative approaches are recorded and untested
-  ([`docs/gates/phase5-feasibility.md`](docs/gates/phase5-feasibility.md))
-
-## Targets
-
-| Goal | Target | Status |
-|---|---|---|
-| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met: p50 312.4 ms / p95 344.5 ms**, over ten dictations of 7.5–10.0 s recorded 2026-09-02 for this purpose, with the full shipped chain. [`docs/gates/g1-at-ten-seconds.md`](docs/gates/g1-at-ten-seconds.md) carries the conditions. **Read the scaling note below before quoting this figure** |
-| Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
-| Accuracy | edit rate ≤ 5% | **missed, at 8.59%**, measured over ten real dictations of 67–97 s at the Phase 3 gate. The threshold was deliberately **not moved**; the gap is carried as debt. 163 of 171 edits are the decoder's — see below |
-| Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat below |
-
-Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Metal
-backend, so "Apple Silicon" was never a distinct execution path — a machine's tier
-is decided by what it measures at install.
-
-**The latency figure is for a ten-second utterance and it does not generalise
-across lengths.**
-
-| you spoke for | text appears after | n |
-|---|---|---|
-| **7.5–10.0 s** | **p50 312.4 ms / p95 344.5 ms** — the band G1 gates, measured deliberately | **10** |
-| 10–60 s | **no band is published** — too few observations under known conditions | — |
-| 67–97 s | p50 ≈ 0.9 s, and over 800 ms throughout — the Phase 3 corpus | 10 |
-
-> **Why the headline row is a dedicated recording and not a query over
-> `history.db`.** A band scraped from stored rows mixes configurations, machine
-> load and product versions, and this project has already published one figure
-> that way and had to withdraw it. On 2026-09-02 a first attempt at the row
-> above produced a p95 of **4014 ms** — three of nine takes running 7.4×, 8.9×
-> and 19.6× their idle re-decode cost on identical-length input, because a test
-> suite was running on the same machine. All nine were discarded rather than the
-> three outliers, because keeping the fastest six would have been choosing the
-> rows that flatter. The accepted run carries the same control and shows
-> 1.29–1.76× with no outliers.
->
-> Those rows were **removed on 2026-09-03**, after a backup, because the site's
-> eligibility rule provably cannot exclude them — it drops rows sharing a
-> timestamp second, which catches parallel writes and not external load. The
-> `≤ 10 s` band read p95 **1558.2 ms** with them and **344.5 ms** without. Until
-> a `config_sha256` provenance column exists, any band this project publishes
-> from stored rows depends on nobody having run anything heavy at the time,
-> which is not a property a database can attest to.
-
-That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
-so. But dictating a paragraph is the ordinary case, and the headline number says
-nothing about it, so both are here.
-
-> **Correction, 2026-08-31.** This section previously published a fitted model,
-> `transcribe_ms ≈ 49 + 13.7 × seconds`, and a 10/30/60 s table derived from it.
-> **Those numbers were wrong and are withdrawn.** The model was fitted over
-> n = 14 spanning 0.7–43.4 s and then used to predict at 60 s, outside the range
-> it ever saw; refitting the clean rows over 0.8–104.4 s gives R² ≈ 0.59, so a
-> duration-only linear model does not predict a single decode. `CLAUDE.md`
-> reached the same conclusion independently from ten ~74 s takes (p50 917–938 ms
-> against a predicted 1069). The table above replaces it with measured bands
-> only, and no figure here is extrapolated to a duration that was not measured.
-
-Every latency figure here is from **one machine and one speaker in one room**.
-
-**The latency claim is hardware-conditional and that is a real caveat**, not a
-footnote. Privacy motivation and offline constraint correlate with older
-machines, so the users this exists for are disproportionately the ones on the
-slower tier. PRD §4 says so in the same place it makes the speed claim.
+---
 
 ## Known costs, stated up front
 
-The PRD's rule is that a cost gets documented rather than papered over. The
-first two are **measured**, not argued.
+The PRD's rule is that a cost gets documented rather than papered over. The first
+two are **measured**, not argued.
 
 - **Your transcripts go into your clipboard manager.** Not "may" — measured
   against a real one (Maccy) on default settings: every transcript was captured,
-  including with clipboard restore on and its 150 ms window. That window is not
-  a mitigation. This is the manager working correctly, and several managers sync
+  including with clipboard restore on and its 150 ms window. That window is not a
+  mitigation. This is the manager working correctly, and several managers sync
   across devices, so for those users a transcript leaves the machine as a direct
   consequence of the defaults.
 
@@ -462,11 +292,11 @@ first two are **measured**, not argued.
   ```
 
   Five changes in one sentence — smart quotes, em dash, ellipsis,
-  autocapitalisation. Pasting the same text is byte-identical. Nothing
-  Amanuensis can do reaches another application's substitution settings, so this
-  is a warning rather than a fix; turn substitution off in the applications you
-  dictate into. The trade is real and unpleasant: the strategy that protects
-  your privacy is the one that alters your words.
+  autocapitalisation. Pasting the same text is byte-identical. Nothing Amanuensis
+  can do reaches another application's substitution settings, so this is a
+  warning rather than a fix; turn substitution off in the applications you
+  dictate into. The trade is real and unpleasant: the strategy that protects your
+  privacy is the one that alters your words.
 
 - **Zero-network verification covers this process only.** Packet capture on
   Amanuensis cannot see egress that happens inside a different process, which is
@@ -475,44 +305,93 @@ first two are **measured**, not argued.
 
 ### The collapse guard has two blind spots, and neither is fixed
 
-§5.7's guard measures **decoded coverage** — how far into your audio the decoder
-got before it stopped — and refuses to inject a transcript that covers less than
-half. It caught a real 30.5-second dictation that came back as two words. Two
-things it cannot do, both established with controls at the Phase 3 gate and both
-still true:
+§5.7's guard exists because `initial_prompt` can silently destroy a transcript: a
+30.5-second dictation returned two words, no error, injected at the cursor. The
+guard measures **decoded coverage** — how far into your audio the decoder got
+before it stopped — and below half the audio is decoded again with the vocabulary
+bias dropped; if that fails too the text is **not** injected. Verified on real
+audio: fires at 8.3% coverage on a reproduced collapse, silent on all six corpus
+samples with a floor of 82.8%
+([`docs/gates/phase-2b-followup.md`](docs/gates/phase-2b-followup.md)).
+
+Two things it cannot do, both established with controls at the Phase 3 gate and
+both still true:
 
 - **It cannot see a hole in the middle.** Coverage is the *end point* of
   decoding, not how much came back. One take lost 56 words spanning 27.7 s to
   49.4 s of a single dictation, and the guard reported **coverage 100.0%,
-  passed**. That is invisible by construction, not by oversight.
+  passed**. Invisible by construction, not by oversight.
 - **It cannot fire below about two seconds of speech.** The refusal threshold is
   unreachable under 2.00 s — measured on 11 of 11 short takes — because the
   numerator quantises to whole seconds at that length. Short dictation is the
   ordinary case for most people, and there the guard is decorative.
 
 Both fail **open**: a bad short transcript is injected rather than withheld, so
-you see it at your own cursor and can undo it. That is the safe direction, and
-it is why this is documented rather than treated as a release blocker. It is
-recorded here rather than only in the gate record because the gate record is not
-a document users read.
+you see it at your own cursor and can undo it. That is the safe direction, and it
+is why this is documented rather than treated as a release blocker.
 
-### What you get in this phase, and what it does not do
+The false-positive direction — refusing something you actually said — is
+**untested**, because six corpus samples from one speaker cannot produce a
+speaker it is wrong about.
 
-- A **recording panel** appears while the microphone is live, and it stays
-  visible over a full-screen application with the menu bar hidden — which is
-  where the menu-bar glyph is not merely small but absent. It never takes focus.
-  Turn it off with `[feedback] overlay = false`.
-- **`hotkey.mode`** accepts `push_to_talk` (default), `toggle` (press to start,
-  press to stop) and `vad_auto` (press to start, silence ends it). `vad_auto`
-  has its own `[vad_auto]` silence window and a `max_seconds` hard stop, because
-  a detector that misses the end would otherwise leave the microphone open.
-- **`manu status`** and **`manu toggle`** talk to a running daemon over a unix
-  socket at mode `0600`. Any process running as you can send those; nothing on
-  the network can, and no transcript text ever crosses that socket.
-- **Spoken commands are on**: say "new paragraph" as a complete sentence and you
-  get a blank line. It frequently will not fire, and the reason is documented —
-  it needs sentence marks on both sides of the phrase, and the decoder often
-  supplies neither.
+---
+
+## What is measured
+
+| Goal | Target | Status |
+|---|---|---|
+| Latency, Tier A | p50 ≤ 400 ms, p95 ≤ 800 ms — hotkey release → text present, 10 s utterance | **Met: p50 312.4 ms / p95 344.5 ms**, over ten dictations of 7.5–10.0 s recorded 2026-09-02 for this purpose, with the full shipped chain. [`docs/gates/g1-at-ten-seconds.md`](docs/gates/g1-at-ten-seconds.md) carries the conditions. **Read the scaling note below before quoting this figure** |
+| Latency, Tier B | p50 ≤ 2 000 ms — published, not gated; a class missing it is dropped rather than shipped | **unmeasured.** No Tier B machine has run this. A simulated thread constraint is not a slower computer |
+| Accuracy | edit rate ≤ 5% | **missed, at 8.59%**, over ten real dictations of 67–97 s at the Phase 3 gate. The threshold was deliberately **not moved**; the gap is carried as debt. 163 of 171 edits are the decoder's, 8 are the rules chain's ([`docs/gates/phase-3.md`](docs/gates/phase-3.md)) |
+| Network traffic at runtime | zero | **verified twice**, most recently with pyobjc added: 0 sockets and 0 bytes against a control that saw 865 bytes. Scope caveat above |
+
+Tiers are **measured, not named after silicon** (§7.2). CTranslate2 has no Metal
+backend, so "Apple Silicon" was never a distinct execution path — a machine's tier
+is decided by what it measures at install.
+
+**The latency figure is for a ten-second utterance and it does not generalise
+across lengths.**
+
+| you spoke for | text appears after | n |
+|---|---|---|
+| **7.5–10.0 s** | **p50 312.4 ms / p95 344.5 ms** — the band G1 gates, measured deliberately | **10** |
+| 10–60 s | **no band is published** — too few observations under known conditions | — |
+| 67–97 s | p50 ≈ 0.9 s, and over 800 ms throughout — the Phase 3 corpus | 10 |
+
+That is not a bug and not a missed goal: PRD §2 binds G1 at ten seconds and says
+so. But dictating a paragraph is the ordinary case, and the headline number says
+nothing about it, so both are here.
+
+**The headline row is a dedicated recording, not a query over `history.db`.** A
+band scraped from stored rows mixes configurations, machine load and product
+versions. A first attempt at it on 2026-09-02 produced a p95 of **4014 ms**
+because a test suite was running on the same machine; all nine takes were
+discarded rather than the three outliers, because keeping the fastest six would
+have been choosing the rows that flatter. Those rows were removed from the
+database on 2026-09-03, after a backup — the `≤ 10 s` band read p95 **1558.2 ms**
+with them and **344.5 ms** without. Until a `config_sha256` provenance column
+exists, any band published from stored rows depends on nobody having run anything
+heavy at the time, which is not a property a database can attest to.
+
+> **Correction, 2026-08-31.** An earlier revision of this file published a fitted
+> model, `transcribe_ms ≈ 49 + 13.7 × seconds`, and a 10/30/60 s table derived
+> from it. **Those numbers were wrong and are withdrawn** — the model was fitted
+> over n = 14 spanning 0.7–43.4 s and then used to predict at 60 s, outside the
+> range it ever saw. No figure here is extrapolated to a duration that was not
+> measured.
+
+Every latency figure here is from **one machine and one speaker in one room**,
+and **the latency claim is hardware-conditional.** Privacy motivation and offline
+constraint correlate with older machines, so the users this exists for are
+disproportionately the ones on the slower tier. PRD §4 says so in the same place
+it makes the speed claim.
+
+Injection is verified in TextEdit, Terminal, VS Code and Chrome, on both
+strategies, by reading the text back out of each application rather than by eye.
+Zero failures ([`docs/gates/phase-2a.md`](docs/gates/phase-2a.md),
+[`docs/gates/phase-2b.md`](docs/gates/phase-2b.md)).
+
+---
 
 ## Scope
 
@@ -523,6 +402,24 @@ port (§7.3). Linux is a non-goal.
 Also out of scope for v1: streaming partials on screen, speaker diarization,
 mobile, cloud sync, OS voice commands, and text-to-speech.
 
+Design choices behind the current build:
+
+- **Batch transcription**, not streaming, for v1 (PRD §7.1)
+- **faster-whisper** by default, behind an abstraction so the engine can be
+  swapped (§7.2)
+- **Clipboard paste** by default with a keystroke fallback (§7.3)
+- **Deterministic post-processing** first — a rules pass cleans whitespace,
+  sentence capitalisation and punctuation spacing before injection, and
+  `manu history --raw` shows what the model emitted before it ran. Two rules are
+  deliberately absent: lowercasing a spurious mid-sentence capital
+  (indistinguishable from a proper noun without a model) and folding spoken
+  numbers into digits (measured harmful — *one thought ends* became *1 thought
+  ends*). An optional local LLM cleanup pass is specified but **does not work
+  yet**: tested 2026-07-31, it made transcription 5–28× worse on real output
+  ([`docs/gates/phase5-feasibility.md`](docs/gates/phase5-feasibility.md))
+
+---
+
 ## How this repository is built
 
 Development is phase-gated. Each phase ends at an approval gate that states what
@@ -531,10 +428,18 @@ specification is reviewed adversarially before implementation: 12 objections, 13
 choice stories and 7 slicing decisions in the first round, 9 more objections in
 the second, all adjudicated, and every amendment carries a dated revision-log row.
 
-That process is the reason this README can be specific about what is unmeasured
-— and the gate records are the reason it can be specific about what is measured.
-Each one states what would have rejected the phase, and three of them record a
-number that contradicted the specification.
+That process is why this README can be specific about what is unmeasured, and the
+gate records are why it can be specific about what is measured. Three of them
+record a number that contradicted the specification.
+
+| | |
+|---|---|
+| [`AMANUENSIS_PRD.md`](AMANUENSIS_PRD.md) | The standing specification — what and why |
+| [`HARNESS.md`](HARNESS.md) | The operating contract — how work is allowed to proceed |
+| [`CLAUDE.md`](CLAUDE.md) | Project conventions for AI-assisted development |
+| [`docs/superpowers/`](docs/superpowers/) | Adversarial review records — 41 dispositions across two rounds, all resolved |
+| [`docs/gates/`](docs/gates/) | One measurement record per phase gate, plus the probe and the Phase 5 experiments |
+| [`docs/adr/`](docs/adr/) | Architecture decisions — 0001 selects the ASR engine |
 
 ## Licence
 
