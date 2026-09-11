@@ -234,6 +234,7 @@ class DictationController:
         capture: Any,
         detector: Any,
         on_state_change: Callable[[DictationState], None] | None = None,
+        on_error: Callable[[str | None], None] | None = None,
         vocabulary: VocabularyLoader | None = None,
     ) -> None:
         self.config = config
@@ -249,6 +250,14 @@ class DictationController:
         # bias was empty" is the same thing said differently.
         self.vocabulary = vocabulary
         self._on_state_change = on_state_change
+        #: What failed, in words, for a surface a human reads. Separate from
+        #: `on_state_change` because `DictationState.ERROR` says *that*
+        #: something failed and its tooltip says "see the terminal" — and until
+        #: 2026-09-11 nothing put anything in the terminal, or anywhere else.
+        #: The daemon knew, `session.error` held it, and no surface carried it.
+        #: Called with `None` when a session succeeds, because an alarm that
+        #: never clears is one the user learns to ignore.
+        self._on_error = on_error
 
         self._queue: queue.Queue[DictationSession | None] = queue.Queue()
         self._worker: threading.Thread | None = None
@@ -428,6 +437,20 @@ class DictationController:
 
     # -- the worker thread -------------------------------------------------
 
+    def _report_error(self, message: str | None) -> None:
+        """Hand what failed to whoever can show it. Never raises.
+
+        Guarded because this runs on the worker and a reporting surface that
+        raised would take out the thread that delivers transcripts — turning a
+        message about a failure into a second, larger failure.
+        """
+        if self._on_error is None:
+            return
+        try:
+            self._on_error(message)
+        except Exception:  # pragma: no cover — a surface that cannot report
+            pass
+
     def _maybe_sweep(self) -> None:
         """Expire old transcripts, at most once a day, on the worker.
 
@@ -602,6 +625,7 @@ class DictationController:
                 self.history.write_pending(session)
                 session.timings.persist_ms = (time.perf_counter() - started) * 1000.0
                 session.error = verdict.reason
+                self._report_error(session.error)
                 self._set_state(DictationState.ERROR)
                 return
 
@@ -671,11 +695,13 @@ class DictationController:
                     self.history.write_pending(session)
                 except Exception:
                     pass
+            self._report_error(session.error)
             self._set_state(DictationState.ERROR)
             return
 
         self._maybe_sweep()
 
+        self._report_error(session.error)
         if session.error:
             self._set_state(DictationState.ERROR)
         elif session.guard is not None and session.guard.chose_retry:
