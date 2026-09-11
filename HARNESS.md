@@ -164,6 +164,42 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   about the discovery was systematic. Falsifiable: a row written after a config
   edit produces a different digest, and the gate rejects a mixed set.
 
+### A user-visible failure state names what failed
+
+- **Rule**: Every code path that puts the product into a user-visible failure
+  state must route a message describing *what* failed to a surface a human
+  reads, and a test must assert the message arrives. A success must clear it.
+- **Enforcement**: partial
+- **Tool**: `tests/test_controller.py` asserts `on_error` receives the text on
+  the dictation path and `None` on success; no check yet that *every* such path
+  reports — a grep for `_set_state(DictationState.ERROR)` requiring an adjacent
+  report call is the mechanical version
+- **Scope**: pr
+- **Notes**: Added 2026-09-11, from an incident. A daemon sat in
+  `DictationState.ERROR` through a morning showing the tooltip **"Amanuensis —
+  something failed; see the terminal"**, and nothing had been told to the
+  terminal. `session.error` held the exception the whole time and **no surface
+  carried `session.error`** — `tray.set_error` was wired to the overlay's
+  failures and the hotkey switcher and to nothing in the dictation path.
+
+  The cost is the shape worth remembering: with no detail, elimination is the
+  only tool left, so seven subsystems were tested clean in isolation — engine,
+  VAD, guard, post-processing, persistence, permissions, and the overlay against
+  real AppKit — **because the failing stage never named itself.** Then a restart
+  cleared the fault and destroyed the only evidence. The root cause was never
+  established and is not recoverable.
+
+  Two corollaries the rule is meant to carry. **A message that dies with the
+  process is not a surface**: a menu row and a terminal window both vanish on
+  restart, which is what turned this from slow into unrecoverable, and PRD §11.5
+  records that a log file is a §7.6 decision before it is a convenience because
+  failure text can contain a transcript. And **the clear matters as much as the
+  report** — an alarm that never comes off is one the user learns to ignore,
+  which is the over-reporting failure §5.4 already names.
+
+  Falsifiable: remove the report from any error path and its test fails; remove
+  the clear and the control fails. Both verified by sabotage at the time.
+
 ### A gate's reject path has a control of its own
 
 - **Rule**: Every gate that can refuse must have a control demonstrating it

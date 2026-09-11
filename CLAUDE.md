@@ -13,7 +13,45 @@ PRD, the PRD wins.
 
 ---
 
-## Status: **Phase 3 gate PASSED 2026-09-01** — `docs/gates/phase-3.md`
+## Status: **Phase 4 built; its gate is unrun** — `docs/gates/phase-4.md`
+
+**Sprint closed 2026-09-11.** Lanes 1, 2 (6/6), 3 and 4b of the Phase 4 runbook
+have PASSED and are recorded. **Lane 6 — a second person installing from the
+README unaided — has not been booked, and it is the gate.** Lane 4 (ten short
+corrections) is unrun and optional; its template is emitted and waiting for the
+operator's edits. Lane 5's two open items are G2's disposition and gate finding
+1c.
+
+**Do not open Phase 5.** §9's Phase 4 gate has not run.
+
+Three things from this sprint that outlive it.
+
+- **A user-visible failure state must name what failed** — now a HARNESS
+  constraint. A daemon sat in `ERROR` for a morning showing *"something failed;
+  see the terminal"* with nothing in the terminal, because nothing routed
+  `session.error` to any surface. Seven subsystems tested clean in isolation
+  because the failing one never named itself, then a restart destroyed the
+  evidence. **That root cause is unknown and unrecoverable.** `on_error` now
+  reaches the tray and stderr.
+- **The overlay's failures were silent by construction**, which is why gate
+  finding 1 could not be diagnosed. Fixed: a bounded failure budget instead of a
+  one-way latch, a re-frame when the screen moves, a guard on the level path
+  that could terminate the daemon thirty times a second, and a fault mark in the
+  menu-bar title. **Finding 1c is open** — `DictationState` is process-wide and
+  written by two threads for two sessions, so any rule reading the state stream
+  as a per-session sequence is wrong.
+- **The latch no longer discards the first tap.** §5.2 required it so a fragment
+  could not become its own dictation; that hazard needs a separately queued
+  session, which a session that never ends never creates. The latch emits
+  nothing and the leading audio is kept.
+
+**S3, S4 and S5 of `docs/superpowers/slices/overlay-controls.md` are specified
+and must not be built before lane 6** — they change the panel lane 2 scored.
+S6's criterion is written and must not be amended after the controls exist.
+
+---
+
+## Phase 3 gate — PASSED 2026-09-01, `docs/gates/phase-3.md`
 
 Edit rate **8.59%** over ten real dictations of 67–97 s. The gate does not
 reject because 163 of 171 edits are decoder-side; the rules chain missed **8**
