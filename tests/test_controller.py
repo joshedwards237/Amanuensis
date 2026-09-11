@@ -1494,3 +1494,66 @@ def test_a_successful_session_clears_the_error() -> None:
 
     assert seen, "nothing was reported at all, so this proves nothing"
     assert seen[-1] is None, f"a clean dictation left an error outstanding: {seen}"
+
+
+def test_a_failing_capture_stop_does_not_wedge_the_controller() -> None:
+    """The daemon stopped recording on 2026-09-11 and a restart fixed it.
+
+    The root cause was never established — the only evidence was in a terminal
+    window that the restart closed — but this mechanism produces exactly the
+    reported symptom and was reachable the whole time:
+
+        audio = self.capture.stop()   # can raise
+        self._recording = None        # only reached if it didn't
+
+    `AudioCapture.stop` raises when the stream is gone, which a device
+    disappearing mid-session will do — and the operator dictates on AirPods,
+    which detach. One raise leaves `_recording` set for the life of the process,
+    and `start_session` then returns early on **every** subsequent press:
+
+        if self._recording is not None:
+            return
+
+    No capture, no RECORDING state, no overlay, no waveform, no history row.
+    Silently, forever, until the daemon is restarted. That is the report.
+
+    Fixed by clearing `_recording` **before** the call that can raise: a session
+    that failed to stop is over either way, and the alternative is a hotkey that
+    has stopped working with nothing said.
+    """
+    class _VanishingDevice(_FakeCapture):
+        """Raises once, as a headset detaching does, then behaves."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.raise_next_stop = True
+
+        def stop(self) -> Any:
+            if self.raise_next_stop:
+                self.raise_next_stop = False
+                raise RuntimeError("device disappeared")
+            return super().stop()
+
+    capture = _VanishingDevice()
+    made = _controller(capture=capture)
+    made.start()
+    try:
+        made.start_session()
+        with pytest.raises(RuntimeError):
+            made.end_session()
+
+        # **`capture.starts`, not the state.** After the failed end the state is
+        # still RECORDING from the wedged session, so asserting on it passes
+        # whether or not the wedge exists — found by sabotage, which is the
+        # third test of mine today that could not fail for that shape of reason.
+        # Whether the microphone was actually opened again is the claim.
+        opened_before = capture.starts
+        made.start_session()
+
+        assert capture.starts == opened_before + 1, (
+            "the controller is wedged — `start_session` returned early and "
+            "every press from here is a silent no-op"
+        )
+        assert made.state is DictationState.RECORDING
+    finally:
+        made.shutdown()

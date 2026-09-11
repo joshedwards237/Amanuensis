@@ -385,8 +385,28 @@ class DictationController:
         if recording is None:
             raise RuntimeError("no session is being recorded; call start_session first")
 
-        audio = self.capture.stop()
+        # Cleared **before** the call that can raise, and the order is the whole
+        # point. `AudioCapture.stop` raises when the stream is gone, which a
+        # device disappearing mid-session will do — a Bluetooth headset
+        # detaching is the ordinary case. Clearing after meant one raise left
+        # `_recording` set for the life of the process, and `start_session`
+        # returns early while it is:
+        #
+        #     if self._recording is not None:
+        #         return
+        #
+        # So every later press became a silent no-op: no capture, no RECORDING
+        # state, no overlay, no waveform, no history row, until the daemon was
+        # restarted. Reported 2026-09-11 as "the daemon stopped recording", and
+        # the root cause of that incident was never established because nothing
+        # carried the error — but this path was reachable throughout and
+        # produces exactly it.
+        #
+        # A session whose capture could not be stopped is over either way. The
+        # alternative to raising here is a hotkey that has quietly stopped
+        # working, which is strictly worse than an error the caller can report.
         self._recording = None
+        audio = self.capture.stop()
 
         timings_capture_ms = (time.perf_counter() - recording["at"]) * 1000.0
         session = DictationSession(
