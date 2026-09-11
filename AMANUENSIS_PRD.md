@@ -3363,6 +3363,65 @@ Resolve before or at the stated gate. Do not guess.
    on the strength of that answer. The `.gitignore` reasoning holds; the
    sequence in which it was established does not.
 
+5. **Error surfacing is not good enough, and the operator said so from use**
+   (added 2026-09-11, not scheduled). On 2026-09-11 a daemon sat in
+   `DictationState.ERROR` through a morning. The menu bar carried the tooltip
+   *"Amanuensis — something failed; see the terminal"*, and the terminal had
+   been told nothing: `session.error` held the exception and **no surface
+   carried `session.error`**. Diagnosing it meant reading the source.
+
+   The immediate hole is closed — `DictationController.on_error` reaches the
+   tray and stderr (2026-09-11) — and closing it is not the same as the
+   surfacing being adequate. What is still true:
+
+   - The menu-bar glyph distinguishes *a fault exists* from *no fault*. It does
+     not distinguish a fault the user must act on from one the product
+     recovered from.
+   - Every error is one menu row, truncated by `_one_line`, with no history. A
+     second failure overwrites the first, so an intermittent fault is
+     unreadable by construction.
+   - Nothing is written to disk. A daemon launched from the Desktop `.command`
+     has a terminal window nobody keeps, so restarting the daemon destroys the
+     only record of why it failed. **That is the specific thing that cost the
+     morning.**
+   - `⚠` is used for both `DictationState.ERROR` and, since 2026-09-10, the
+     overlay fault mark. Two unrelated conditions, one glyph.
+
+   **Not scheduled and deliberately not designed here.** A log file is the
+   obvious answer and is a §7.6 decision before it is a convenience: it would
+   put failure text — which can contain a transcript — on disk under the same
+   rules as `pending/`, and §5.5 already has a retention argument this would
+   inherit. Decide that before deciding the surface.
+
+6. **Dictating should not interrupt audio playback** (added 2026-09-11, not
+   scheduled). Wearing AirPods, starting a dictation pauses playback while the
+   route switches: opening an input on a Bluetooth headset moves it from A2DP
+   to the headset profile, which is mono, lower quality, and audible as a gap.
+
+   **The mechanism is macOS's, not this product's**, and the lever already
+   exists. `[audio] device` (§5.3) takes a substring of a device name, so
+   pinning the built-in microphone leaves the headset in A2DP and the playback
+   uninterrupted. On the operator's machine, 2026-09-11, the default input was
+   `Josh's AirPods Pro`, which is exactly the condition that produces the gap;
+   `device = "MacBook Pro Microphone"` removes it without a code change.
+
+   What is open is not the capability but its **discoverability and its cost**:
+
+   - The key is invisible. It is in the config file and in no menu, while §5.2's
+     capture mode and `[hotkey] binding` both reached the tray in Phase 4 on the
+     argument that a setting a user must edit a file to try is a setting two of
+     three users never try.
+   - A pinned device is wrong when it is absent. §5.3 has no answer for
+     `device = "MacBook Pro Microphone"` on a machine where that has been
+     renamed, and `DeviceNotFoundError` refusing to start the daemon is a
+     defensible answer but not an obviously correct one.
+   - **The accuracy cost is unmeasured.** Pinning the built-in microphone while
+     wearing a headset means dictating across a room into a laptop, and §2 is
+     explicit that a corpus recorded on one microphone measures that one. No
+     figure in this repository describes the built-in microphone at arm's
+     length, so the trade — uninterrupted playback for an unknown edit rate — is
+     currently unpriced.
+
 ---
 
 ## 12. Where Kokoro actually goes
@@ -3467,6 +3526,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-11 | **Two deferred items from use, both recorded rather than fixed** (§11.5, §11.6). **Error surfacing is inadequate and the immediate hole is closed.** A daemon sat in `ERROR` through a morning showing *"something failed; see the terminal"* while nothing had been told to the terminal — `session.error` held the exception and no surface carried it. `DictationController.on_error` now reaches the tray and stderr, and that is not the same as the surfacing being adequate: one truncated menu row with no history, nothing on disk, and `⚠` now meaning two unrelated things. A log file is the obvious answer and is a **§7.6 decision first** — failure text can contain a transcript, which puts it under `pending/`'s rules. **And dictating interrupts Bluetooth playback**, because opening an input moves a headset from A2DP to the headset profile. The lever already exists — `[audio] device` takes a substring and pinning the built-in microphone removes the gap with no code change — so what is open is discoverability (the key is in no menu, while mode and binding both reached the tray in Phase 4 on exactly that argument) and an **unmeasured accuracy cost**: no figure here describes the built-in microphone at arm's length, so the trade is currently unpriced. |
 | 2026-09-10 | **The double-tap latch stops discarding the first tap, and stops blinking the panel** (§5.2, objections O8/O9/O10, choice story #10). The flash was a state machine reporting an event that did not happen: the latch fired a discard, `abort_session` reported `IDLE`, and the overlay hid — between two presses during which the microphone never closed. The specified fix was a new `restart_session`; review found it needed an `AudioCapture` operation that **does not exist** and left the session clocks unstated, and that **the discard itself buys nothing**. §5.2 required it so a ~100 ms fragment could not become its own dictation, and that hazard needs a separately queued session — which a session that never ends never creates. So the latch now emits **nothing**: the capture opened on the first press keeps running, no controller operation is added, and the up-to-350 ms of the user's own speech the discard was throwing away is kept, which is what the same paragraph praises push-to-talk for. **`_latch_enabled` no longer gates on `on_cancel`** — it did while the latch emitted one, and the gate meant any caller passing none silently got no latch. That surfaced three tests which had been exercising push-to-talk with the latch accidentally off, a configuration `cli.py` never uses; they now hold rather than tap, which is what a dictation is. |
 | 2026-09-10 | **The recording overlay gains controls, a transcribing state, and the click-through it was built to preserve** (§5.4, §5.3, `docs/superpowers/specs/overlay-controls.md`). Specified, **not built** — sequenced after lane 6, because lane 2's 6/6 describes the panel as it exists now. §5.4's rule that nothing may outlive the microphone is **satisfied rather than overruled**: the argument is against a panel that *means recording* persisting, not against the panel, so the bars are replaced in one frame — never cross-faded, since a dimming waveform is still a waveform — by a dot whose motion is time-driven. The invariant is testable: **no audio-reactive element is visible while the microphone is closed**, and `set_level` must be *ignored* while transcribing rather than merely unused, because the capture thread stops delivering blocks and "no data arrives" would make it look correct without being it. **Two costs accepted rather than removed.** The panel stops ignoring mouse events, so a 114 × 22 region swallows clicks meant for the application beneath — README known-costs material. And **there is no Escape equivalent and cannot cheaply be one**: §7.3's tap watches `flagsChanged` and refuses `keyDown` because a tap that watched it would see every character typed, so the ✕ is the *only* cancel affordance the product has. The double-tap flash is a state machine reporting an event that did not happen — `abort_session` emits `IDLE` between the two presses while the microphone never closed — and is fixed by a new `restart_session` rather than by debouncing the hide, which would be a timing rule that hides a genuine close. **Blocked on gate findings 1 and 3**: this adds surface to a component that already stops rendering silently, and a ✕ that silently vanishes is worse than none, because the user believes they have a way out of a latched session and does not. |
 | 2026-09-10 | **Every transcript ends with one space, and the rule was checked against the measurement before it was written** (§5.3, §7.5). Reported from use: a dictation leaves the caret flush against its last character, so typing immediately afterwards runs the new word into the old one. On by default — every dictation is followed by *something* and only one of those wants no separator, so the cost is one character the user can backspace against a defect they must notice and repair every time. **The question asked first was not whether the rule works but whether it moves the instrument**: a character added to every transcript could add one edit to every dictation in the Phase 3 corpus, inflating G2 by a constant while reading as a decoder regression. It cannot — `gate_phase3.py`'s `_words` is a bare `.split()`, which discards trailing whitespace — and that is asserted against the gate's **own** tokeniser rather than a reimplementation of it, with a control proving the tokeniser can still tell two texts apart. Ordering is load-bearing and independently tested: `collapse_whitespace` strips trailing whitespace and runs first, so the rule registered anywhere above it is deleted by it, and registering it first fails the ordering test rather than passing quietly. Two refusals: text already ending in whitespace is untouched, because a space after a `spoken_commands` paragraph break is garbage on the line the user just left; and an empty transcript stays empty, because a guard refusal and a zero-length decode both arrive as `""` and a rule that manufactures a keystroke out of silence is the wrong shape. Nineteen existing tests asserted whole-chain strings and now build their processor with the key off — isolation, not concealment: the shipped default is asserted separately, and flipping it back still fails. |
