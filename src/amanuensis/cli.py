@@ -865,10 +865,31 @@ def _daemon(config: AppConfig) -> int:
         tray.set_state(state)
         overlay.set_state(state)
 
+    def _on_session_error(message: str | None) -> None:
+        """What failed, in words, on both surfaces that claim to carry it.
+
+        Until 2026-09-11 neither did. `DictationState.ERROR` put a glyph in the
+        menu bar whose tooltip reads "Amanuensis — something failed; see the
+        terminal", `session.error` held the exception, and nothing routed it
+        anywhere: `tray.set_error` was wired to the overlay and the hotkey
+        switcher and to nothing in the dictation path. The product knew what
+        had gone wrong, sent the user to the terminal, and printed nothing
+        there. Reported by the operator, whose daemon sat in `state error` with
+        no way to learn why.
+
+        stderr as well as the tray, because the tooltip names the terminal and
+        because a message that only exists in a menu is gone the moment the
+        daemon restarts.
+        """
+        tray.set_error(message)
+        if message is not None:
+            print(f"dictation failed: {message}", file=sys.stderr, flush=True)
+
     tray.set_clipboard_exposure(
         exposure if config.injection.warn_on_clipboard_manager else None
     )
     controller = DictationController(
+        on_error=_on_session_error,
         config=config,
         engine=engine,
         injector=injector,

@@ -1439,3 +1439,58 @@ def test_the_guard_itself_raising_does_not_cost_the_transcript() -> None:
 
     assert session.raw_transcript == "hello there"
     assert "write_pending" in made.history.calls
+
+
+# ---------------------------------------------------------------------------
+# The error text has to reach a human (2026-09-11)
+# ---------------------------------------------------------------------------
+
+
+def test_a_session_error_is_reported_to_the_caller() -> None:
+    """Reported from a running daemon, 2026-09-11, and it cost a morning.
+
+    The daemon set `DictationState.ERROR`, the menu bar showed the tooltip
+    "Amanuensis — something failed; see the terminal", and **the terminal was
+    told nothing**. `session.error` carried the exception all along and no
+    surface carried `session.error`: `tray.set_error` was wired to the overlay
+    and the hotkey switcher and to nothing in the dictation path.
+
+    So the product knew exactly what had failed, told the user to go and look
+    somewhere, and made sure there was nothing there. Gate finding 3's shape,
+    one component over.
+    """
+    class _Boom(_FakeEngine):
+        def transcribe(self, _audio: Any, _rate: int, **_kwargs: Any) -> Any:
+            raise RuntimeError("ct2 fell over")
+
+    seen: list[str | None] = []
+    made = _controller(engine=_Boom(), on_error=seen.append)
+    made.start()
+    try:
+        made.start_session()
+        made.end_session().wait(timeout=5)
+    finally:
+        made.shutdown()
+
+    assert seen, "the session failed and nothing was told what failed"
+    assert seen[0] is not None
+    assert "ct2 fell over" in seen[0], (
+        f"the report did not carry what actually failed: {seen[0]!r}"
+    )
+
+
+def test_a_successful_session_clears_the_error() -> None:
+    """The negative control, and it is the difference between a report and a
+    permanent alarm. An error that never clears is one the user learns to
+    ignore, which is the failure §5.4 names about over-reporting."""
+    seen: list[str | None] = []
+    made = _controller(on_error=seen.append)
+    made.start()
+    try:
+        made.start_session()
+        made.end_session().wait(timeout=5)
+    finally:
+        made.shutdown()
+
+    assert seen, "nothing was reported at all, so this proves nothing"
+    assert seen[-1] is None, f"a clean dictation left an error outstanding: {seen}"
