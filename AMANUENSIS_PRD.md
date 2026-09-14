@@ -1515,6 +1515,14 @@ class HotkeyListener(ABC):
     @abstractmethod
     def check_permissions(self) -> PermissionStatus:
         """Non-destructive check. Called at startup, surfaced in the tray."""
+
+    def request_permissions(self) -> None:
+        """Ask the OS to register this process as an applicant. May prompt.
+
+        Called only after `check_permissions` has failed, only from the CLI.
+        Defaults to doing nothing: a platform with no grant to request has
+        nothing to do here, and that is a truthful no-op rather than a hole.
+        """
 ```
 
 **`check_permissions` added on `TextInjector`'s argument, not for symmetry.**
@@ -1530,8 +1538,28 @@ On macOS the two grants are **separate and confusable**:
 Settings panes, granted independently, and a user who granted one for Phase 2a
 will reasonably believe they granted both. Each remediation therefore names its
 own permission *and* says the other one is not it. Both are the non-prompting
-halves of documented pairs; the `CGRequest*` twins raise a system dialog, which
-a daemon that starts at login must never do at startup.
+halves of documented pairs.
+
+**Amended 2026-09-14, from lane 6.** The original text here ended "the
+`CGRequest*` twins raise a system dialog, which a daemon that starts at login
+must never do at startup", and declined to call them anywhere. That is right
+about the steady state and **wrong about first run**, because the request half
+is not only a prompt: it is what registers the process with TCC, and a process
+that has only ever preflighted **does not appear in the Settings pane at all**.
+The first person to install from the README was sent to the Accessibility pane
+by our own remediation text and found an empty list. The instruction to "look
+for your terminal in the list" named a row the product had guaranteed would not
+be there.
+
+So the contract splits in two. `check_permissions` stays exactly as specified —
+non-prompting, safe on the injection path, safe to poll from the tray — and a
+second method, `request_permissions`, raises the dialog. It is called **only**
+when a check has already failed, only from the CLI, and never from the daemon's
+steady state, so a granted install still never sees a prompt. The premise the
+original reasoning rested on also does not hold here: this daemon does not start
+at login (§5.4 records that it has no login item), and macOS suppresses a repeat
+prompt once TCC has recorded a decision, so "a dialog at every start" was not
+the alternative on offer.
 
 The callbacks return nothing, and that is load-bearing rather than incidental:
 there is nothing useful a callback could hand back to a thread that must not
@@ -3554,6 +3582,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-14 | **The permission check registers the process before it sends the user to Settings** (§6.3, `docs/gates/phase-4.md` lane 6 finding 1). The first person to install from the README unaided ran `manu daemon`, got both remediation messages, opened the Accessibility pane as instructed, and found **an empty list** — no row for their terminal, nothing to toggle. §6.3 had specified both checks as the non-prompting `CGPreflight*` halves and declined the `CGRequest*` twins on the grounds that a login-start daemon must never prompt at startup. That reasoning is sound and incomplete: the request half is **also what registers a process with TCC**, so preflight-only means the pane is empty by construction, and our own remediation text confidently told the user to look for a row we had guaranteed would not be there. `request_permissions` is added to both ABCs as a **concrete no-op default** rather than an abstract method — a platform with nothing to request has nothing to do, and that is truthful rather than a hole — overridden on macOS, called only by the CLI and only after a check has already failed. `check_permissions` is unchanged and stays non-prompting, which matters because it also runs on `inject()` and `warm_up()`; the test asserting so was **rewritten**, because it asserted `not hasattr(quartz, "CGRequestListenEventAccess")` — a fact about the fake, which no product behaviour could falsify. **Both grants are requested even though the first already decided the exit code**, since a user sent to two panes should find a row in each. The premise the original decision rested on does not hold either way: this daemon has no login item (§5.4), and macOS suppresses repeat prompts once TCC records a decision. |
 | 2026-09-11 | **`manu status` reports the daemon, not the config file** (§7.3 floor item 3, §11.6). It gains the microphone — `AudioCapture.describe_device()`, which names the device that would actually open, because §5.3's key is a *substring* and `default` names nothing at all. Adding it exposed two fields already wrong in the same way: `mode` was read from the frozen start-up config, so after one tray click `status` reported the mode the daemon started with indefinitely, and `model` answered the literal string `auto` while `tiny.en` was loaded. Neither was wrong about the config; both were wrong about the daemon, which is the only thing `status` is for. `describe_device` never raises — a status command that withheld the model, the mode and the state because the *device list* was unreadable would invert the point of having one. No §7.6 change: a device name is not transcript content. |
 | 2026-09-11 | **The microphone reached the tray** (§5.3, §5.4, §11.6). `[audio] device` is now a `Device:` row with every input on the machine beneath it, closing the first of §11.6's two open questions the same day it was recorded — the key existed, it was in no menu, and mode and binding had reached the tray in Phase 4 on precisely that argument. The second question is **decided against the entry's own suggestion**: nothing validates that a device exists, at either the writer or `set_device`, because the set of devices changes while the daemon runs and a check at write time answers a question that is already stale. `AudioCapture.start()` keeps raising `DeviceNotFoundError` with the devices actually present, and a pinned device that is gone is shown ticked and marked `⚠ not connected` rather than dropped. **The third is not closed and gets no easier:** the accuracy cost of the built-in microphone at arm's length is still unmeasured, and a menu makes that unpriced trade one click away. |
 | 2026-09-11 | **Two deferred items from use, both recorded rather than fixed** (§11.5, §11.6). **Error surfacing is inadequate and the immediate hole is closed.** A daemon sat in `ERROR` through a morning showing *"something failed; see the terminal"* while nothing had been told to the terminal — `session.error` held the exception and no surface carried it. `DictationController.on_error` now reaches the tray and stderr, and that is not the same as the surfacing being adequate: one truncated menu row with no history, nothing on disk, and `⚠` now meaning two unrelated things. A log file is the obvious answer and is a **§7.6 decision first** — failure text can contain a transcript, which puts it under `pending/`'s rules. **And dictating interrupts Bluetooth playback**, because opening an input moves a headset from A2DP to the headset profile. The lever already exists — `[audio] device` takes a substring and pinning the built-in microphone removes the gap with no code change — so what is open is discoverability (the key is in no menu, while mode and binding both reached the tray in Phase 4 on exactly that argument) and an **unmeasured accuracy cost**: no figure here describes the built-in microphone at arm's length, so the trade is currently unpriced. |

@@ -109,9 +109,14 @@ class _FakeQuartz:
         self._may_post = may_post
         self.posted: list[tuple[int, bool, int | None, str | None]] = []
         self.preflight_calls = 0
+        self.request_calls = 0
 
     def CGPreflightPostEventAccess(self) -> bool:
         self.preflight_calls += 1
+        return self._may_post
+
+    def CGRequestPostEventAccess(self) -> bool:
+        self.request_calls += 1
         return self._may_post
 
     def CGEventSourceCreate(self, _state: object) -> object:
@@ -519,3 +524,43 @@ def test_focus_identity_survives_an_app_with_no_bundle_id(
     injector = MacOSInjector(InjectionConfig())
 
     assert injector.focus_identity() is None
+
+
+# ---------------------------------------------------------------------------
+# Registering with TCC (§6.3, lane 6 finding 1 — 2026-09-14)
+# ---------------------------------------------------------------------------
+#
+# The preflight half answers a question. The request half is what makes macOS
+# list this process in the Accessibility pane at all. A user sent to that pane
+# by a product that has only ever preflighted finds an **empty list** and no
+# row to switch on — which is what happened to the first person to install
+# from the README, and is why these two tests come in a pair. The positive
+# alone would pass if `request_permissions` were wired into the startup check;
+# the negative alone would pass if nothing called the request half at all.
+
+
+def test_requesting_permission_calls_the_prompting_half(frameworks: Any) -> None:
+    """The dialog is what registers the process. Without it the pane the
+    remediation sends the user to has nothing in it."""
+    _, quartz, _ = frameworks(may_post=False)
+
+    MacOSInjector(InjectionConfig()).request_permissions()
+
+    assert quartz.request_calls == 1
+
+
+def test_checking_permission_never_prompts(frameworks: Any) -> None:
+    """The negative control, and it is the half that has to keep holding.
+
+    `check_permissions` runs on `inject()` and on `warm_up()`. A check that
+    prompted would raise a system dialog on the injection path — PRD §6.3
+    keeps it non-destructive and this is what says so.
+    """
+    _, quartz, _ = frameworks(may_post=False)
+
+    injector = MacOSInjector(InjectionConfig())
+    injector.check_permissions()
+    injector.inject("words")
+
+    assert quartz.preflight_calls > 0, "the check must actually have run"
+    assert quartz.request_calls == 0

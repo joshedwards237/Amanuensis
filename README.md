@@ -84,6 +84,12 @@ The daemon needs **Accessibility** (to type into other applications) and **Input
 Monitoring** (to see the hotkey). They are separate panes in System Settings →
 Privacy & Security, and granting one does not grant the other.
 
+**Run `manu daemon` first and let it ask.** It checks both grants, raises the
+macOS dialog for each one it does not have, and prints the pane to open. Answer
+the dialogs however you like — asking is what puts your terminal into those
+lists in the first place. **A pane you open before anything has asked is empty**,
+with no row to switch on.
+
 **The entry you are looking for carries your terminal's name, not
 "Amanuensis".** macOS attaches these grants to whatever launched the process, so
 look for Terminal, iTerm, Ghostty or VS Code — whichever you ran `manu` from.
@@ -91,8 +97,12 @@ This is a real wart and it does not currently go away; an `.app` bundle would
 fix it and none is scheduled (PRD §5.4 holds it in reserve as the fallback if
 the recording panel fails its confidence test).
 
-`manu daemon` names both permissions and tells you which is missing if you skip
-this step.
+If your terminal still is not listed, add it with the `+` button. Terminal lives
+at `/System/Applications/Utilities/Terminal.app`, which the file picker hides
+until you press **Cmd-Shift-G** and paste that path.
+
+The grant is read once at launch, so **restart `manu daemon`** after granting —
+a running process does not notice.
 
 ### 5. Dictate
 
@@ -226,6 +236,11 @@ neither.
 
 ## Troubleshooting
 
+- **The Accessibility or Input Monitoring list is empty — there is nothing to
+  toggle.** Nothing has asked for the grant yet, and macOS lists a process only
+  once it has asked. Run `manu daemon`; it requests both and the rows appear.
+  Failing that, add your terminal with `+` (Cmd-Shift-G, then
+  `/System/Applications/Utilities/Terminal.app`).
 - **Nothing happens when I hold right-option.** Input Monitoring is not granted
   to the terminal you launched from. `manu daemon` says so on startup.
 - **The glyph goes `●` then nothing appears.** Accessibility is missing —

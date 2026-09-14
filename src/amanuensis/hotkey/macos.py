@@ -117,10 +117,15 @@ press to start. They are granted separately, in different panes, and granting
 one does not grant the other.
 
 macOS grants this per application, and it grants it to whatever launched
-`manu` — so look for your terminal in the list (Terminal, iTerm, Ghostty,
-VS Code), not for "Amanuensis". Toggle it on, then start the daemon again;
-the grant is read at launch, so an already-running process will not notice
-it."""
+`manu` — so look for your terminal (Terminal, iTerm, Ghostty, VS Code), not
+for "Amanuensis". Toggle it on, then start the daemon again; the grant is
+read at launch, so an already-running process will not notice it.
+
+A macOS dialog may have just appeared. Either answer is fine — asking is what
+puts your terminal in that list, and until something asks, **the list is
+empty**. If you see no row for your terminal even now, add it with the `+`
+button: Terminal lives at /System/Applications/Utilities/Terminal.app, which
+the file picker hides until you press Cmd-Shift-G and paste that path."""
 
 
 class HotkeyPermissionError(Exception):
@@ -314,6 +319,16 @@ class MacOSHotkeyListener(HotkeyListener):
             missing=("Input Monitoring",),
             remediation=_REMEDIATION,
         )
+
+    def request_permissions(self) -> None:
+        """Register with TCC. The twin of `MacOSInjector.request_permissions`.
+
+        Same mechanism, different pane: preflighting never lists the process,
+        so a user sent to Input Monitoring by the remediation above finds
+        nothing to switch on. The return value is discarded for the same
+        reason — the grant is read at launch.
+        """
+        _quartz().CGRequestListenEventAccess()
 
     def start(
         self,

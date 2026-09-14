@@ -360,10 +360,24 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
     from amanuensis.injection import macos as macos_injection
 
     class _Denied:
+        """Both grants refused.
+
+        The `CGRequest*` halves are here because the product now calls them on
+        this path (2026-09-14); a fake missing them would fail as an
+        `AttributeError` rather than as the assertion below, which is a test
+        reporting the state of its own double.
+        """
+
         def CGPreflightPostEventAccess(self) -> bool:
             return False
 
         def CGPreflightListenEventAccess(self) -> bool:
+            return False
+
+        def CGRequestPostEventAccess(self) -> bool:
+            return False
+
+        def CGRequestListenEventAccess(self) -> bool:
             return False
 
     monkeypatch.setattr(macos_injection, "_quartz", _Denied)
@@ -633,3 +647,69 @@ def test_an_error_message_names_the_command_that_was_typed(
     err = capsys.readouterr().err
     assert err.startswith(f"usage: {typed} ")
     assert f"{typed}: error:" in err
+
+
+def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Lane 6 finding 1, 2026-09-14. This is an ordering test, not a call test.
+
+    The first person to install from the README got both remediation messages,
+    ran the `open` command in the first one, and found the Accessibility list
+    **empty** — no row for their terminal, nothing to switch on. macOS lists a
+    process in those panes once it has *requested* the grant; preflighting
+    never registers anything. So the product printed a confident instruction to
+    toggle a row it had guaranteed would not be there.
+
+    Both requests must therefore happen **before** the remediation is printed,
+    and both must happen even though the first one already decided the exit
+    code: a user sent to two panes should find a row in each.
+    """
+    from amanuensis.cli import _daemon
+    from amanuensis.config import AppConfig
+    from amanuensis.hotkey import macos as macos_hotkey
+    from amanuensis.injection import macos as macos_injection
+
+    events: list[str] = []
+
+    class _Denied:
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+
+        def CGPreflightPostEventAccess(self) -> bool:
+            return False
+
+        def CGPreflightListenEventAccess(self) -> bool:
+            return False
+
+        def CGRequestPostEventAccess(self) -> bool:
+            events.append("request:Accessibility")
+            return False
+
+        def CGRequestListenEventAccess(self) -> bool:
+            events.append("request:Input Monitoring")
+            return False
+
+    monkeypatch.setattr(macos_injection, "_quartz", lambda: _Denied("inject"))
+    monkeypatch.setattr(macos_hotkey, "_quartz", lambda: _Denied("hotkey"))
+
+    real_print = print
+
+    def _tracking_print(*args: object, **kwargs: object) -> None:
+        text = " ".join(str(a) for a in args)
+        if "Accessibility access" in text or "Input Monitoring" in text:
+            events.append("printed")
+        real_print(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("builtins.print", _tracking_print)
+
+    exit_code = _daemon(AppConfig())
+
+    assert exit_code != 0
+    assert "request:Accessibility" in events, "nothing registered for Accessibility"
+    assert (
+        "request:Input Monitoring" in events
+    ), "nothing registered for Input Monitoring"
+    assert events.index("request:Accessibility") < events.index(
+        "printed"
+    ), "the user was sent to the pane before the process was listed in it"
