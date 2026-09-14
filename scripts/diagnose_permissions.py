@@ -21,6 +21,7 @@ Usage, from the checkout, with the virtualenv active:
 
 from __future__ import annotations
 
+import ctypes
 import os
 import platform
 import subprocess
@@ -42,6 +43,64 @@ def _attempt(label: str, call: Callable[[], Any]) -> None:
         _line(label, f"RAISED {type(exc).__name__}: {exc}")
         return
     _line(label, f"returned {result!r}")
+
+
+# IOKit's HID access API, reached through ctypes rather than pyobjc.
+#
+# `pyobjc-framework-IOKit` **does not exist on PyPI** and no installed pyobjc
+# package exports these symbols, so the choice was ctypes or nothing. ctypes
+# costs no dependency at all, which is strictly better than the fifth pyobjc
+# framework this was expected to need — and costs a hand-declared signature
+# instead, which crashes rather than raises when it is wrong. Hence the explicit
+# argtypes and restype below, and the guard around the load.
+#
+# Values are from IOKit's headers. `IOHIDCheckAccess` is the interesting one:
+# unlike `CGPreflightListenEventAccess`, which answers a bool, it separates
+# **denied** from **unknown** — and "unknown" means *this client has never been
+# asked*, which is exactly the state that produced an empty Settings pane and
+# four findings in this lane.
+_IOKIT_PATH = "/System/Library/Frameworks/IOKit.framework/IOKit"
+
+_REQUEST_TYPES = {"PostEvent (Accessibility)": 0, "ListenEvent (Input Monitoring)": 1}
+_ACCESS_NAMES = {0: "granted", 1: "denied", 2: "unknown — never asked"}
+
+
+def _probe_iokit() -> None:
+    """Read IOKit's view of both grants, then ask for Input Monitoring.
+
+    Only `ListenEvent` is *requested*. Accessibility already has a call that
+    works (`AXIsProcessTrustedWithOptions`), and a second dialog for a grant
+    that is already handled would make this harder to read, not easier.
+    """
+    try:
+        iokit = ctypes.cdll.LoadLibrary(_IOKIT_PATH)
+    except OSError as exc:
+        _line("IOKit", f"could not load {_IOKIT_PATH}: {exc}")
+        return
+
+    try:
+        check = iokit.IOHIDCheckAccess
+        request = iokit.IOHIDRequestAccess
+    except AttributeError as exc:
+        _line("IOKit", f"symbol missing: {exc}")
+        return
+
+    check.argtypes = [ctypes.c_uint32]
+    check.restype = ctypes.c_uint32
+    request.argtypes = [ctypes.c_uint32]
+    request.restype = ctypes.c_bool
+
+    def _describe(value: int) -> str:
+        code = check(value)
+        return _ACCESS_NAMES.get(code, f"unrecognised code {code}")
+
+    for label, value in _REQUEST_TYPES.items():
+        _attempt(f"IOHIDCheckAccess({label})", lambda v=value: _describe(v))
+
+    _attempt(
+        "IOHIDRequestAccess(ListenEvent)",
+        lambda: request(_REQUEST_TYPES["ListenEvent (Input Monitoring)"]),
+    )
 
 
 def main() -> int:
@@ -126,18 +185,7 @@ def main() -> int:
     except ImportError as exc:
         _line("Quartz", f"NOT IMPORTABLE: {exc}")
 
-    # IOKit is not a dependency of this product. If it happens to be installed,
-    # its answer is worth having, because it is the only candidate for the
-    # Input Monitoring half and adopting it would cost a new dependency.
-    try:
-        from IOKit import IOHIDRequestAccess, kIOHIDRequestTypeListenEvent
-
-        _attempt(
-            "IOHIDRequestAccess(ListenEvent)",
-            lambda: IOHIDRequestAccess(kIOHIDRequestTypeListenEvent),
-        )
-    except ImportError:
-        _line("IOHIDRequestAccess", "pyobjc-framework-IOKit not installed (expected)")
+    _probe_iokit()
 
     print()
     print("=" * 72)
@@ -152,6 +200,11 @@ def main() -> int:
     print("  1. Is your terminal listed at all (on or off)?")
     print("  2. Are ANY other applications listed?")
     print("  3. Did a dialog appear while this script ran, and for which line?")
+    print()
+    print("The line that decides the next change is")
+    print("`IOHIDRequestAccess(ListenEvent)` — whether IT raised a dialog, as")
+    print("distinct from the Accessibility one. Input Monitoring is the grant")
+    print("that still has no working prompt.")
     print("=" * 72)
     return 0
 
