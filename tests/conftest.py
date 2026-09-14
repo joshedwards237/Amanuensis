@@ -174,3 +174,37 @@ def _no_real_microphone(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(capture_module, "_sounddevice", _refuse)
+
+
+class RealAccessibilityBridgeReached(RuntimeError):
+    """A test reached the real Accessibility bridge. See `_no_real_ax_prompt`."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ax_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test raises a macOS permission dialog. Ever.
+
+    `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})` is the
+    call that puts this process in the Accessibility pane, and the way it does
+    that is by presenting a **modal system dialog**. On a machine that has
+    already granted the permission — which is every machine this has been
+    developed on — the call returns True and shows nothing, so the hazard is
+    invisible exactly where the suite is usually run. On a fresh contributor's
+    machine the same test puts a dialog on their screen, and a modal dialog
+    does not fail the run, it **blocks** it.
+
+    Same species and same answer as `_no_real_microphone` above: autouse, not
+    opt-in. A test that wants the bridge replaces this seam with its own fake,
+    which is what `tests/test_injection.py` and the CLI permission test do.
+    """
+    from amanuensis.injection import macos as macos_injection
+
+    def _refuse() -> object:
+        raise RealAccessibilityBridgeReached(
+            "a test reached the real HIServices bridge. Patch "
+            "`amanuensis.injection.macos._hiservices` — see "
+            "tests/conftest.py::_no_real_ax_prompt. Left unpatched this raises "
+            "a modal permission dialog on any machine without the grant."
+        )
+
+    monkeypatch.setattr(macos_injection, "_hiservices", _refuse)
