@@ -101,6 +101,12 @@ If your terminal still is not listed, add it with the `+` button. Terminal lives
 at `/System/Applications/Utilities/Terminal.app`, which the file picker hides
 until you press **Cmd-Shift-G** and paste that path.
 
+**On macOS 26.6 you will have to do this for Input Monitoring.** Measured there
+2026-09-14: the Accessibility dialog appears, and the Input Monitoring one does
+not — so that pane stays empty until you add your terminal by hand. Whether
+other 26.x versions behave the same way is unmeasured. The `+` route above is
+the whole procedure.
+
 The grant is read once at launch, so **restart `manu daemon`** after granting —
 a running process does not notice.
 

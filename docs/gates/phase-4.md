@@ -24,7 +24,7 @@ that waits for the record to be written is a finding that gets rounded off.
 | 4. Ten short corrections | **RUN — n = 9, not 10.** Shipped chain **4.38%**; Moonshine 14.37% / 16.25% | 2026-09-11 |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
 | 5. This record | open | — |
-| 6. The install gate | **STARTED 2026-09-14** — one install, one finding, not complete | — |
+| 6. The install gate | **STARTED 2026-09-14** — one install, findings 4/4a/4b, not complete | — |
 
 **Lane 1 was re-verified because the artefact under it changed twice.** The
 original pass tested a hand-copied `.command` file naming a git worktree; that
@@ -510,6 +510,59 @@ fix for this lane could only be confirmed by the person who found it — which i
 itself a finding about the lane: **the operator cannot verify lane 6 defects on
 the operator's machine**, by construction, and a second OS version is not
 optional equipment for this gate.
+
+### Finding 4b — measured on 26.6, and the Input Monitoring half is still broken
+
+**2026-09-14, from `scripts/diagnose_permissions.py` run on the reporter's
+machine.** The first hard measurements this lane has produced about an OS
+neither development machine runs.
+
+    macOS 26.6 · Apple_Terminal · python 3.12.0 · copied install
+
+| call | returned | dialog? |
+|---|---|---|
+| `CGPreflightPostEventAccess` | False | — (never prompts) |
+| `CGPreflightListenEventAccess` | False | — (never prompts) |
+| `AXIsProcessTrustedWithOptions(prompt=True)` | False | **YES — opened the Accessibility pane** |
+| `CGRequestPostEventAccess` | False | no |
+| `CGRequestListenEventAccess` | False | **no** |
+
+**Three things are now measured rather than assumed.**
+
+1. **The AX call is correct on 26.6.** It presented the dialog and opened the
+   pane. Finding 4a's replacement was the right call, confirmed on the machine
+   that falsified its predecessor.
+2. **`CGRequestPostEventAccess` does not prompt on 26.6** — same run, same
+   process, no dialog. Finding 4a's diagnosis holds and was not a coincidence
+   of some other state.
+3. **`CGRequestListenEventAccess` does not prompt either, and that is the call
+   Input Monitoring still ships.** Recorded in finding 4a as *unmeasured*; it is
+   now measured, and it is broken. A user on 26.6 gets prompted for
+   Accessibility and silently not for Input Monitoring, then finds one pane
+   populated and the other empty — which is more confusing than the original
+   defect, not less.
+
+**The reporter is unblocked**: he granted both by hand and `manu daemon` now
+runs. That is the end of his block and **not** a verification of the daemon's
+prompt path. His machine is no longer a fresh client, so the question "does
+`manu daemon` raise the dialog on 26.6" has become unanswerable there. It was
+never answered: his one no-prompt `manu daemon` run cannot be attributed, since
+`manu --version` was not captured at the time and the stale-copy explanation was
+never eliminated.
+
+**A timing hypothesis was raised and is dropped.** `_daemon` prints and returns
+within milliseconds of requesting, where the diagnostic makes three more
+framework calls first, and a prompt whose requesting process exits immediately
+could plausibly be torn down before presentation. There is no evidence for it,
+the boring explanation was never excluded, and building against it would be a
+fourth fix aimed at a guess. **Recorded as a hypothesis, not a finding.**
+
+**Open, with evidence: the Input Monitoring half.** The only candidate is
+`IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)`, which needs
+`pyobjc-framework-IOKit` — a fifth pyobjc framework. That is an operator
+decision about a dependency, not an implementation detail. Until it is taken,
+**26.6 users must add their terminal to Input Monitoring by hand**, and the
+README's `+` instructions are load-bearing rather than a fallback.
 
 **What this does not establish.** One person is not the lane. The install was not
 completed to a first dictation, no question list was collected, and the defect

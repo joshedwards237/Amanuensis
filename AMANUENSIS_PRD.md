@@ -1565,11 +1565,18 @@ kept only as a fallback for an install assembled without it, and is **not**
 called in addition — two dialogs for one grant teach precisely the dismissal
 reflex this section worried about.
 
-**Input Monitoring keeps `CGRequestListenEventAccess`.** Its equivalent,
-`IOHIDRequestAccess`, needs `pyobjc-framework-IOKit`, which is a second new
-dependency for a second unverified hypothesis. Whether the Input Monitoring
-half registers on 26.6 is **unmeasured**, and is recorded that way rather than
-assumed to follow Accessibility.
+**Input Monitoring keeps `CGRequestListenEventAccess`, and it is now measured
+to be broken on 26.6.** It was recorded here as unmeasured on the same day;
+`scripts/diagnose_permissions.py` then ran on the reporting machine and showed
+the call returning False and presenting **no dialog**, in the same process where
+the AX call presented one. So a 26.6 user is prompted for Accessibility and
+silently not for Input Monitoring — one pane populated, the other empty, which
+is a worse state to be in than the original defect. The only candidate is
+`IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)`, which needs
+`pyobjc-framework-IOKit`: a fifth pyobjc framework, and an operator decision
+about a dependency rather than an implementation detail. Until it is taken, the
+README's manual `+` instructions are load-bearing for that grant on 26.6 rather
+than a fallback.
 
 So the contract splits in two. `check_permissions` stays exactly as specified —
 non-prompting, safe on the injection path, safe to poll from the tray — and a
