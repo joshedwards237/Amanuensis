@@ -230,6 +230,44 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   not stop, so each new picker is a new chance for a surface to keep reporting
   the value the daemon booted with.
 
+### A fix is unverified until it runs where it can fail
+
+- **Rule**: A fix for a defect observed on a configuration this machine does not
+  have — a different OS version, a fresh permission state, a machine without the
+  grant — is **not verified by a green suite here**. Say so, in the PR and in the
+  gate record, and name the configuration that would falsify it. A test that
+  passes only where the bug cannot occur is evidence about the code and none
+  about the defect.
+- **Enforcement**: none
+- **Tool**: none. There is no mechanical version — the missing configuration is
+  by definition absent from the machine running the check. The enforcement is
+  the disclosure.
+- **Scope**: pr
+- **Notes**: Added 2026-09-14. Lane 6's first install produced three fixes in one
+  day and **the first two did not work**. `CGRequestPostEventAccess` shipped with
+  707 green tests, `mypy --strict` clean, a sabotage check confirming the tests
+  went red without it — and it registered nothing on the reporter's machine. Then
+  the replacement shipped the same way and its Input Monitoring half was measured
+  broken on the same machine hours later.
+
+  Both development surfaces ran **macOS 27.0 with both grants already held**. The
+  failing state — a fresh client on 26.6 — was unreachable here by construction,
+  and the harness could not tell the difference: every check passed for the same
+  reason the bug was invisible. A fresh local user account was created to
+  rehearse the lane and **could not see it either**, because it was a rehearsal
+  on the same OS.
+
+  The cost was three round trips through a second person's afternoon, each one
+  spent testing a hypothesis that could not be tested where it was written. What
+  ended it was not a better guess: it was `scripts/diagnose_permissions.py`,
+  which ran every candidate on the machine that actually failed and returned a
+  table. **Build the instrument before the third fix, not after it.**
+
+  The corollary is about equipment, not discipline. The operator cannot verify
+  lane 6 defects on the operator's machine, and a second OS version is therefore
+  not optional kit for that gate — which is recorded in
+  `docs/gates/phase-4.md` as finding 4a.
+
 ### A gate's reject path has a control of its own
 
 - **Rule**: Every gate that can refuse must have a control demonstrating it

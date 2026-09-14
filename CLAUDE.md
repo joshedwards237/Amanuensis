@@ -15,10 +15,47 @@ PRD, the PRD wins.
 
 ## Status: **Phase 4 built; its gate is unrun** — `docs/gates/phase-4.md`
 
-**Sprint closed 2026-09-11.** Lanes 1, 2 (6/6), 3, 4 and 4b of the Phase 4
-runbook have PASSED and are recorded. **Lane 6 — a second person installing from
-the README unaided — has not been booked, and it is the gate.** Lane 5's two
-open items are G2's disposition and gate finding 1c.
+**Sprint closed 2026-09-14.** Lanes 1, 2 (6/6), 3, 4 and 4b have PASSED and are
+recorded. **Lane 6 started 2026-09-14 and is not complete** — one person, one
+machine, four findings, and he never reached a first dictation. It is still the
+gate. Lane 5's open items are G2's disposition and gate finding 1c.
+
+**Lane 6's first install broke on permissions and it took three fixes, two of
+which did not work.** The product told the user to toggle a row in System
+Settings that it had **guaranteed would not be there**: both permission surfaces
+called only the non-prompting `CGPreflight*` halves, and on macOS a process that
+has never *requested* a grant is not listed in that pane at all. PRD §6.3 had
+specified exactly that, on the reasoning that a login-start daemon must never
+prompt — sound about the steady state, wrong about first run, and resting on a
+premise this product does not have (no login item, and macOS suppresses repeat
+prompts once TCC records a decision). Amended with a dated revision note.
+
+**Then the fix for it failed, and so did half of its replacement.**
+`CGRequestPostEventAccess` shipped with 707 green tests and a sabotage check and
+**registered nothing on macOS 26.6**. `AXIsProcessTrustedWithOptions({prompt:
+True})` is the call that works there — measured, dialog observed — and it cost
+`pyobjc-framework-ApplicationServices` as a runtime dependency. **Input
+Monitoring still uses `CGRequestListenEventAccess` and is measured broken on
+26.6**: a user there is prompted for Accessibility and silently not for Input
+Monitoring, so one pane populates and the other stays empty. Adopting
+`IOHIDRequestAccess` needs `pyobjc-framework-IOKit` — an open operator decision.
+
+**Both development machines ran 27.0 with both grants held, so every check
+passed for the same reason the bug was invisible.** A fresh local user account
+created to rehearse the lane could not see it either — same OS. That is now a
+HARNESS constraint: *a fix is unverified until it runs where it can fail*. What
+ended the sequence was `scripts/diagnose_permissions.py`, which runs every
+candidate API on the machine that actually fails and returns a table. **Build
+the instrument before the third fix.**
+
+**`pip install .` is not editable, and `git pull` does not update it.** That
+cost a round trip on its own — a fix was pulled, concluded not to work, and
+reported against code that was never running. `manu --version` now prints the
+version, the directory the running code is in, and whether git tracks it. The
+check asks whether git **tracks the file**, not whether `git -C` answers: the
+README puts the venv at `.venv/` *inside* the checkout, so `rev-parse` succeeds
+on a copied install and would have called it editable — backwards, and wrong for
+the only person whose install prompted the work. README gains an Update step.
 
 **Lane 4 ran 2026-09-11 and it is nine takes, not ten** — 160 reference words,
 so every figure is a direction rather than a rate. The shipped chain scores
