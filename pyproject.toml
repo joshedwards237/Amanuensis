@@ -45,6 +45,15 @@ dependencies = [
     "faster-whisper>=1.1",
     "numpy>=1.24",
     "platformdirs>=4.0",
+    # Added 2026-09-14, from lane 6. `AXIsProcessTrustedWithOptions` — the one
+    # call that raises the Accessibility dialog and registers this process in
+    # the Settings pane — lives in HIServices, which ships with this
+    # distribution and not with Quartz. It was previously carried only as the
+    # `gate` extra, so a plain `pip install .` had no route to it, and the
+    # remediation sent users to a pane the product could not put them in.
+    # Not the whole family: `pyobjc` would pull in dozens of frameworks for one
+    # function.
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
     "sounddevice>=0.4.6",
@@ -155,6 +164,9 @@ module = [
     # asserted — mypy cannot check a package that does not describe itself.
     "moonshine_onnx.*",
     "ApplicationServices.*",
+    # HIServices ships inside pyobjc-framework-ApplicationServices and carries
+    # no py.typed of its own, so it needs naming separately from its parent.
+    "HIServices.*",
     "Quartz.*",
     "Foundation.*",
     "ctranslate2.*",

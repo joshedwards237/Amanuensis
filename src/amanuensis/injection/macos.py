@@ -134,6 +134,20 @@ def _quartz() -> Any:
     return Quartz
 
 
+def _hiservices() -> Any:
+    """Import HIServices at the point of use, never at module import.
+
+    `AXIsProcessTrustedWithOptions` lives here rather than in Quartz, which is
+    why `pyobjc-framework-ApplicationServices` became a runtime dependency on
+    2026-09-14 — it was previously carried only as the `gate` extra, so a plain
+    `pip install .` had no route to the one API that raises the Accessibility
+    dialog.
+    """
+    import HIServices
+
+    return HIServices
+
+
 #: Bound at module level so the tests can replace it. The paste is
 #: asynchronous — the target application reads the pasteboard on its own run
 #: loop — so restoring immediately would race the paste itself, which is a
@@ -238,8 +252,29 @@ class MacOSInjector(TextInjector):
         grant is held *now*, and the user has not answered the dialog yet;
         worse, the grant is read at launch, so even an immediate yes does not
         help this process. The caller re-runs the command, as the text says.
+
+        **Revised 2026-09-14, and the first version of this did not work.**
+        `CGRequestPostEventAccess` was the obvious twin of the preflight the
+        check uses, and on macOS 26.6 it registered nothing: demonstrably
+        called, no dialog, pane still empty. `AXIsProcessTrustedWithOptions`
+        with the prompt option is the older and better-trodden route to the
+        same grant and is what presents the dialog carrying "Open System
+        Settings". The option must be **True**; the identical call without it
+        is a silent check, which is the behaviour already known not to help.
+
+        The `CGRequest*` call is kept as a fallback for an install assembled
+        without `pyobjc-framework-ApplicationServices`. Not called in addition
+        when the bridge is present: both can present a dialog, and two prompts
+        for one grant teaches exactly the dismissal reflex §6.3 worried about.
         """
-        _quartz().CGRequestPostEventAccess()
+        try:
+            hiservices = _hiservices()
+        except ImportError:
+            _quartz().CGRequestPostEventAccess()
+            return
+        hiservices.AXIsProcessTrustedWithOptions(
+            {hiservices.kAXTrustedCheckOptionPrompt: True}
+        )
 
     def focus_identity(self) -> str | None:
         """The frontmost application's bundle identifier, or None.

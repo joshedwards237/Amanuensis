@@ -380,6 +380,18 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
         def CGRequestListenEventAccess(self) -> bool:
             return False
 
+    class _DeniedAX:
+        """Caught by `_no_real_ax_prompt` on the day that guard was written:
+        this test reached the real bridge, and on a machine without the grant
+        that is a modal dialog in the middle of a pytest run."""
+
+        kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
+
+        @staticmethod
+        def AXIsProcessTrustedWithOptions(options: dict[str, object]) -> bool:
+            return False
+
+    monkeypatch.setattr(macos_injection, "_hiservices", lambda: _DeniedAX)
     monkeypatch.setattr(macos_injection, "_quartz", _Denied)
     monkeypatch.setattr(macos_hotkey, "_quartz", _Denied)
 
@@ -690,7 +702,24 @@ def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
             events.append("request:Input Monitoring")
             return False
 
+    class _FakeHIServices:
+        """Bound so the suite never reaches the real Accessibility bridge.
+
+        `AXIsProcessTrustedWithOptions` with the prompt option **raises a
+        system dialog**. Left unpatched, running pytest on a machine that has
+        not granted Accessibility would put one on the contributor's screen —
+        and a modal dialog blocks the run rather than failing it.
+        """
+
+        kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
+
+        @staticmethod
+        def AXIsProcessTrustedWithOptions(options: dict[str, object]) -> bool:
+            events.append("request:Accessibility")
+            return False
+
     monkeypatch.setattr(macos_injection, "_quartz", lambda: _Denied("inject"))
+    monkeypatch.setattr(macos_injection, "_hiservices", lambda: _FakeHIServices)
     monkeypatch.setattr(macos_hotkey, "_quartz", lambda: _Denied("hotkey"))
 
     real_print = print

@@ -467,6 +467,50 @@ negative kept (the check half **must not**). Verified by sabotage: reverting the
 fix turns all three new tests red, and restoring it turns them green — 701 pass,
 `mypy --strict src/` clean, `ruff check src/ tests/` clean.
 
+### Finding 4a — the fix did not work, and the machine that proved it is the only one that can
+
+**2026-09-14, same day.** He pulled, reinstalled, reran. `grep -c
+CGRequestPostEventAccess` on his installed module returned **1**, so the fix was
+present and running. **No dialog appeared and the Accessibility pane stayed
+empty.**
+
+`sw_vers -productVersion` — **26.6**. Both machines that validated the fix run
+**27.0**: the operator's, and a fresh local user account created to rehearse
+this lane. The one variable nobody controlled is the one that differed, and the
+rehearsal could not see it *because* it was a rehearsal on the same OS.
+
+**Replaced with `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt:
+True})`** — the older route to the same grant, and the one that presents the
+dialog carrying "Open System Settings". The option must be `True`; the identical
+call without it is a silent check, which is the behaviour already known not to
+help. It lives in `HIServices`, so **`pyobjc-framework-ApplicationServices`
+moves from the `gate` extra to a runtime dependency** — verified by building a
+clean `pip install .` before and after: absent before, present after. The
+`CGRequest*` call is kept as a fallback for an install without the bridge and is
+not called in addition, since two dialogs for one grant teach the dismissal
+reflex §6.3 was protecting against.
+
+**Input Monitoring is unchanged and unmeasured on 26.6.** Its equivalent,
+`IOHIDRequestAccess`, needs `pyobjc-framework-IOKit` — a second dependency for a
+second unverified hypothesis. Whether that half registers on 26.6 is not known
+and is not assumed to follow Accessibility.
+
+**A test guard came out of it.** The AX call with the prompt option raises a
+*modal* dialog. On every machine this has been developed on the grant is already
+held, so it returns silently and the hazard is invisible exactly where the suite
+is run; on a fresh contributor's machine the same test puts a dialog on screen,
+and a modal dialog **blocks** a pytest run rather than failing it.
+`tests/conftest.py::_no_real_ax_prompt` is autouse for the same reason
+`_no_real_microphone` is, and **caught a pre-existing test reaching the real
+bridge on its first run**.
+
+**This fix is also unverified against the failure it was written for.** No
+machine here runs 26.6 without the grant. That is now twice in two days that a
+fix for this lane could only be confirmed by the person who found it — which is
+itself a finding about the lane: **the operator cannot verify lane 6 defects on
+the operator's machine**, by construction, and a second OS version is not
+optional equipment for this gate.
+
 **What this does not establish.** One person is not the lane. The install was not
 completed to a first dictation, no question list was collected, and the defect
 above was found in the first five minutes — which says nothing about the rest of

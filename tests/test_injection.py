@@ -141,9 +141,30 @@ class _FakeQuartz:
         )
 
 
+class _FakeHIServices:
+    """The Accessibility-grant bridge.
+
+    `kAXTrustedCheckOptionPrompt` is a CFString whose value is the literal
+    "AXTrustedCheckOptionPrompt"; the fake uses the same string so a test
+    asserting the option is asserting the key the real API reads, not a name
+    this file invented.
+    """
+
+    kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def AXIsProcessTrustedWithOptions(self, options: dict[str, Any]) -> bool:
+        self.calls.append(dict(options))
+        return False
+
+
 @pytest.fixture
 def frameworks(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Swap both pyobjc bridges for fakes and record the sleeps."""
+
+    hiservices = _FakeHIServices()
 
     def install(
         *,
@@ -157,6 +178,7 @@ def frameworks(monkeypatch: pytest.MonkeyPatch) -> Any:
         slept: list[float] = []
         monkeypatch.setattr(macos_injection, "_appkit", lambda: appkit)
         monkeypatch.setattr(macos_injection, "_quartz", lambda: quartz)
+        monkeypatch.setattr(macos_injection, "_hiservices", lambda: hiservices)
         monkeypatch.setattr(macos_injection, "_sleep", slept.append)
         return pasteboard, quartz, slept
 
@@ -539,14 +561,16 @@ def test_focus_identity_survives_an_app_with_no_bundle_id(
 # the negative alone would pass if nothing called the request half at all.
 
 
-def test_requesting_permission_calls_the_prompting_half(frameworks: Any) -> None:
-    """The dialog is what registers the process. Without it the pane the
-    remediation sends the user to has nothing in it."""
-    _, quartz, _ = frameworks(may_post=False)
-
-    MacOSInjector(InjectionConfig()).request_permissions()
-
-    assert quartz.request_calls == 1
+# `test_requesting_permission_calls_the_prompting_half` lived here from
+# 2026-09-14 and asserted `quartz.request_calls == 1`. It was written for the
+# first attempt at this fix, which called `CGRequestPostEventAccess` — and that
+# call turned out not to register the client on macOS 26.6. The assertion was
+# correct about the code and wrong about the world, which is the failure mode a
+# unit test cannot catch on its own. It is superseded rather than kept:
+# `test_requesting_accessibility_prompts_through_the_ax_api` asserts the call
+# that does the work, and
+# `test_the_cg_request_is_the_fallback_when_the_ax_bridge_is_missing` still
+# covers the old one where it still applies.
 
 
 def test_checking_permission_never_prompts(frameworks: Any) -> None:
@@ -564,3 +588,65 @@ def test_checking_permission_never_prompts(frameworks: Any) -> None:
 
     assert quartz.preflight_calls > 0, "the check must actually have run"
     assert quartz.request_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Prompting through the documented Accessibility API (lane 6, 2026-09-14)
+# ---------------------------------------------------------------------------
+#
+# `CGRequestPostEventAccess` was the first attempt and it did not register the
+# client on macOS 26.6 — demonstrably called, no dialog, pane still empty.
+# `AXIsProcessTrustedWithOptions` with the prompt option is the older and
+# better-trodden path to the same grant, and it is what raises the dialog with
+# the "Open System Settings" button.
+
+
+def test_requesting_accessibility_prompts_through_the_ax_api(
+    frameworks: Any,
+) -> None:
+    """The option must be **on**. The same call without it is the silent
+    check, which is the thing that already did not work."""
+    frameworks(may_post=False)
+
+    MacOSInjector(InjectionConfig()).request_permissions()
+
+    calls = macos_injection._hiservices().calls
+    assert len(calls) == 1
+    assert calls[0] == {"AXTrustedCheckOptionPrompt": True}
+
+
+def test_checking_permission_never_prompts_through_the_ax_api(
+    frameworks: Any,
+) -> None:
+    """The negative control, extended to the new surface.
+
+    `check_permissions` runs on `inject()`. An AX call carrying the prompt
+    option on that path would raise a system dialog mid-dictation.
+    """
+    frameworks(may_post=False)
+
+    injector = MacOSInjector(InjectionConfig())
+    injector.check_permissions()
+    injector.inject("words")
+
+    assert macos_injection._hiservices().calls == []
+
+
+def test_the_cg_request_is_the_fallback_when_the_ax_bridge_is_missing(
+    frameworks: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pyobjc-framework-ApplicationServices` is a runtime dependency as of
+    2026-09-14, so this should not happen — but an install that predates the
+    change, or one assembled by hand, should still register the client by the
+    route that at least works somewhere rather than raising ImportError at the
+    moment the user is already stuck."""
+    _, quartz, _ = frameworks(may_post=False)
+
+    def _no_bridge() -> Any:
+        raise ImportError("no ApplicationServices")
+
+    monkeypatch.setattr(macos_injection, "_hiservices", _no_bridge)
+
+    MacOSInjector(InjectionConfig()).request_permissions()
+
+    assert quartz.request_calls == 1
