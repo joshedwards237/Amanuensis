@@ -573,6 +573,7 @@ def _transcribe(config: AppConfig, seconds: float, inject: bool = False) -> int:
 
         status = injector.check_permissions()
         if not status.granted:
+            injector.request_permissions()
             print(f"manu transcribe: {status.remediation}", file=sys.stderr)
             return _EXIT_ERROR
 
@@ -751,12 +752,26 @@ def _daemon(config: AppConfig) -> int:
     # restarts only to be told about the other has been sent to System
     # Settings twice for a condition that was fully known the first time.
     missing = [
-        status
-        for status in (injector.check_permissions(), listener.check_permissions())
+        (surface, status)
+        for surface, status in (
+            (injector, injector.check_permissions()),
+            (listener, listener.check_permissions()),
+        )
         if not status.granted
     ]
     if missing:
-        for status in missing:
+        # Register with TCC *before* printing, and register for every missing
+        # grant rather than stopping at the first. Lane 6, 2026-09-14: the
+        # first person to install from the README followed this remediation to
+        # the Accessibility pane and found an empty list, because a process
+        # that has only preflighted is not listed there. The text was accurate
+        # about where to go and wrong about what would be waiting.
+        #
+        # This is the one place a prompt is allowed. A check has already
+        # failed, the daemon is about to exit, and nothing has been taken.
+        for surface, _ in missing:
+            surface.request_permissions()
+        for _, status in missing:
             print(f"manu daemon: {status.remediation}", file=sys.stderr)
             print(file=sys.stderr)
         return _EXIT_ERROR

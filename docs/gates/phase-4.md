@@ -24,7 +24,7 @@ that waits for the record to be written is a finding that gets rounded off.
 | 4. Ten short corrections | **RUN — n = 9, not 10.** Shipped chain **4.38%**; Moonshine 14.37% / 16.25% | 2026-09-11 |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
 | 5. This record | open | — |
-| 6. The install gate | **not run** — this is the gate | — |
+| 6. The install gate | **STARTED 2026-09-14** — one install, one finding, not complete | — |
 
 **Lane 1 was re-verified because the artefact under it changed twice.** The
 original pass tested a hand-copied `.command` file naming a git worktree; that
@@ -370,6 +370,110 @@ found early by accident rather than by design.
 
 ---
 
+## Lane 6 — first install by a second person (2026-09-14)
+
+**Partial. One person, one machine, unaided, and it found a defect in the first
+five minutes.** This is not the completed lane: it is one install, the question
+list was not collected systematically, and the run stopped at the defect rather
+than reaching a first dictation. Recorded now because a finding that waits for
+the lane to finish is a finding that gets rounded off.
+
+**What happened.** `git clone` through `pip install .` was smooth — their words.
+`manu daemon` then printed both remediation messages, correctly, naming both
+grants and both panes. They ran the `open` command from the first one. **The
+Accessibility list was empty.** No row for their terminal, nothing to toggle,
+and no instruction anywhere that covers an empty list.
+
+Terminal output, verbatim:
+
+```
+(.venv) (base) michaelprior@Not-Jeffs-Mac-Book-Pro Amanuensis % manu daemon
+manu daemon: Amanuensis cannot type into other applications until macOS grants
+Accessibility access. Open the pane:
+
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+
+macOS grants this per application, and it grants it to whatever launched
+`manu` — so look for your terminal in the list (Terminal, iTerm, Ghostty,
+VS Code), not for "Amanuensis". Toggle it on, then run the command again;
+the grant is read once at launch, so an already-running process will not
+notice it.
+
+Input Monitoring is a *separate* permission and is not needed for this —
+it is what the global hotkey will need, and nothing here uses it yet.
+
+manu daemon: Amanuensis cannot see the hotkey until macOS grants Input Monitoring.
+Open the pane:
+
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+
+This is **not** the Accessibility permission. Accessibility lets Amanuensis
+type text into other applications; Input Monitoring lets it see the key you
+press to start. They are granted separately, in different panes, and granting
+one does not grant the other.
+
+macOS grants this per application, and it grants it to whatever launched
+`manu` — so look for your terminal in the list (Terminal, iTerm, Ghostty,
+VS Code), not for "Amanuensis". Toggle it on, then start the daemon again;
+the grant is read at launch, so an already-running process will not notice
+it.
+```
+
+### Finding 4 — the product sent the user to a list it had guaranteed was empty
+
+**Cause, from the code rather than from the report.** Both permission surfaces
+called only the non-prompting half of their pair — `CGPreflightPostEventAccess`
+(`injection/macos.py:214`) and `CGPreflightListenEventAccess`
+(`hotkey/macos.py:310`) — and **nothing in the tree had ever called the
+`CGRequest*` twins.** Preflight asks TCC a question. The request is what
+registers the process as an applicant, which is what puts a row in the pane. No
+request, no row, for the life of the install.
+
+So the remediation was accurate about the pane, accurate about which grant,
+accurate that the name would be the terminal's — and then instructed the user to
+toggle a row the product had ensured would not exist. Every sentence true, the
+whole unusable.
+
+**This was specified, not an oversight.** PRD §6.3 said "Both are the
+non-prompting halves of documented pairs; the `CGRequest*` twins raise a system
+dialog, which a daemon that starts at login must never do at startup." Right
+about the steady state, wrong about first run — and resting on a premise this
+product does not have, since it has no login item (§5.4) and macOS suppresses a
+repeat prompt once TCC records a decision. §6.3 is amended with a dated revision
+note; the disagreement was opened here rather than diverged from silently.
+
+**The discriminator was cheap and was asked.** Two mechanisms produce "no clear
+toggle": an empty list (nothing registered) or a present-but-off row (the URL
+anchor landing on the wrong pane under macOS 26/27). One question — *was the
+list empty, or was your terminal in it and switched off?* — separates them, and
+the answer was **empty**, which eliminates the anchor hypothesis and confirms
+the mechanism above.
+
+**Fixed 2026-09-14.** `request_permissions` on both ABCs, concrete and
+defaulting to a no-op, overridden on macOS, called by the CLI **only** after a
+check has already failed and **for every** missing grant rather than stopping at
+the first. `check_permissions` is untouched and stays non-prompting, which
+matters because it also runs on `inject()` and on `warm_up()`. Both remediation
+texts and README step 4 now say that a dialog may have appeared, that asking is
+what creates the row, and how to add the terminal manually through `+` — the
+picker hides `/System/Applications/Utilities/Terminal.app` until Cmd-Shift-G.
+
+**One harness defect found on the way.** `test_permission_check_does_not_prompt`
+asserted `not hasattr(quartz, "CGRequestListenEventAccess")` — a fact about the
+test double, satisfied by the double not defining the method. No product
+behaviour could falsify it. It now counts calls against the real attribute, with
+a positive control beside it (the request half **must** be called) and the
+negative kept (the check half **must not**). Verified by sabotage: reverting the
+fix turns all three new tests red, and restoring it turns them green — 701 pass,
+`mypy --strict src/` clean, `ruff check src/ tests/` clean.
+
+**What this does not establish.** One person is not the lane. The install was not
+completed to a first dictation, no question list was collected, and the defect
+above was found in the first five minutes — which says nothing about the rest of
+the README. **Lane 6 remains the gate and remains unrun as specified.**
+
+---
+
 ## Work landed after this record opened
 
 Sequenced by `docs/superpowers/slices/overlay-controls.md`, which exists because
@@ -415,6 +519,9 @@ accidentally off — a configuration `cli.py` never runs.
 2. Take the G2 decision.
 3. Run lane 6 with a second person, and paste their question list in verbatim —
    that list is the README's defect report and is the output of the gate.
+   **Started 2026-09-14 and not complete**: one install, stopped at finding 4,
+   no question list collected, no first dictation reached. The finding is fixed;
+   the lane is not discharged by it.
 4. Re-run the G3 packet capture against the assembled product (§9, objection O5)
    and qualify the claim as choice-story #11 requires: packet capture covers this
    process only, and transcripts transit the system clipboard by default.

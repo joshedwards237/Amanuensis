@@ -40,6 +40,23 @@ class TextInjector(ABC):
     def check_permissions(self) -> PermissionStatus:
         """Non-destructive check. Called at startup, surfaced in the tray."""
 
+    def request_permissions(self) -> None:  # noqa: B027 — concrete, see below
+        """Ask the OS to register this process as an applicant. May prompt.
+
+        Added 2026-09-14, from lane 6. A check answers a question; on macOS the
+        *request* is additionally what lists the process in the Settings pane,
+        and a product that only ever checks sends the user to an empty list —
+        which is what happened to the first person to install from the README.
+
+        Called only after `check_permissions` has already failed, and only from
+        the CLI: it must never run on the injection path or from a tray poll.
+
+        Concrete, not abstract, and defaults to doing nothing. A platform with
+        no grant to request has nothing to do here, and a no-op that says so is
+        truthful; an abstract method would force every future implementation to
+        write an empty body to satisfy a contract it has no stake in.
+        """
+
     def focus_identity(self) -> str | None:
         """Who would receive text right now? `None` when it cannot be told.
 

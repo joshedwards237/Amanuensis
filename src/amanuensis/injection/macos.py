@@ -106,10 +106,15 @@ Accessibility access. Open the pane:
     open "{_ACCESSIBILITY_PANE}"
 
 macOS grants this per application, and it grants it to whatever launched
-`manu` — so look for your terminal in the list (Terminal, iTerm, Ghostty,
-VS Code), not for "Amanuensis". Toggle it on, then run the command again;
-the grant is read once at launch, so an already-running process will not
-notice it.
+`manu` — so look for your terminal (Terminal, iTerm, Ghostty, VS Code), not
+for "Amanuensis". Toggle it on, then run the command again; the grant is read
+once at launch, so an already-running process will not notice it.
+
+A macOS dialog may have just appeared. Either answer is fine — asking is what
+puts your terminal in that list, and until something asks, **the list is
+empty**. If you see no row for your terminal even now, add it with the `+`
+button: Terminal lives at /System/Applications/Utilities/Terminal.app, which
+the file picker hides until you press Cmd-Shift-G and paste that path.
 
 Input Monitoring is a *separate* permission and is not needed for this —
 it is what the global hotkey will need, and nothing here uses it yet."""
@@ -218,6 +223,23 @@ class MacOSInjector(TextInjector):
             missing=("Accessibility",),
             remediation=_REMEDIATION,
         )
+
+    def request_permissions(self) -> None:
+        """Register with TCC, which is what puts a row in the pane.
+
+        `CGRequestPostEventAccess` is the prompting half of the pair whose
+        non-prompting half `check_permissions` uses. The prompt is the visible
+        part and it is not the important part: until a process has *requested*
+        the grant, macOS does not list it in Privacy & Security at all, so the
+        remediation above — "look for your terminal in the list" — describes a
+        row that this product had guaranteed would not be there.
+
+        Its return value is deliberately discarded. It reports whether the
+        grant is held *now*, and the user has not answered the dialog yet;
+        worse, the grant is read at launch, so even an immediate yes does not
+        help this process. The caller re-runs the command, as the text says.
+        """
+        _quartz().CGRequestPostEventAccess()
 
     def focus_identity(self) -> str | None:
         """The frontmost application's bundle identifier, or None.

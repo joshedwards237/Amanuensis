@@ -99,10 +99,17 @@ class _FakeQuartz:
         self.stopped = threading.Event()
         self.loops_run = 0
         self.removed_sources: list[Any] = []
+        self.preflight_calls = 0
+        self.request_calls = 0
 
     # -- permission --------------------------------------------------------
 
     def CGPreflightListenEventAccess(self) -> bool:
+        self.preflight_calls += 1
+        return self.granted
+
+    def CGRequestListenEventAccess(self) -> bool:
+        self.request_calls += 1
         return self.granted
 
     # -- tap ---------------------------------------------------------------
@@ -432,11 +439,20 @@ def test_permission_check_does_not_prompt(
     listener: MacOSHotkeyListener, quartz: _FakeQuartz
 ) -> None:
     """Preflight, never request. A daemon that prompts at every start trains
-    the user to dismiss the dialog that matters."""
+    the user to dismiss the dialog that matters.
+
+    **Rewritten 2026-09-14.** This used to assert
+    `not hasattr(quartz, "CGRequestListenEventAccess")` — a fact about the
+    *fake*, which the fake satisfied by not defining the method. It could not
+    fail for the reason it claimed, and it went on passing when the fake grew
+    the symbol would have been the only way to notice. It now counts calls
+    against the real attribute.
+    """
     status = listener.check_permissions()
 
     assert status.granted
-    assert not hasattr(quartz, "CGRequestListenEventAccess")
+    assert quartz.preflight_calls > 0, "the check must actually have run"
+    assert quartz.request_calls == 0
 
 
 def test_missing_permission_names_input_monitoring(
@@ -996,3 +1012,23 @@ def test_the_latch_is_inert_outside_push_to_talk(
     finally:
         if listener.is_running:
             listener.stop()
+
+
+# ---------------------------------------------------------------------------
+# Registering with TCC (§6.3, lane 6 finding 1 — 2026-09-14)
+# ---------------------------------------------------------------------------
+
+
+def test_requesting_permission_calls_the_prompting_half(quartz: _FakeQuartz) -> None:
+    """The positive half of the pair above.
+
+    Input Monitoring behaves as Accessibility does: a process that has only
+    preflighted is not listed in the pane, so the remediation sends the user
+    to an empty list. `CGRequestListenEventAccess` is what puts the row there.
+    """
+    quartz.granted = False
+    listener = MacOSHotkeyListener(HotkeyConfig())
+
+    listener.request_permissions()
+
+    assert quartz.request_calls == 1

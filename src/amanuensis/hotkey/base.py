@@ -69,6 +69,18 @@ class HotkeyListener(ABC):
         dialog every time teaches the user to dismiss whatever it shows them.
         """
 
+    def request_permissions(self) -> None:  # noqa: B027 — concrete, see below
+        """Ask the OS to register this process as an applicant. May prompt.
+
+        Added 2026-09-14, from lane 6, and the twin of `TextInjector`'s. Input
+        Monitoring behaves as Accessibility does: a process that has only
+        preflighted is not listed in its pane, so the remediation this ABC's
+        `check_permissions` hands back names a row that does not exist yet.
+
+        Called only after a failed check, only from the CLI. Concrete and
+        defaulting to nothing, for the reason given on `TextInjector`.
+        """
+
     @property
     @abstractmethod
     def is_running(self) -> bool:
