@@ -713,3 +713,100 @@ def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
     assert events.index("request:Accessibility") < events.index(
         "printed"
     ), "the user was sent to the pane before the process was listed in it"
+
+
+# ---------------------------------------------------------------------------
+# `--version` has to be able to falsify something (2026-09-14)
+# ---------------------------------------------------------------------------
+#
+# It reported a static string. Two installs of different code printed the same
+# answer, which is what made "did you get the fix?" unanswerable by the product
+# and answerable only by grepping site-packages. The README's `pip install .`
+# is non-editable, so `git pull` leaves the running command untouched — the
+# exact situation the flag now has to distinguish.
+
+
+def test_version_names_where_the_code_actually_is(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The version string alone cannot distinguish two builds. The path can."""
+    import amanuensis
+    from amanuensis.cli import main
+
+    with pytest.raises(SystemExit):
+        main(["--version"])
+
+    out = capsys.readouterr().out
+    assert "0.1.0" in out
+    assert str(Path(amanuensis.__file__).parent) in out
+
+
+def test_version_says_when_it_is_running_from_a_checkout(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An editable install follows `git pull`; a copied one does not.
+
+    Which of the two a user has is the single fact that decides whether their
+    `git pull` did anything, so the flag states it rather than making them
+    infer it from a path they have no reason to be able to read.
+    """
+    from amanuensis.cli import main
+
+    monkeypatch.setattr("amanuensis.cli._source_revision", lambda _p: "abc1234")
+
+    with pytest.raises(SystemExit):
+        main(["--version"])
+
+    assert "abc1234" in capsys.readouterr().out
+
+
+def test_version_tells_a_copied_install_how_to_update(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The negative control, and the one that carries the advice.
+
+    A copied install has no revision to report. Saying nothing would leave the
+    user where they started; the point of the flag is that it names the command
+    that makes a pull take effect.
+    """
+    from amanuensis.cli import main
+
+    monkeypatch.setattr("amanuensis.cli._source_revision", lambda _p: None)
+
+    with pytest.raises(SystemExit):
+        main(["--version"])
+
+    out = capsys.readouterr().out
+    assert "pip install" in out
+
+
+def test_an_untracked_copy_inside_the_checkout_is_not_called_editable(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The control for the bug this function was about to ship with.
+
+    The README puts the virtualenv at `.venv/` **inside the checkout**, so a
+    copied install's `site-packages` lives under the repository's own working
+    tree. `git -C` on that path answers perfectly well and `rev-parse` returns
+    the checkout's HEAD — so a revision-only check calls the copy an editable
+    install, which is precisely backwards: it is the install that does *not*
+    follow `git pull`.
+
+    Asserted against a directory inside this repository that git does not
+    track, which is the same shape as `.venv/lib/.../site-packages/amanuensis`.
+    A test using a directory outside any repository passes either way and would
+    have proved nothing.
+    """
+    from amanuensis.cli import _source_revision
+
+    repo_root = Path(__file__).resolve().parent.parent
+    assert (repo_root / ".git").exists(), "this test needs to run from a checkout"
+
+    untracked = repo_root / ".pytest-untracked-probe" / "amanuensis"
+    untracked.mkdir(parents=True, exist_ok=True)
+    (untracked / "__init__.py").write_text("")
+    try:
+        assert _source_revision(untracked) is None
+        assert _source_revision(repo_root / "src" / "amanuensis") is not None
+    finally:
+        shutil.rmtree(repo_root / ".pytest-untracked-probe", ignore_errors=True)

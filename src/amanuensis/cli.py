@@ -48,6 +48,7 @@ recorded ten seconds of audio it cannot deliver.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -95,6 +96,99 @@ def _program_name() -> str:
     return name if name in PROGRAM_NAMES else PROGRAM_NAMES[0]
 
 
+class _RawVersionAction(argparse.Action):
+    """`--version`, printed as written.
+
+    argparse's built-in `version` action runs the string through the help
+    formatter, which re-wraps it into a paragraph — three labelled lines became
+    one run-on sentence with the path broken across it, which is the one thing
+    a person is meant to be able to read at a glance and paste into a report.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        print(_version_report(parser.prog))
+        parser.exit()
+
+
+def _source_revision(package_dir: Path) -> str | None:
+    """The short commit this package's source sits on, or None if it is a copy.
+
+    Added 2026-09-14. The README installs with a plain `pip install .`, which
+    copies the package into `site-packages`; a later `git pull` updates the
+    checkout and leaves the installed command exactly as it was. Two people
+    comparing notes then both run `manu --version`, both read `0.1.0`, and
+    neither can tell that one of them is running last week's code. That
+    happened, and it cost a round trip through `grep` over `site-packages` to
+    resolve.
+
+    `git -C <dir>` rather than reading `.git` by hand: a worktree's `.git` is a
+    file pointing elsewhere and a submodule's is different again, and this is
+    the one command that is right for all of them. Failure in any form —
+    no git, not a repository, a copied install — is None, which is a fact about
+    the install rather than an error to report.
+
+    **`rev-parse` alone is not the check, and getting that wrong is the whole
+    point of this function.** The conventional place for a virtualenv is
+    `.venv/` *inside the checkout*, which is where the README puts it — so a
+    copied install's `site-packages` sits under the repository's own working
+    tree, `git -C` answers happily, and the copy would be reported as following
+    `git pull` when it is the exact thing that does not. So the question asked
+    first is whether git *tracks this file*: the source tree's `__init__.py` is
+    tracked, and the copy under `.venv` is ignored.
+    """
+    init = package_dir / "__init__.py"
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(package_dir), "ls-files", "--error-unmatch", str(init)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if tracked.returncode != 0:
+            return None
+        completed = subprocess.run(
+            ["git", "-C", str(package_dir), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _version_report(prog: str) -> str:
+    """What `--version` prints: the version, the path, and which kind of install.
+
+    The version number alone could not falsify anything — it is the same string
+    before and after any change that does not bump it, which is every change.
+    The path and the revision are the parts that answer the question a user
+    actually has, which is never "what is the version" but "am I running the
+    code I just pulled".
+    """
+    package_dir = Path(__file__).resolve().parent
+    lines = [f"{prog} {__version__}", f"installed at {package_dir}"]
+    revision = _source_revision(package_dir)
+    if revision is None:
+        lines.append(
+            "copied install — `git pull` does not change it; "
+            "re-run `pip install .` from the checkout after pulling"
+        )
+    else:
+        lines.append(f"editable install, source at {revision} — follows `git pull`")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The full `manu` parser. Separate from `main` so tests can inspect it."""
     parser = argparse.ArgumentParser(
@@ -108,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     # is the same small lie as the usage line, and it is the string people
     # paste into bug reports.
     parser.add_argument(
-        "--version", action="version", version=f"{parser.prog} {__version__}"
+        "--version", action=_RawVersionAction, nargs=0, help="show version and exit"
     )
     parser.add_argument(
         "--config",

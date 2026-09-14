@@ -6,7 +6,7 @@ your words appear as text at the cursor in whatever application has focus.
 No account. No network at runtime. No audio leaving the machine.
 
 **There is no packaged app, no installer and no signed binary.** You run it from
-a source checkout, and the install is six steps.
+a source checkout, and the install is five steps.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
@@ -121,7 +121,34 @@ transcript, so what landed was decoded without your `initial_prompt` and is less
 reliable at proper nouns. `⚠` after a dictation means the words were withheld —
 `manu history --last` has them.
 
-### 6. Uninstall
+### 6. Update
+
+```sh
+cd Amanuensis
+git pull
+pip install .          # required — the pull alone changes nothing
+```
+
+**`pip install .` in step 1 is not an editable install.** It copies the package
+into your virtualenv, so `git pull` updates your checkout and leaves the `manu`
+you actually run exactly as it was. This is the ordinary way to get a fix,
+conclude it did not work, and report a bug against code you are not running.
+
+Check which you have at any time:
+
+```sh
+manu --version
+```
+
+It prints the version, the directory the running code is in, and whether that
+directory is a checkout git tracks (**follows `git pull`**) or a copy (**re-run
+`pip install .`**). Restart the daemon afterwards; a running process keeps the
+code it started with.
+
+If you would rather have `git pull` be enough, install editable instead —
+`pip install -e .` — at which point the checkout *is* the installed code.
+
+### 7. Uninstall
 
 ```sh
 manu history --purge                # transcripts, stored audio, and the database
@@ -236,6 +263,9 @@ neither.
 
 ## Troubleshooting
 
+- **I pulled a fix and nothing changed.** `git pull` does not update a
+  non-editable install. Run `pip install .` again and restart the daemon;
+  `manu --version` says which kind of install you have. See step 6.
 - **The Accessibility or Input Monitoring list is empty — there is nothing to
   toggle.** Nothing has asked for the grant yet, and macOS lists a process only
   once it has asked. Run `manu daemon`; it requests both and the rows appear.
