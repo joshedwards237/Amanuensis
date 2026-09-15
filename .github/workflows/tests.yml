@@ -21,6 +21,15 @@
 # which is below the floor; it gets away with it because it runs one standalone
 # script and never installs the package.
 #
+# **mypy's platform is pinned in `pyproject.toml`, not here.** The very first run
+# of this workflow went red on `ipc/factory.py:43` — mypy narrows `sys.platform`
+# to whatever it is *running* on, so on Linux every `if sys.platform !=
+# "darwin": raise` guard makes the implementation beneath it unreachable, and
+# `warn_unreachable` reports it. The code was right and the check was aimed at
+# the wrong platform. `platform = "darwin"` lives in the config rather than as a
+# `--platform` flag here, so a contributor on Linux gets the same answer as CI
+# and as macOS instead of a fourth one.
+#
 # **`black --check` is deliberately absent.** It currently fails on 21 files
 # from a formatter version drift that predates this workflow and is unrelated to
 # any change under test. Adding it would make CI red on arrival and teach

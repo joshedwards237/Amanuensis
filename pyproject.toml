@@ -141,6 +141,16 @@ ignore = [
 # the site depends on the product, the product never on the site.
 exclude = ["^site/"]
 python_version = "3.12"
+# **Type-check as macOS, wherever the check runs.** Added 2026-09-15, the first
+# time the suite ran in CI. `warn_unreachable` below is the point of this line:
+# mypy narrows `sys.platform` to whatever platform it is *running* on, so on
+# Linux every `if sys.platform != "darwin": raise` guard makes the real
+# implementation beneath it unreachable — `ipc/factory.py:43` failed exactly
+# that way on ubuntu while passing on the author's machine. v1 is macOS-only
+# (§3), so darwin is the platform the product's types describe; pinning it here
+# rather than passing `--platform` in CI means a contributor on Linux gets the
+# same answer as CI and as macOS, instead of a fourth one.
+platform = "darwin"
 strict = true
 warn_unreachable = true
 disallow_any_generics = true
