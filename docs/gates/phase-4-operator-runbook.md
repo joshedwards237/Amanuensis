@@ -312,6 +312,27 @@ what was deferred, and what the phase revealed the PRD got wrong.
 
 **This is the gate.** Everything above feeds it.
 
+> **Read this before booking anyone. Updated 2026-09-15, from the aborted
+> first attempt.**
+>
+> **A first reaction cannot be had twice, and the 2026-09-14 attempt spent one.**
+> It produced four findings and never reached a dictation. Every one of them was
+> a permission defect — so it measured the permission model, which is the
+> outcome the subject-choice note below was written to avoid, and it did it
+> without the subject being at fault.
+>
+> **Do not book a subject on macOS 26.x until Input Monitoring is fixed.** That
+> grant has **no working prompt** there — measured, finding 4b — so the pane
+> stays empty and the tester must add their terminal by hand. A fresh subject
+> who hits a defect already written down has been spent on nothing.
+>
+> **The 2026-09-14 attempt is not a resumable run and should not be treated as
+> one.** By the reject criterion at the end of this step it fails on both
+> clauses. It is better read as *disqualified conduct* than as a rejected run:
+> it was untimed, the subject was debugging collaboratively with the author, and
+> hints flowed freely. Either reading forbids continuing it — the next lane 6 is
+> a clean run with a different person.
+
 **Before they arrive:**
 
 1. Decide **who**, and write down which kind of user they are. At n = 1 the
@@ -319,25 +340,56 @@ what was deferred, and what the phase revealed the PRD got wrong.
    list and routes around the gaps this exists to find. A non-technical person
    may spend the whole 30 minutes on the two permission dialogs — and then you
    have measured the permission model, not the README.
-2. Note their **starting environment**: macOS version, whether Python 3.12 is
-   already installed, whether the Xcode command line tools are.
+2. Note their **starting environment**, and capture it as text rather than from
+   memory. Two of 2026-09-14's round trips went to facts nobody had recorded:
+
+   ```sh
+   sw_vers -productVersion        # 26.6 vs 27.0 decided an entire defect
+   python3 --version
+   xcode-select -p                # command line tools present?
+   ```
+
 3. Have them work on **their own machine** if at all possible. A fresh one is
    the point.
+4. **After they install and before anything else, capture what they are
+   running.** `manu --version` prints the version, the directory the code is in,
+   and whether that directory is one git tracks. `pip install .` is not
+   editable, so a later `git pull` changes nothing — and a full round trip of
+   2026-09-14 was spent on a fix that had never run.
 
 **During — the conduct, fixed by §9 in advance:**
 
 - **Say nothing.** No hints. Not one, however uncomfortable it gets.
 - **Stop at 30 minutes**, wherever they are.
-- **Write down every question they ask.** That list *is* the output of this
-  gate. It is the README's defect report.
+- **Write down every question they ask, as they ask it.** That list *is* the
+  output of this gate. It is the README's defect report.
+
+  Capture it as a table, not a conversation. A transcript has to be
+  reconstructed afterwards and reconstruction is where the small questions —
+  the ones a README could actually have answered — get rounded off:
+
+  | # | clock | what they asked or did | which README step | what they did next |
+  |---|---|---|---|---|
+
+  The **clock** column is what turns the list into a measurement. "They asked
+  four questions" and "they asked four questions in the first six minutes and
+  then stopped talking" are different results.
 
 **Point them at:** the repository's `README.md`, section **Install**, and
 nothing else.
 
-**What they will hit, and it is already known:** at step 4 the System Settings
-entry carries **their terminal's name**, not "Amanuensis", because macOS
-attaches the grant to whatever launched the process. The README says so.
-Whether that is enough is precisely what this gate measures.
+**What they will hit, and it is already known.** Two things, and the second is
+the one that ended the last attempt.
+
+- At step 4 the System Settings entry carries **their terminal's name**, not
+  "Amanuensis", because macOS attaches the grant to whatever launched the
+  process. The README says so. Whether that is enough is precisely what this
+  gate measures.
+- **On macOS 26.x the Input Monitoring pane will be empty**, because the call
+  that registers the process presents no dialog there (finding 4b). Accessibility
+  prompts correctly; Input Monitoring does not. If you book a 26.x subject
+  anyway, you are measuring a known defect and you should say so in the record
+  rather than counting their questions against the README.
 
 **Also ask them step 2's overlay question.** They are the only non-author user
 this phase contains, and a first reaction cannot be had twice.

@@ -20,7 +20,7 @@ that waits for the record to be written is a finding that gets rounded off.
 |---|---|---|
 | 1. Daemon starts and stops | **PASS** | 2026-09-03, re-verified 2026-09-08 |
 | 2. Recording panel confidence test (§5.4) | **PASS — 6 / 6**, qualified twice below | 2026-09-08 |
-| 3. Network capture (G3) | **PASS** — 0 sockets, 0 bytes, live control | 2026-09-03 |
+| 3. Network capture (G3) | **PASS** — re-run against the assembled product, 0 sockets, 0 bytes, live control | 2026-09-03, re-run 2026-09-15 |
 | 4. Ten short corrections | **RUN — n = 9, not 10.** Shipped chain **4.38%**; Moonshine 14.37% / 16.25% | 2026-09-11 |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
 | 5. This record | open | — |
@@ -312,12 +312,53 @@ found early by accident rather than by design.
   lane 4b without changing it and reported the gesture worked. That is one hand
   on one day, which is not a measurement of a motor threshold, and §5.3 keeps the
   key marked accordingly.
-- **G2 — the Phase 3 gate deferred this here and it is now actionable.** The
-  engine question is settled: Moonshine is disqualified on G3 grounds and
-  collapses on long form, so 8.59% belongs to the decoder and the chain, and
-  §7.5 records that 99 of 171 edits are a class no rule reaches. §9 permits
-  confirming 5% or moving it with the reason stated; it does not permit silence.
-  **OPERATOR DECISION, NOT YET TAKEN.**
+- **G2 — CONFIRMED AT 5%, and it stays missed. Operator decision, 2026-09-15.**
+  The threshold does not move. The product's measured edit rate is **8.59%**
+  over the Phase 3 corpus and the goal remains **≤ 5%**, carried as debt and
+  revisited at the **Phase 5** gate rather than here.
+
+  The engine question that deferred this is settled. Moonshine is disqualified
+  in both directions — ADR 0001 rejected it on deletions over long form, and
+  lane 4 showed it worse short as well (14.37% and 16.25% against the shipped
+  chain's 4.38%, with 9 and 12 deleted words against faster-whisper's 0). No
+  model size rescues it: `small.en` reaches 7.88% at 4.2× the decode, `base.en`
+  is worse *and* slower, and the stray capitals survive every size. So 8.59%
+  belongs to the decoder and the chain, and §7.5 records that **99 of 171 edits
+  are a class no rule reaches**.
+
+  **Why confirm rather than move, when §9 permits either.** The candidate
+  replacement was 9%, and 9% is 8.59% rounded up. Its only property is that the
+  product passes, which means it cannot be missed by construction — and a target
+  that cannot be missed is not a target. §2 already labels 5% **provisional**,
+  and its own G2 note says a number presented as derived when it was inherited
+  is worse than one labelled a guess. A provisional guess set *before* the data
+  retains the one quality that matters; a number computed from the measurement
+  it judges does not. This repository has the same failure on file at
+  `docs/site/SITE_PRD.md`, where a headline band was chosen from five candidates
+  because it had the best p95.
+
+  **The argument for moving it is not wrong, it is unevidenced.** "5% is strict
+  for this product" may well be true and nothing here can show it: there is no
+  external benchmark, competitor figure or user-tolerance measurement in this
+  repository for what a good dictation edit rate is. §9 requires a *stated
+  reason*, which means one a reader could check. Should such a measurement
+  appear, this decision is the right one to revisit.
+
+  **The attribution escape is closed by the spec.** 163 of 171 edits are the
+  decoder's and the chain missed 8, so a chain-only metric would read ~0.4% and
+  pass. §2's G2 note forbids it: *"Edit rate is the product goal. It measures
+  what the §4 user experiences — how much correcting they had to do."* The user
+  experiences 8.59% whoever caused it.
+
+  **What confirming costs, stated plainly:** v1 ships against a stated goal it
+  visibly misses. That is the intended state. Phase 5 is the phase aimed at the
+  99 unreachable edits, and moving the bar to today's number would remove the
+  only thing that gives Phase 5 a target.
+
+  **This decision does not gate Phase 4.** The single reject criterion in the
+  runbook is lane 6's, line 345. G2 is a decision this record must *contain*,
+  not a bar it must clear, and either answer would have closed the item — which
+  is the reason to take the one that keeps the number honest.
 
 ---
 
@@ -568,6 +609,82 @@ README's `+` instructions are load-bearing rather than a fallback.
 completed to a first dictation, no question list was collected, and the defect
 above was found in the first five minutes — which says nothing about the rest of
 the README. **Lane 6 remains the gate and remains unrun as specified.**
+
+---
+
+## G3 re-run against the assembled product (2026-09-15)
+
+**Objection O5 asked for the capture against the *assembled* product** — tray
+drawn, IPC acceptor listening, event tap installed — rather than against the
+subprocess the default mode spawns, which is a different pid and cannot see a
+daemon running beside it. `--daemon SECONDS` is that mode. **PASS.**
+
+| window | what was running | sockets | bytes in/out | control |
+|---|---|---|---|---|
+| 20 s | daemon idle, tray drawn, acceptor listening | 0 | 0 / 0 | 1 socket, 866 B |
+| 22 s | as above, with a session driven through it | 0 | 0 / 0 | 1 socket, 866 B |
+
+The control saw traffic on both runs, so the instrument was live rather than
+silently broken — which is the failure this project has shipped before
+(`sentinel-integrity-check.sh` globbed the wrong extension and exited 0 with
+"OK (0 checked)").
+
+**What the second window actually covered, and it is not what §9 asked for.**
+The session was driven over the IPC socket with `manu toggle`, not spoken, and
+it **errored** — see finding 5. So the window covers capture and a decode
+attempt and **not a successful injection**. That is weaker evidence in the
+direction §9 wanted and incidentally stronger in another: the *error* path also
+opened no sockets. A capture over a successful spoken dictation is still owed
+and is cheap to take.
+
+**Scope, which travels with the result (choice-story #11) rather than being
+recorded once and dropped.**
+
+- Amanuensis's own sockets only. This says nothing about the rest of the machine.
+- The unix socket behind `manu status` / `manu toggle` is not an internet socket
+  and is correctly absent here. That is a property of the transport, not a
+  finding of this capture.
+- **Transcripts transit the system clipboard by default**, where another process
+  may capture them — measured, Maccy 2.7.0 captured every one. That path is
+  invisible to packet capture, and it is the one place a transcript can leave
+  the machine as a direct consequence of the defaults.
+
+---
+
+## Finding 5 — a toggled session wedged the daemon in ERROR, and the reason is unrecoverable
+
+**2026-09-15, during the G3 re-run above, and it was induced rather than
+observed in use.** A dictation was started and stopped over the IPC socket
+(`manu toggle`, ~6 s, `manu toggle`) with no speech. The daemon entered
+`state error`, **stayed there**, and produced **no history row and no stored
+audio** — the newest `.wav` is still from the previous day, so it failed before
+§8's persist-before-inject write.
+
+`manu status` reports `state error` and cannot say **why**. The text went to the
+daemon's stderr, which belongs to the terminal the operator launched it from —
+so the diagnosis lives in a scrollback this session cannot read, and a restart
+destroys it. **That is the 2026-09-11 finding one layer along**: `on_error` now
+reaches a surface, and the surface a *remote* caller sees still carries no
+reason.
+
+**Not diagnosed, and deliberately not reproduced** — a second attempt would
+overwrite the state that holds the evidence.
+
+**Two things it is evidence for, and one it is not.**
+
+- **"Degrade rather than stall" is a hard constraint** (PRD §5.3, §7.5). A
+  session that wedges the daemon in a terminal state, rather than failing one
+  dictation and returning to `IDLE`, is the stall.
+- **A status verb that reports a failure state without the reason repeats the
+  shape the 2026-09-11 constraint was written for.** `manu status` has room for
+  a sentence and prints a word.
+- **It is not evidence about ordinary use.** The input was silence over the IPC
+  path, which is not how a person dictates, and `toggle` was sent to a daemon in
+  `push_to_talk` mode. Whether an ordinary spoken dictation can reach the same
+  state is **unknown**.
+
+**Open.** The next step is the operator's terminal scrollback, before anything
+restarts that process.
 
 ---
 
