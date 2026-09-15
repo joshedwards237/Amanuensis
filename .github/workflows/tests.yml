@@ -1,0 +1,92 @@
+# The test suite, in CI, from 2026-09-15.
+#
+# Until today nothing in CI ran `pytest`, `mypy --strict src/` or
+# `ruff check src/ tests/`. `harness.yml` checked that the sentinel index was
+# not stale and `site.yml` linted four site scripts; a green PR attested to
+# those and to GitGuardian, and to nothing about the product. Every suite figure
+# in this repository came from a local run, and every merge rested on the author
+# remembering to do one and to report it honestly. On 2026-09-14 seven pull
+# requests merged green in a single day under exactly that arrangement.
+#
+# **macOS, and the first run is why.** This started on ubuntu, because
+# `pyproject.toml` says "v1 is macOS-only (§3), but the test suite is not, and an
+# unconditional pyobjc would make `pip install -e .` fail on the platform where
+# most CI runs". The suite installs there. It does not pass there: **684 passed
+# and 20 failed**, and none of the twenty was a product defect.
+#
+#   - eight import real pyobjc (`No module named 'Foundation'` / `'AppKit'`)
+#   - seven reach a factory that refuses by design — "no text injector for
+#     platform 'linux'", "no control transport for 'linux'"
+#   - one asserts a macOS data directory (`Application Support`)
+#   - two more needed the model cache and had simply never been marked
+#     `requires_weights`, which is a real defect in the suite and is fixed with
+#     this change
+#
+# So the comment in `pyproject.toml` is optimistic: the dependency markers keep
+# the tree *installable* off macOS, which is not the same as the suite being
+# portable. Running the real thing on the real platform is worth more than a
+# faster runner that has to be read past, and macOS runners cost more minutes —
+# that is the trade, taken deliberately.
+#
+# **Python 3.12, matching `requires-python`.** `harness.yml` asks for 3.11,
+# which is below the floor; it gets away with it because it runs one standalone
+# script and never installs the package.
+#
+# **mypy's platform is pinned in `pyproject.toml`, not here.** The very first run
+# of this workflow went red on `ipc/factory.py:43` — mypy narrows `sys.platform`
+# to whatever it is *running* on, so on Linux every `if sys.platform !=
+# "darwin": raise` guard makes the implementation beneath it unreachable, and
+# `warn_unreachable` reports it. The code was right and the check was aimed at
+# the wrong platform. `platform = "darwin"` lives in the config rather than as a
+# `--platform` flag here, so a contributor on Linux gets the same answer as CI
+# and as macOS instead of a fourth one.
+#
+# **`black --check` is deliberately absent.** It currently fails on 21 files
+# from a formatter version drift that predates this workflow and is unrelated to
+# any change under test. Adding it would make CI red on arrival and teach
+# everyone to ignore it, which is worse than not running it. Reformatting the
+# tree is its own change with its own review.
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest, mypy, ruff
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint first: it is the fastest of the three, so a formatting error does
+      # not wait behind a full test run to be reported.
+      - name: "ruff check src/ tests/"
+        run: ruff check src/ tests/
+
+      - name: "mypy --strict src/"
+        run: mypy --strict src/
+
+      - name: pytest
+        run: pytest

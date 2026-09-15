@@ -363,6 +363,40 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
 - **Tool**: harness-enforcer
 - **Scope**: pr
 
+### The suite runs in CI
+
+- **Rule**: `pytest`, `mypy --strict src/` and `ruff check src/ tests/` run on
+  every pull request, in CI, not only on the author's machine.
+- **Enforcement**: deterministic
+- **Tool**: `.github/workflows/tests.yml`
+- **Scope**: pr
+- **Notes**: Added 2026-09-15. Until then **nothing in CI ran the test suite**.
+  `harness.yml` checked the sentinel index; `site.yml` linted four site scripts.
+  A green PR attested to those and to GitGuardian, and to nothing about the
+  product — every suite figure in this repository came from a local run, and
+  every merge rested on the author remembering to do one and to report it
+  honestly. On 2026-09-14 **seven pull requests merged green in a single day**
+  under exactly that arrangement. Nothing went wrong, which is the least
+  reassuring way for that sentence to end.
+
+  **The runner is macos-latest, and it started as ubuntu.** `pyproject.toml`
+  marks the pyobjc dependencies `sys_platform == 'darwin'` so the tree stays
+  installable "on the platform where most CI runs" — which it is, and that is
+  not the same as the suite being portable. On ubuntu: **684 passed, 20 failed,
+  and none of the twenty was a product defect.** Eight import real pyobjc, seven
+  hit factories that refuse by design, one asserts a macOS data directory, and
+  two needed the model cache and had **never been marked `requires_weights`** —
+  a real suite defect that passed on any machine with a cache and failed
+  everywhere else. `mypy` failed separately and first, because it narrows
+  `sys.platform` to the platform it runs on; `platform = "darwin"` now lives in
+  `pyproject.toml` rather than as a CI flag, so every machine gets one answer.
+  macOS runners cost more minutes than ubuntu; a green run that has to be read
+  past costs more than that.
+
+  **`black --check` is deliberately excluded**: it fails on 21 files from a
+  formatter version drift that predates this workflow, and a check that is red
+  on arrival trains people to ignore the whole job.
+
 ### Tests must pass
 
 - **Rule**: The project's test suite must pass with zero failures before
