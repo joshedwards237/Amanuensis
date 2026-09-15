@@ -15,10 +15,37 @@ PRD, the PRD wins.
 
 ## Status: **Phase 4 built; its gate is unrun** — `docs/gates/phase-4.md`
 
-**Sprint closed 2026-09-14.** Lanes 1, 2 (6/6), 3, 4 and 4b have PASSED and are
-recorded. **Lane 6 started 2026-09-14 and is not complete** — one person, one
-machine, four findings, and he never reached a first dictation. It is still the
-gate. Lane 5's open items are G2's disposition and gate finding 1c.
+**Sprint closed 2026-09-14; G2 and G3 closed 2026-09-15.** Lanes 1, 2 (6/6), 3,
+4 and 4b have PASSED. **Lane 6 is the only thing holding the gate.** Its first
+attempt (2026-09-14) is **not resumable** — untimed, collaborative, and it never
+reached a dictation; the next lane 6 is a clean run with a different person.
+**Do not book one on macOS 26.x until Input Monitoring is fixed**: that grant has
+no working prompt there, so a fresh subject would be spent on a defect already
+written down, and a first reaction cannot be had twice.
+
+**G2 is CONFIRMED at 5% and stays missed** (2026-09-15). 8.59% is carried as debt
+and revisited at the **Phase 5** gate. The candidate replacement was 9%, and 9%
+is 8.59% rounded up — a threshold computed from the measurement it judges cannot
+be missed by construction. §2 already labels 5% *provisional*; a guess set before
+the data keeps the one property that matters. The case that 5% is too strict is
+not refuted, it is **unevidenced** — no benchmark, competitor figure or
+user-tolerance measurement exists here, and §9 requires a reason a reader can
+check. Moving the bar now would also remove the only thing that gives Phase 5 a
+target, since §7.5's 99 unreachable edits are what Phase 5 attacks.
+
+**G3 re-ran against the assembled product** (objection O5): 0 sockets and 0 bytes
+over two windows with the tray drawn and the acceptor listening, against a live
+control. The second window covered a session that **errored** rather than a
+successful spoken dictation, so a capture over a real dictation is still owed.
+
+**One open defect from that run.** A session toggled over the IPC socket wedged
+the daemon in `state error` with no history row and no stored audio — it failed
+before §8's persist-before-inject write, which "degrade rather than stall"
+forbids. `manu status` reports the state and **cannot report the reason**: the
+text went to the daemon's stderr, so a remote caller sees a word where the
+constraint wants a sentence. Induced with silence over `toggle`, not observed in
+ordinary use; whether a spoken dictation reaches the same state is unknown.
+Gate finding 5. Lane 5's other open item is finding 1c.
 
 **Lane 6's first install broke on permissions and it took three fixes, two of
 which did not work.** The product told the user to toggle a row in System
