@@ -652,20 +652,32 @@ daemon running beside it. `--daemon SECONDS` is that mode. **PASS.**
 | window | what was running | sockets | bytes in/out | control |
 |---|---|---|---|---|
 | 20 s | daemon idle, tray drawn, acceptor listening | 0 | 0 / 0 | 1 socket, 866 B |
-| 22 s | as above, with a session driven through it | 0 | 0 / 0 | 1 socket, 866 B |
+| 22 s | as above, with a session driven over IPC — it **errored** | 0 | 0 / 0 | 1 socket, 866 B |
+| 40 s | as above, with a **real spoken dictation**, hotkey to cursor | 0 | 0 / 0 | 1 socket, 866 B |
 
 The control saw traffic on both runs, so the instrument was live rather than
 silently broken — which is the failure this project has shipped before
 (`sentinel-integrity-check.sh` globbed the wrong extension and exited 0 with
 "OK (0 checked)").
 
-**What the second window actually covered, and it is not what §9 asked for.**
-The session was driven over the IPC socket with `manu toggle`, not spoken, and
-it **errored** — see finding 5. So the window covers capture and a decode
-attempt and **not a successful injection**. That is weaker evidence in the
-direction §9 wanted and incidentally stronger in another: the *error* path also
-opened no sockets. A capture over a successful spoken dictation is still owed
-and is cheap to take.
+**The third window is the one §9 asked for, and it was taken 2026-09-15.** The
+operator held the binding and spoke; the transcript landed at **19:09:17.7Z**,
+inside the window, with a 440 KB stored `.wav` beside it, and the daemon ended
+the window in `idle` rather than `error` — so the run covered a hotkey press,
+a capture, a decode, §8's persist and an injection that reached the cursor.
+**Zero sockets and zero bytes across all of it.**
+
+That the evidence had to be *looked for* is worth recording. The capture reports
+the daemon's state at both ends and both were `idle`, which is equally
+consistent with a completed dictation and with nobody dictating at all — the
+script says so itself. A row in `history.db` timestamped inside the window is
+what distinguishes them, and a PASS quoted without that check would be a reading
+of an idle process wearing the words "assembled product working".
+
+**The second window is kept rather than replaced.** It covered capture and a
+decode attempt and no successful injection — weaker evidence in the direction §9
+wanted, and incidentally stronger in another, since the *error* path also opened
+no sockets.
 
 **Scope, which travels with the result (choice-story #11) rather than being
 recorded once and dropped.**
@@ -809,6 +821,10 @@ accidentally off — a configuration `cli.py` never runs.
    **Started 2026-09-14 and not complete**: one install, stopped at finding 4,
    no question list collected, no first dictation reached. The finding is fixed;
    the lane is not discharged by it.
-4. Re-run the G3 packet capture against the assembled product (§9, objection O5)
-   and qualify the claim as choice-story #11 requires: packet capture covers this
-   process only, and transcripts transit the system clipboard by default.
+4. ~~Re-run the G3 packet capture against the assembled product (§9, objection
+   O5) and qualify the claim as choice-story #11 requires.~~ **Done 2026-09-15**,
+   three windows, the last over a real spoken dictation confirmed by a
+   `history.db` row inside it. Zero sockets and zero bytes throughout, live
+   control on every run. The qualification travels with the result above:
+   packet capture covers this process only, and transcripts transit the system
+   clipboard by default.

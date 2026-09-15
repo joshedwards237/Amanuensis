@@ -33,10 +33,15 @@ user-tolerance measurement exists here, and §9 requires a reason a reader can
 check. Moving the bar now would also remove the only thing that gives Phase 5 a
 target, since §7.5's 99 unreachable edits are what Phase 5 attacks.
 
-**G3 re-ran against the assembled product** (objection O5): 0 sockets and 0 bytes
-over two windows with the tray drawn and the acceptor listening, against a live
-control. The second window covered a session that **errored** rather than a
-successful spoken dictation, so a capture over a real dictation is still owed.
+**G3 re-ran against the assembled product and is closed** (objection O5): 0
+sockets and 0 bytes over three windows with the tray drawn and the acceptor
+listening, against a live control each time. The third covered a **real spoken
+dictation** — hotkey to cursor, confirmed by a `history.db` row timestamped
+inside the window. That confirmation is not optional: the capture reports the
+daemon's state at both ends and `idle`/`idle` is equally consistent with a
+completed dictation and with nobody dictating, so a PASS quoted without checking
+for the row is a reading of an idle process wearing the words "assembled product
+working".
 
 **Finding 5 was written and withdrawn the same day, and the error is worth more
 than the finding was.** A toggled silent session ended in `state error`, and it
