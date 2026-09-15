@@ -379,15 +379,23 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   under exactly that arrangement. Nothing went wrong, which is the least
   reassuring way for that sentence to end.
 
-  **Two limits, stated rather than discovered later.** The runner is ubuntu,
-  for a macOS-only product: `pyproject.toml` marks the pyobjc dependencies
-  `sys_platform == 'darwin'` precisely so the suite stays installable "on the
-  platform where most CI runs", and every platform bridge is faked. So this
-  checks the portable half and leaves the pyobjc call sites exactly as covered
-  as they were locally — no better, no worse. And **`black --check` is
-  deliberately excluded**: it fails on 21 files from a formatter version drift
-  that predates this workflow, and a check that is red on arrival trains people
-  to ignore the whole job.
+  **The runner is macos-latest, and it started as ubuntu.** `pyproject.toml`
+  marks the pyobjc dependencies `sys_platform == 'darwin'` so the tree stays
+  installable "on the platform where most CI runs" — which it is, and that is
+  not the same as the suite being portable. On ubuntu: **684 passed, 20 failed,
+  and none of the twenty was a product defect.** Eight import real pyobjc, seven
+  hit factories that refuse by design, one asserts a macOS data directory, and
+  two needed the model cache and had **never been marked `requires_weights`** —
+  a real suite defect that passed on any machine with a cache and failed
+  everywhere else. `mypy` failed separately and first, because it narrows
+  `sys.platform` to the platform it runs on; `platform = "darwin"` now lives in
+  `pyproject.toml` rather than as a CI flag, so every machine gets one answer.
+  macOS runners cost more minutes than ubuntu; a green run that has to be read
+  past costs more than that.
+
+  **`black --check` is deliberately excluded**: it fails on 21 files from a
+  formatter version drift that predates this workflow, and a check that is red
+  on arrival trains people to ignore the whole job.
 
 ### Tests must pass
 

@@ -237,15 +237,29 @@ branches are now audited and deleted, and PR #14 was merged with
 Phase 3 close read it that way and it was also a signal.
 
 **CI runs the test suite as of 2026-09-15** — `tests.yml`: `ruff check
-src/ tests/`, `mypy --strict src/` and `pytest`, on ubuntu with Python 3.12.
-Until then nothing in CI ran any of them, and a green PR attested to the harness
-constraints and GitGuardian and nothing about the product; seven merged green in
-one day under that arrangement. **Two limits stay.** Ubuntu exercises only the
-portable half — every platform bridge is faked, so the pyobjc call sites are no
-better covered than in a local run. And **`black --check` is deliberately not in
-CI**: it fails on 21 files from a formatter version drift that predates the
-workflow, and a check that is red on arrival teaches everyone to ignore it.
-Reformatting is its own change.
+src/ tests/`, `mypy --strict src/` and `pytest`, on **macos-latest** with Python
+3.12. Green at 702 passed, 10 skipped. Until then nothing in CI ran any of them,
+and a green PR attested to the harness constraints and GitGuardian and nothing
+about the product; seven merged green in one day under that arrangement.
+
+**It started on ubuntu and that produced two findings in half an hour.**
+`mypy` narrows `sys.platform` to the platform it runs on, so every `if
+sys.platform != "darwin": raise` guard made the implementation beneath it
+unreachable — `ipc/factory.py:43` failed on Linux while passing here. Fixed with
+`platform = "darwin"` in `pyproject.toml` rather than a CI flag, so a
+contributor on Linux gets the same answer as CI and macOS instead of a fourth
+one. Then pytest: **684 passed, 20 failed, and none of the twenty was a product
+defect** — eight import real pyobjc, seven hit factories that refuse by design,
+one asserts `Application Support`, and **two needed the model cache and had
+never been marked `requires_weights`**, which is a genuine suite defect that
+passed on any machine with a cache. **`pyproject.toml`'s comment is optimistic:**
+the dependency markers keep the tree *installable* off macOS, which is not the
+same as the suite being portable, and nothing had checked the difference because
+nothing had ever run it anywhere but here.
+
+**`black --check` is deliberately not in CI**: it fails on 21 files from a
+formatter version drift that predates the workflow, and a check that is red on
+arrival teaches everyone to ignore it. Reformatting is its own change.
 
 ---
 
