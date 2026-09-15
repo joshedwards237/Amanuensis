@@ -568,6 +568,7 @@ def test_an_unreadable_file_is_refused_not_raised_through(tmp_path: Path) -> Non
         target.chmod(0o644)
 
 
+@requires_weights
 def test_a_file_nobody_recorded_is_refused(tmp_path: Path) -> None:
     """The record is complete by construction, so an extra file is an anomaly.
 
@@ -592,6 +593,7 @@ def test_a_file_nobody_recorded_is_refused(tmp_path: Path) -> None:
     assert "payload.bin" in str(exc.value)
 
 
+@requires_weights
 def test_a_dotfile_does_not_fail_verification(tmp_path: Path) -> None:
     """macOS writes `.DS_Store` into any directory opened in Finder.
 

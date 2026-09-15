@@ -8,14 +8,25 @@
 # remembering to do one and to report it honestly. On 2026-09-14 seven pull
 # requests merged green in a single day under exactly that arrangement.
 #
-# **Ubuntu, deliberately, for a macOS-only product.** `pyproject.toml` marks the
-# pyobjc dependencies `sys_platform == 'darwin'` and says why: "v1 is macOS-only
-# (§3), but the test suite is not, and an unconditional pyobjc would make
-# `pip install -e .` fail on the platform where most CI runs." The suite fakes
-# every platform bridge, so this checks the half that is portable. It does not
-# check the half that is not — the pyobjc call sites are exercised only against
-# fakes here, which is the same limit the local run has and is not made worse by
-# the runner.
+# **macOS, and the first run is why.** This started on ubuntu, because
+# `pyproject.toml` says "v1 is macOS-only (§3), but the test suite is not, and an
+# unconditional pyobjc would make `pip install -e .` fail on the platform where
+# most CI runs". The suite installs there. It does not pass there: **684 passed
+# and 20 failed**, and none of the twenty was a product defect.
+#
+#   - eight import real pyobjc (`No module named 'Foundation'` / `'AppKit'`)
+#   - seven reach a factory that refuses by design — "no text injector for
+#     platform 'linux'", "no control transport for 'linux'"
+#   - one asserts a macOS data directory (`Application Support`)
+#   - two more needed the model cache and had simply never been marked
+#     `requires_weights`, which is a real defect in the suite and is fixed with
+#     this change
+#
+# So the comment in `pyproject.toml` is optimistic: the dependency markers keep
+# the tree *installable* off macOS, which is not the same as the suite being
+# portable. Running the real thing on the real platform is worth more than a
+# faster runner that has to be read past, and macOS runners cost more minutes —
+# that is the trade, taken deliberately.
 #
 # **Python 3.12, matching `requires-python`.** `harness.yml` asks for 3.11,
 # which is below the floor; it gets away with it because it runs one standalone
@@ -54,7 +65,7 @@ concurrency:
 jobs:
   test:
     name: pytest, mypy, ruff
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
