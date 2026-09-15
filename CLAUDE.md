@@ -236,11 +236,16 @@ branches are now audited and deleted, and PR #14 was merged with
 `git branch -d` refusing a squash-merged branch is not only bookkeeping — the
 Phase 3 close read it that way and it was also a signal.
 
-**CI does not run the test suite.** `harness.yml` enforces constraints and
-`site.yml` runs `ruff`/`mypy` on four site scripts only. Nothing in CI runs
-`pytest`, `mypy --strict src/`, or `ruff check src/ tests/` — a green PR attests
-to the harness constraints and GitGuardian, not to the tests. Run them locally
-and say so.
+**CI runs the test suite as of 2026-09-15** — `tests.yml`: `ruff check
+src/ tests/`, `mypy --strict src/` and `pytest`, on ubuntu with Python 3.12.
+Until then nothing in CI ran any of them, and a green PR attested to the harness
+constraints and GitGuardian and nothing about the product; seven merged green in
+one day under that arrangement. **Two limits stay.** Ubuntu exercises only the
+portable half — every platform bridge is faked, so the pyobjc call sites are no
+better covered than in a local run. And **`black --check` is deliberately not in
+CI**: it fails on 21 files from a formatter version drift that predates the
+workflow, and a check that is red on arrival teaches everyone to ignore it.
+Reformatting is its own change.
 
 ---
 

@@ -363,6 +363,32 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
 - **Tool**: harness-enforcer
 - **Scope**: pr
 
+### The suite runs in CI
+
+- **Rule**: `pytest`, `mypy --strict src/` and `ruff check src/ tests/` run on
+  every pull request, in CI, not only on the author's machine.
+- **Enforcement**: deterministic
+- **Tool**: `.github/workflows/tests.yml`
+- **Scope**: pr
+- **Notes**: Added 2026-09-15. Until then **nothing in CI ran the test suite**.
+  `harness.yml` checked the sentinel index; `site.yml` linted four site scripts.
+  A green PR attested to those and to GitGuardian, and to nothing about the
+  product — every suite figure in this repository came from a local run, and
+  every merge rested on the author remembering to do one and to report it
+  honestly. On 2026-09-14 **seven pull requests merged green in a single day**
+  under exactly that arrangement. Nothing went wrong, which is the least
+  reassuring way for that sentence to end.
+
+  **Two limits, stated rather than discovered later.** The runner is ubuntu,
+  for a macOS-only product: `pyproject.toml` marks the pyobjc dependencies
+  `sys_platform == 'darwin'` precisely so the suite stays installable "on the
+  platform where most CI runs", and every platform bridge is faked. So this
+  checks the portable half and leaves the pyobjc call sites exactly as covered
+  as they were locally — no better, no worse. And **`black --check` is
+  deliberately excluded**: it fails on 21 files from a formatter version drift
+  that predates this workflow, and a check that is red on arrival trains people
+  to ignore the whole job.
+
 ### Tests must pass
 
 - **Rule**: The project's test suite must pass with zero failures before
