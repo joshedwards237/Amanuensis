@@ -288,6 +288,39 @@ class DictationController:
     def is_running(self) -> bool:
         return self._worker is not None and self._worker.is_alive()
 
+    def _settle_state(self, state: DictationState) -> None:
+        """Publish a *finished* session's terminal state, unless it is stale.
+
+        Gate finding 1c, fixed 2026-09-15. `DictationState` is process-wide and
+        two threads write it for two sessions: `end_session` clears
+        `_recording` before it queues, so a second press passes
+        `start_session`'s guard and sets `RECORDING` while the worker still owns
+        the first session. When that worker finished it published a terminal
+        state for a session that is no longer the one in front of the user —
+        and `cli.py` hands every state straight to `overlay.set_state`, so an
+        `IDLE` arriving here **hid the recording panel over a live
+        microphone**. That is the failure §5.4 exists to name.
+
+        So a terminal state is dropped when a newer session is recording. The
+        process *is* recording; saying otherwise is not a stale opinion, it is
+        a wrong one.
+
+        **`_report_error` is deliberately not routed through this.** The words
+        describing a failure belong to the session that failed and stay
+        truthful whenever they arrive; it is only the *state* that is a claim
+        about the microphone right now.
+
+        **What this does not do.** The signal still carries no session
+        identity, so the check is `_recording is not None` at publication time
+        and a press landing microseconds after it still races. That narrows the
+        window from *every overlapping dictation* to a sliver, and it does not
+        close it — the general shape is S4's, and it is either identity in the
+        signal or an explicit injection event.
+        """
+        if self._recording is not None:
+            return
+        self._set_state(state)
+
     def _set_state(self, state: DictationState) -> None:
         """Record the state and tell whoever is drawing it.
 
@@ -646,7 +679,7 @@ class DictationController:
                 session.timings.persist_ms = (time.perf_counter() - started) * 1000.0
                 session.error = verdict.reason
                 self._report_error(session.error)
-                self._set_state(DictationState.ERROR)
+                self._settle_state(DictationState.ERROR)
                 return
 
             started = time.perf_counter()
@@ -716,15 +749,15 @@ class DictationController:
                 except Exception:
                     pass
             self._report_error(session.error)
-            self._set_state(DictationState.ERROR)
+            self._settle_state(DictationState.ERROR)
             return
 
         self._maybe_sweep()
 
         self._report_error(session.error)
         if session.error:
-            self._set_state(DictationState.ERROR)
+            self._settle_state(DictationState.ERROR)
         elif session.guard is not None and session.guard.chose_retry:
-            self._set_state(DictationState.RECOVERED)
+            self._settle_state(DictationState.RECOVERED)
         else:
-            self._set_state(DictationState.IDLE)
+            self._settle_state(DictationState.IDLE)

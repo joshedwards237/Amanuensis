@@ -38,14 +38,34 @@ over two windows with the tray drawn and the acceptor listening, against a live
 control. The second window covered a session that **errored** rather than a
 successful spoken dictation, so a capture over a real dictation is still owed.
 
-**One open defect from that run.** A session toggled over the IPC socket wedged
-the daemon in `state error` with no history row and no stored audio — it failed
-before §8's persist-before-inject write, which "degrade rather than stall"
-forbids. `manu status` reports the state and **cannot report the reason**: the
-text went to the daemon's stderr, so a remote caller sees a word where the
-constraint wants a sentence. Induced with silence over `toggle`, not observed in
-ordinary use; whether a spoken dictation reaches the same state is unknown.
-Gate finding 5. Lane 5's other open item is finding 1c.
+**Finding 5 was written and withdrawn the same day, and the error is worth more
+than the finding was.** A toggled silent session ended in `state error`, and it
+was called a wedge on two samples taken two minutes apart. It was not: `ERROR`
+is one failed session's terminal state and the next successful dictation sets
+`IDLE`, which three dictations that afternoon duly did. **A state that clears on
+the next session cannot be distinguished from a stuck one until there is a next
+session.** The missing history row was also correct — `write_pending` declines an
+empty transcript by contract. What survives is smaller and real: `manu status`
+names the state and cannot name the reason, because the text goes to the
+daemon's stderr.
+
+**Finding 1c was called "not currently reachable" and is reachable today.**
+`end_session` clears `_recording` before it queues, so a second press sets
+`RECORDING` while the worker still owns the first session; that worker then
+published a terminal state for a session no longer in front of the user, and
+`cli.py` hands every state straight to `overlay.set_state` — so **`IDLE` hid the
+recording panel over a live microphone**, which is §5.4's named failure. Proved
+with a test asserting against `capture.is_recording` at the moment each state is
+emitted, because the sequence of states cannot say whether the microphone was
+open. Fixed by `_settle_state`: a finished session's terminal state is dropped
+when a newer session is recording. `_report_error` is deliberately not routed
+through it. **Still open and narrower** — the signal carries no session identity,
+so a press landing microseconds after the check still races, and the general
+shape stays S4's.
+
+**Both of those are one mistake in two places: reading a process-wide value as
+though it described one session.** 1c names the hazard; finding 5 was the author
+committing it to the gate record on the same day.
 
 **Lane 6's first install broke on permissions and it took three fixes, two of
 which did not work.** The product told the user to toggle a row in System
