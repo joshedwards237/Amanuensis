@@ -207,10 +207,12 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   never the frozen start-up config. A field that can change after start-up and
   is read from `config` is a defect whether or not it is currently stale.
 - **Enforcement**: none
-- **Tool**: none yet. The mechanical version is a check that the `status`
-  handler's response string contains no `config.` read; today nothing tests the
-  assembled string at all, because `_status` is a closure inside `_daemon` and
-  cannot be reached without starting one.
+- **Tool**: none yet, but the obstacle is gone. **`_status_detail` is at module
+  level as of 2026-09-15** and four tests assert the string it assembles — the
+  extraction this constraint carried as its open item from the day it was
+  written. The mechanical version is now writable: a check that the handler
+  reads no `config.` field. Until it exists the tests are the enforcement, and
+  they are tests rather than a constraint check.
 - **Scope**: pr
 - **Notes**: Added 2026-09-11. `manu status` was asked to report the
   microphone. It already reported two other things and **both were answers
@@ -229,6 +231,19 @@ do. Rotation is by day-of-year, so on any given day at most one runs.
   keys are pickable from the menu now and the argument that admitted them does
   not stop, so each new picker is a new chance for a surface to keep reporting
   the value the daemon booted with.
+
+  **Extended 2026-09-15, from gate finding 5.** A live surface must also report
+  *why*, not only *what*. `manu status` answered `state error` and stopped,
+  while the words sat in the daemon's stderr — which belongs to the terminal the
+  daemon was launched from, and `manu status` is asked from a different one. So
+  the product held the reason and the surface that exists to be asked could not
+  say it, and an operator spent a morning hunting scrollback for it. That is the
+  2026-09-11 failure one surface along: "see the terminal" with nothing in the
+  terminal became "state error" with the words somewhere unreachable. The reason
+  is appended **only in `ERROR`** — `_report_error` is not routed through
+  `_settle_state` (finding 1c), so a finished session's message can arrive while
+  a newer one is recording, and a line that always appended it would answer
+  "recording" while naming a failure the user had moved past.
 
 ### A fix is unverified until it runs where it can fail
 

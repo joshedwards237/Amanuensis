@@ -62,6 +62,7 @@ from amanuensis.postprocess.registry import build_chain
 
 if TYPE_CHECKING:  # pragma: no cover — these imports are heavy at runtime
     from amanuensis.audio.vad import TrimResult
+    from amanuensis.controllers.dictation_controller import DictationState
     from amanuensis.injection.base import TextInjector
     from amanuensis.models.session import LatencyBreakdown
     from amanuensis.storage.history import HistoryStore
@@ -114,6 +115,59 @@ class _RawVersionAction(argparse.Action):
     ) -> None:
         print(_version_report(parser.prog))
         parser.exit()
+
+
+def _status_detail(
+    *,
+    model: str,
+    mode: str,
+    microphone: str,
+    state: DictationState,
+    reason: str | None,
+) -> str:
+    """The one line `manu status` answers with.
+
+    **Module-level, and that is the point.** This lived as a closure inside
+    `_daemon` until 2026-09-15, which meant the only way to reach the string was
+    to start a daemon — the tray, the microphone and an AppKit run loop — so
+    nothing tested it. HARNESS.md's 2026-09-11 constraint has carried the
+    extraction as its open item ever since, and the constraint it serves is
+    about exactly this surface.
+
+    **Every field is live, and two of them used to be read from the frozen
+    start-up config.** `mode` is switchable from the tray, so after one menu
+    click `status` reported the mode the daemon started with, indefinitely.
+    `model` was worse in a quieter way: `auto` is the shipped value, so the
+    answer was literally "model auto" while `tiny.en` was loaded. Neither was
+    wrong about the config; both were wrong about the daemon, which is the only
+    thing `status` is for.
+
+    **`reason` is appended only in `ERROR`.** That is a guard, not tidiness.
+    `_report_error` is deliberately not routed through the controller's
+    `_settle_state` (gate finding 1c), so a finished session's message can
+    arrive while a newer session is already recording — and a line that
+    appended whatever reason it was holding would answer "recording" while
+    naming a failure the user has already moved past.
+
+    **No transcript content, ever** (§7.6). A `status` that returned the last
+    transcript would be an egress path G3's packet capture cannot see, which is
+    why the fields are enumerated here rather than assembled from the session.
+    """
+    from amanuensis.controllers.dictation_controller import DictationState
+
+    detail = (
+        f"running: model {model}, "
+        f"mode {mode}, "
+        f"microphone {microphone}, "
+        f"state {state.value}"
+    )
+    if state is DictationState.ERROR and reason:
+        # The words, not a pointer to them. Until 2026-09-11 the tooltip said
+        # "see the terminal" and nothing was written there; until today
+        # `status` said `error` and the words were in a stderr a remote caller
+        # cannot read. Both are the same defect one surface apart.
+        detail += f" — {reason}"
+    return detail
 
 
 def _source_revision(package_dir: Path) -> str | None:
@@ -971,6 +1025,12 @@ def _daemon(config: AppConfig) -> int:
     # controller before the picker is wired and must be safe to call meanwhile.
     device_refresh_box: dict[str, Any] = {"refresh": None}
 
+    #: The last thing `_on_session_error` was told, for `manu status` to name.
+    #: Cleared by the same callback on the next success, because the controller
+    #: reports `session.error` unconditionally and that is `None` when nothing
+    #: went wrong.
+    last_error: dict[str, str | None] = {"message": None}
+
     def _on_state_change(state: DictationState) -> None:
         # Two surfaces, one state, and the fan-out lives here rather than in
         # either of them: §6.2 makes the tray a status surface, and a tray that
@@ -1003,6 +1063,13 @@ def _daemon(config: AppConfig) -> int:
         because a message that only exists in a menu is gone the moment the
         daemon restarts.
         """
+        # Retained as well as printed. stderr belongs to the terminal the
+        # daemon was launched from, so `manu status` in *another* terminal —
+        # which is how the operator actually asks — could see `state error` and
+        # had no route to the words. A dict rather than `nonlocal` for the same
+        # reason `device_refresh_box` is one: this is handed to the controller
+        # before `_status` exists.
+        last_error["message"] = message
         tray.set_error(message)
         if message is not None:
             print(f"dictation failed: {message}", file=sys.stderr, flush=True)
@@ -1103,25 +1170,18 @@ def _daemon(config: AppConfig) -> int:
     # own thread and must not block: `toggle` returns as soon as the controller
     # has been told, never when the dictation finishes.
     def _status() -> Response:
-        # Deliberately no transcript content. §7.6 forbids it — a `status` that
-        # returned the last transcript would open an egress path G3's packet
-        # capture cannot see.
-        # **Every field is read live, and two of them used to be read from
-        # `config`** — the frozen start-up snapshot. `mode` is switchable from
-        # the tray, so after one menu click `status` reported the mode the
-        # daemon started with, indefinitely. `model` was worse in a quieter
-        # way: `auto` is the shipped value and the answer was literally
-        # "model auto" while `tiny.en` was loaded. Neither was wrong about the
-        # config; both were wrong about the daemon, which is the only thing
-        # `status` is for. `describe_device` is built to the same rule — the
-        # microphone that would open, not the substring that selects it.
+        # The string itself is `_status_detail`, at module level, so it can be
+        # asserted without starting a daemon. What stays here is only the
+        # reading of live values — `describe_device` included, which reports
+        # the microphone that would open rather than the substring selecting it.
         return Response(
             ok=True,
-            detail=(
-                f"running: model {engine.model_name}, "
-                f"mode {hotkey_state['mode']}, "
-                f"microphone {capture.describe_device()}, "
-                f"state {tray.state.value}"
+            detail=_status_detail(
+                model=engine.model_name,
+                mode=hotkey_state["mode"],
+                microphone=capture.describe_device(),
+                state=tray.state,
+                reason=last_error["message"],
             ),
         )
 

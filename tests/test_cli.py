@@ -27,6 +27,7 @@ from amanuensis.cli import (
     main,
 )
 from amanuensis.config import InjectionConfig, default_data_dir
+from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.models.results import ClipboardExposure
 
 
@@ -839,3 +840,90 @@ def test_an_untracked_copy_inside_the_checkout_is_not_called_editable(
         assert _source_revision(repo_root / "src" / "amanuensis") is not None
     finally:
         shutil.rmtree(repo_root / ".pytest-untracked-probe", ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# `manu status` assembles a string, and until 2026-09-15 nothing tested it
+# ---------------------------------------------------------------------------
+#
+# `_status` was a closure inside `_daemon`, so the only way to reach the string
+# was to start a daemon — which meant the tray, the microphone and an AppKit
+# run loop. HARNESS.md's 2026-09-11 constraint has carried "extract it so the
+# string can be asserted at all" as its open item ever since. These tests are
+# what that extraction was for.
+
+
+def test_the_status_line_reports_every_live_field() -> None:
+    """The fields exist because each one was, at some point, answered from the
+    frozen start-up config instead of from the daemon."""
+    from amanuensis.cli import _status_detail
+
+    detail = _status_detail(
+        model="tiny.en",
+        mode="toggle",
+        microphone="MacBook Pro Microphone",
+        state=DictationState.IDLE,
+        reason=None,
+    )
+
+    assert "model tiny.en" in detail
+    assert "mode toggle" in detail
+    assert "microphone MacBook Pro Microphone" in detail
+    assert "state idle" in detail
+
+
+def test_an_error_state_names_what_failed() -> None:
+    """Gate finding 5's surviving half. `state error` and nothing else sent the
+    operator to a terminal scrollback for a reason the product was holding."""
+    from amanuensis.cli import _status_detail
+
+    detail = _status_detail(
+        model="tiny.en",
+        mode="push_to_talk",
+        microphone="MacBook Pro Microphone",
+        state=DictationState.ERROR,
+        reason="RuntimeError: the decoder stopped early",
+    )
+
+    assert "state error" in detail
+    assert "RuntimeError: the decoder stopped early" in detail
+
+
+def test_a_reason_is_not_reported_while_the_microphone_is_open() -> None:
+    """The negative control, and it is not hypothetical.
+
+    `_report_error` is deliberately **not** routed through `_settle_state`
+    (gate finding 1c), so a finished session's message can arrive while a newer
+    session is already recording. A status line that appended whatever reason
+    it was holding would then answer "recording" and name a failure that
+    belongs to a dictation the user has already moved on from.
+    """
+    from amanuensis.cli import _status_detail
+
+    detail = _status_detail(
+        model="tiny.en",
+        mode="push_to_talk",
+        microphone="MacBook Pro Microphone",
+        state=DictationState.RECORDING,
+        reason="RuntimeError: a previous session failed",
+    )
+
+    assert "state recording" in detail
+    assert "RuntimeError" not in detail
+
+
+def test_the_status_line_carries_no_transcript() -> None:
+    """§7.6. A `status` that returned transcript text would be an egress path
+    G3's packet capture cannot see, which is why the fields are enumerated
+    rather than assembled from the session."""
+    from amanuensis.cli import _status_detail
+
+    detail = _status_detail(
+        model="tiny.en",
+        mode="push_to_talk",
+        microphone="MacBook Pro Microphone",
+        state=DictationState.ERROR,
+        reason="InjectionError: could not paste",
+    )
+
+    assert "transcript" not in detail.lower()

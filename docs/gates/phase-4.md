@@ -712,7 +712,10 @@ recorded once and dropped.**
 > **What survives, correctly scoped:** `manu status` names the state and cannot
 > name the reason — the text goes to the daemon's stderr, so a remote caller
 > gets a word where the 2026-09-11 constraint wants a sentence. That is a real
-> and much smaller finding than the one written below.
+> and much smaller finding than the one written below. **Fixed 2026-09-15**:
+> `_status_detail` is module-level, the reason is appended in `ERROR`, and the
+> string has tests for the first time — which also closes the extraction the
+> 2026-09-11 constraint had carried as its open item.
 >
 > **And the error has a second use.** Reading a process-wide state value as
 > though it described one session is *precisely* the hazard finding 1c names.
