@@ -258,8 +258,38 @@ reachable** — but the proposed transcribing-fade rule did, which is how it was
 found, and the same hazard sits under anything that infers an event from a
 transition.
 
-**Open.** The fix is either session identity in the signal or an explicit
-injection event; both are S4's decision and neither is built.
+**RESOLVED IN PART, 2026-09-15, and the "not currently reachable" above was
+wrong.** It is reachable today, with nothing more exotic than dictating twice in
+quick succession, and it does not need the transcribing-fade rule that found it.
+
+`end_session` clears `_recording` **before** it queues, so a second press passes
+`start_session`'s guard and sets `RECORDING` while the worker still owns the
+first session. When that worker finished it published a terminal state for a
+session that is no longer the one in front of the user — and `cli.py`'s
+`_on_state_change` hands every state straight to `overlay.set_state`, so an
+`IDLE` arriving there **hid the recording panel over a live microphone.** §5.4's
+named failure, reached without reading the state stream as a sequence at all: a
+single out-of-order terminal state is enough.
+
+**Demonstrated before it was fixed.**
+`test_a_finished_session_does_not_report_idle_over_a_live_microphone` asserts
+against `capture.is_recording` at the moment each state is emitted, rather than
+against the sequence of states — the sequence cannot say whether the microphone
+was open, which is the entire question. It fails against the old code and passes
+against the new, verified by sabotage.
+
+**The fix is a `_settle_state` helper**: a *finished* session's terminal state is
+dropped when a newer session is recording. The process is recording; publishing
+`IDLE` is not a stale opinion but a wrong one. `_report_error` deliberately does
+**not** route through it — the words describing a failure belong to the session
+that failed and stay truthful whenever they arrive; only the *state* is a claim
+about the microphone right now.
+
+**Still open, and narrower.** The signal carries no session identity, so the
+check reads `_recording` at publication time and a press landing microseconds
+later still races. The window goes from *every overlapping dictation* to a
+sliver; it does not close. **The general shape remains S4's** — identity in the
+signal, or an explicit injection event — and this fix does not preclude either.
 
 ---
 
@@ -651,7 +681,47 @@ recorded once and dropped.**
 
 ---
 
-## Finding 5 — a toggled session wedged the daemon in ERROR, and the reason is unrecoverable
+## Finding 5 — WITHDRAWN. The daemon was not wedged; the instrument was two samples
+
+> **Corrected 2026-09-15, hours after it was written.** The central claim below
+> — that the daemon was stuck — **is false**, and the entry is kept rather than
+> deleted because the error it records is more useful than the finding was.
+>
+> `manu status` reported `idle` on the next check, and `history.db` carries
+> successful dictations at **09:17, 09:22 and 09:26** local, after the 09:13
+> test. The daemon returned to `IDLE` on the next successful session and has run
+> normally since.
+>
+> **`ERROR` is the terminal state of one failed session, not a latch.** The
+> worker sets it and the following successful session sets `IDLE`
+> (`dictation_controller.py`, terminal block). It was sampled twice inside two
+> minutes and never again, and a state that clears on the next session is
+> indistinguishable from a stuck one until there *is* a next session. **Two
+> samples of a persistent indicator were read as a wedge.**
+>
+> Two further claims in the entry were also designed behaviour rather than
+> defects. **No history row and no stored audio is correct**: `write_pending`
+> returns False for an empty or whitespace transcript by contract, "so a caller
+> can say nothing was captured rather than reporting a successful write of an
+> empty string" (`storage/history.py:309`). And the session ending in `ERROR` at
+> all is one of three designed routes — the §5.7 guard refusal, a caught
+> exception, or a non-fatal `session.error` such as an injection declined
+> because focus changed. **Which one fired is still unknown**, and with silence
+> sent over `toggle` to a `push_to_talk` daemon, at least two are plausible.
+>
+> **What survives, correctly scoped:** `manu status` names the state and cannot
+> name the reason — the text goes to the daemon's stderr, so a remote caller
+> gets a word where the 2026-09-11 constraint wants a sentence. That is a real
+> and much smaller finding than the one written below.
+>
+> **And the error has a second use.** Reading a process-wide state value as
+> though it described one session is *precisely* the hazard finding 1c names.
+> It was committed to this record by the author on the same day 1c was being
+> called unreachable.
+
+### The entry as originally written, 2026-09-15
+
+
 
 **2026-09-15, during the G3 re-run above, and it was induced rather than
 observed in use.** A dictation was started and stopped over the IPC socket

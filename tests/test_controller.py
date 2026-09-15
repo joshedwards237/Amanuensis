@@ -1557,3 +1557,58 @@ def test_a_failing_capture_stop_does_not_wedge_the_controller() -> None:
         assert made.state is DictationState.RECORDING
     finally:
         made.shutdown()
+
+
+def test_a_finished_session_does_not_report_idle_over_a_live_microphone() -> None:
+    """Gate finding 1c, demonstrated rather than reasoned about (2026-09-15).
+
+    `DictationState` is **process-wide** and two threads write it for two
+    sessions. `end_session` clears `_recording` before it queues, so a second
+    press passes `start_session`'s guard and sets `RECORDING` while the worker
+    still owns the first session — and when that worker finishes it sets the
+    terminal state for a session that is no longer the one in front of the user.
+
+    The consequence is not abstract. `cli.py::_on_state_change` hands every
+    state straight to `overlay.set_state`, so an `IDLE` arriving here **hides
+    the recording panel while the microphone is open.** That is the exact
+    failure §5.4 exists to name: a live microphone with a dead indicator.
+
+    The gate record called this "not currently reachable" because the overlay
+    does not read the state *stream* as a per-session sequence. It does not have
+    to. A single out-of-order terminal state is enough, and this constructs one
+    with nothing more exotic than dictating twice in quick succession — which
+    the controller's own preamble says is designed for.
+
+    Asserted against `capture.is_recording` rather than against the sequence of
+    states, because the sequence alone cannot say whether the microphone was
+    open when a given state was emitted, and that is the whole question.
+    """
+    capture = _FakeCapture()
+    seen: list[tuple[DictationState, bool]] = []
+
+    def _record(state: DictationState) -> None:
+        seen.append((state, capture.is_recording))
+
+    made = _controller(
+        engine=_FakeEngine(delay_s=0.4),
+        capture=capture,
+        on_state_change=_record,
+    )
+    made.start()
+    try:
+        made.start_session()
+        first = made.end_session()
+        # The second press lands while the worker is still inside the decode.
+        made.start_session()
+        first.wait(5.0)
+        assert capture.is_recording, "the second session must still be live"
+        offenders = [s for s, live in seen if live and s is DictationState.IDLE]
+    finally:
+        made.abort_session()
+        made.shutdown()
+
+    assert not offenders, (
+        "a finished session reported IDLE while the microphone was open for the "
+        "next one — cli.py hands this straight to overlay.set_state, so the "
+        "recording panel hides over a live microphone (§5.4, gate finding 1c)"
+    )
