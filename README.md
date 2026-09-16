@@ -5,8 +5,9 @@ your words appear as text at the cursor in whatever application has focus.
 
 No account. No network at runtime. No audio leaving the machine.
 
-**There is no packaged app, no installer and no signed binary.** You run it from
-a source checkout, and the install is five steps.
+**There is no packaged app and no signed binary.** You run it from a source
+checkout — there is a script that does the whole setup for you, and the manual
+path is seven steps.
 [nerd-dictation](https://github.com/ideasman42/nerd-dictation) (Linux) and
 [Talon](https://talonvoice.com/) are the mature alternatives; PRD §1 records why
 this exists alongside them.
@@ -16,6 +17,56 @@ this exists alongside them.
 ## Install
 
 **Requirements:** macOS (PRD §3) and Python **3.12 or later**.
+
+### The short way
+
+One command, and it handles everything below:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/joshedwards237/Amanuensis/main/scripts/bootstrap.sh | bash
+```
+
+It checks what your Mac is missing, tells you what each system dialog is
+**before** it appears, installs what is needed, downloads the model, and raises
+the two permission prompts. It asks before changing anything, never uses `sudo`,
+is safe to run twice, and **refuses to report success if the result does not
+work** — including checking that the speech model is actually resolvable, which
+is the one failure that otherwise looks like a clean install until your first
+dictation.
+
+It cannot grant permissions. Nothing can; macOS reserves that for you. It raises
+the prompts and opens the right pane, and you click.
+
+The rest of this section is the same install by hand.
+
+---
+
+### Before step 1 — what a new Mac does not have
+
+Three things, and a Mac that has never been used for development has none of
+them. This list exists because the first person to try this README got as far as
+`git clone` and no further.
+
+- **Permission for your terminal to read the folder you are working in.** macOS
+  guards `~/Documents`, `~/Desktop` and `~/Downloads`. The first command you run
+  in one of them raises a permission dialog. Working in your **home folder**
+  avoids it entirely, which is where the script above clones to.
+- **The Xcode Command Line Tools.** There is no `git` without them, so `git
+  clone` does not clone — it opens Apple's installer, downloads about a
+  gigabyte, and takes several minutes. Trigger it deliberately with
+  `xcode-select --install` rather than being surprised by it.
+- **Python 3.12.** The Requirements line above is not advice. The command line
+  tools ship an older Python, so `python3.12` will not exist until you install
+  it — from [python.org](https://www.python.org/downloads/macos/), whose
+  installer is a normal Mac `.pkg` and asks for your password itself.
+
+Check all three before starting:
+
+```sh
+sw_vers -productVersion     # macOS version
+xcode-select -p             # a path means the tools are installed
+python3.12 --version        # "command not found" means install it
+```
 
 ### 1. Get the source and install it
 
@@ -269,6 +320,15 @@ neither.
 
 ## Troubleshooting
 
+- **`git clone` opened an Apple installer instead of cloning.** Expected on a
+  Mac that has never built software — there is no `git` until the Command Line
+  Tools are installed. Let it finish, then run the command again. See "Before
+  step 1".
+- **`zsh: command not found: python3.12`.** The command line tools ship an older
+  Python. Install 3.12 from python.org; see "Before step 1".
+- **A dialog asked whether Terminal may access my Documents folder.** macOS
+  guards Documents, Desktop and Downloads. Say yes, or work in your home folder
+  instead, which is what the install script does.
 - **I pulled a fix and nothing changed.** `git pull` does not update a
   non-editable install. Run `pip install .` again and restart the daemon;
   `manu --version` says which kind of install you have. See step 6.
