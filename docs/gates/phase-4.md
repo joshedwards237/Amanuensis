@@ -24,7 +24,7 @@ that waits for the record to be written is a finding that gets rounded off.
 | 4. Ten short corrections | **RUN — n = 9, not 10.** Shipped chain **4.38%**; Moonshine 14.37% / 16.25% | 2026-09-11 |
 | 4b. The latch and the second daemon | **PASS** | 2026-09-10 |
 | 5. This record | open | — |
-| 6. The install gate | **STARTED 2026-09-14** — one install, findings 4/4a/4b, not complete | — |
+| 6. The install gate | **2 attempts, 2 rejects, 0 dictations.** Findings 4/4a/4b, then rejected before step 1 | 2026-09-14, 2026-09-16 |
 
 **Lane 1 was re-verified because the artefact under it changed twice.** The
 original pass tested a hand-copied `.command` file naming a git worktree; that
@@ -634,6 +634,42 @@ fourth fix aimed at a guess. **Recorded as a hypothesis, not a finding.**
 decision about a dependency, not an implementation detail. Until it is taken,
 **26.6 users must add their terminal to Input Monitoring by hand**, and the
 README's `+` instructions are load-bearing rather than a fallback.
+
+### Second attempt, 2026-09-16 — rejected before step 1
+
+**A different person, a machine that had never built software, and it never
+reached a clone.**
+
+    mikecarter@Mikes-MacBook-Pro-3 Documents % git clone https://github.com/joshedwards237/Amanuensis.git
+    xcode-select: note: No developer tools were found, requesting install.
+
+Before that, Terminal itself had to be granted access to `~/Documents`.
+
+**The README's step 1 has three unstated prerequisites, stacked in one code
+block**, and `grep -i 'xcode\|command line tools\|developer tools' README.md`
+returns nothing:
+
+1. **Folder access.** Terminal needs a TCC grant for the directory being cloned
+   into, before a single command runs.
+2. **The Xcode Command Line Tools.** There is no `git` until they are installed —
+   a multi-gigabyte download behind a dialog the README never mentions.
+3. **Python 3.12.** The Requirements line demands it and no step supplies it. The
+   tools ship an older interpreter, so `python3.12 -m venv` was the next wall
+   even had `git` worked.
+
+**Two subjects, two rejects, two different walls.** The first died on permissions
+after installing cleanly; the second died before installing at all. What lane 6
+has measured so far is not the README's prose — it is that **the install path is
+this product's weakest surface, and the daemon is not the problem.**
+
+**This opened Phase 4i** (PRD §9, 2026-09-16): a bootstrap script and a README
+that states its prerequisites, sitting between Phase 4's build and Phase 4's
+gate because lane 6 cannot produce a believable reading until the path to the
+README works.
+
+**Neither attempt is a resumable run** and neither counts as the gate. Lane 6
+still requires a clean run, a different person again, and — per finding 4b — not
+on macOS 26.x.
 
 **What this does not establish.** One person is not the lane. The install was not
 completed to a first dictation, no question list was collected, and the defect
