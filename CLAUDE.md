@@ -13,7 +13,31 @@ PRD, the PRD wins.
 
 ---
 
-## Status: **Phase 4 built; its gate is unrun** — `docs/gates/phase-4.md`
+## Status: **Phase 4i is open; Phase 4's gate cannot run yet** — `docs/gates/phase-4.md`
+
+**Two people have attempted the README's Install section unaided. Neither
+reached a dictation.** The first (2026-09-14) installed cleanly and died on
+permissions. The second (2026-09-16) **never reached a clone** — `git clone` on a
+machine that had never built software opened the Xcode Command Line Tools
+installer, and before that Terminal had to be granted access to `~/Documents`.
+Step 1 has **three unstated prerequisites** in one code block — folder access,
+the command line tools, and Python 3.12, which the Requirements line demands and
+no step supplies — and the README mentions none of them.
+
+So **Phase 4i opened 2026-09-16**: a bootstrap script plus a README that states
+its prerequisites. It sits **between Phase 4's build and Phase 4's gate**, not
+after it, because lane 6 cannot produce a reading anybody should believe until
+the path *to* the README works. Nothing downstream of Phase 4 opens; §9's rule
+holds. **It is not the `.app` bundle** — a script run from Terminal leaves
+Terminal the grant holder, so it automates the typing and keeps the confusing
+part. §5.4's bundle stays in reserve, now with a second and independent argument
+behind it.
+
+What lane 6 has measured so far is not the README's prose. It is that **the
+install path is this product's weakest surface, and the daemon is not the
+problem.**
+
+## Phase 4 — **built; its gate is unrun** — `docs/gates/phase-4.md`
 
 **Sprint closed 2026-09-14; G2 and G3 closed 2026-09-15.** Lanes 1, 2 (6/6), 3,
 4 and 4b have PASSED. **Lane 6 is the only thing holding the gate.** Its first

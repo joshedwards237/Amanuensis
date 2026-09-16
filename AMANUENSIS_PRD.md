@@ -3257,6 +3257,75 @@ the README that packet capture covers Amanuensis's own sockets only, and that
 transcripts transit the system clipboard by default where another process may capture
 them (§7.3). An unqualified "G3 verified" is the failure O12 described.
 
+### Phase 4i — The install lane — **OPENED 2026-09-16, from lane 6**
+
+**This phase exists because the Phase 4 gate could not be run.** It is not Phase
+4's successor and it is not Phase 5; it sits **between Phase 4's build and Phase
+4's gate**, and its passing is a precondition for lane 6 producing a reading
+anybody should believe. §9's rule against beginning phase N+1 before phase N is
+approved is not being bent here — nothing downstream of Phase 4 opens.
+
+**What forced it.** Two people attempted the README's Install section unaided.
+Neither reached a dictation.
+
+- **2026-09-14.** Cloned and installed fine, then `manu daemon` sent him to an
+  Accessibility pane that was empty because the product had never registered as
+  an applicant. Three fixes, two of which did not work. Input Monitoring is
+  **still** unfixed on macOS 26.x.
+- **2026-09-16.** Never got as far as a clone. `git clone` on a machine that had
+  never run developer tools opened the Xcode Command Line Tools installer, and
+  before that Terminal itself had to be granted access to `~/Documents`.
+
+**The README's step 1 has three unstated prerequisites**, stacked in one code
+block, and the document mentions none of them: Terminal's access to the folder
+the user is cloning into; the Xcode Command Line Tools, without which there is
+no `git`; and Python 3.12, which the Requirements line demands and no step
+supplies — the tools ship an older interpreter, so line 3 was the next wall even
+had `git` worked.
+
+**What this phase is.** A bootstrap script, fetched from the repository and run
+once, that checks for each prerequisite, explains what it is about to do before
+each system dialog, installs what is missing, builds the environment, runs
+`manu install`, raises the permission prompts and opens the panes they belong
+to. Plus the README rewritten so the manual path states every prerequisite it
+has always had.
+
+**What this phase is explicitly not.** It is **not** the `.app` bundle, and it
+does not close the problem the bundle closes. macOS attaches every grant to the
+process that launched it, so a script run from Terminal leaves *Terminal* the
+grant holder — the user still hunts for their terminal's name in two panes that
+never say "Amanuensis". The script automates the typing and keeps the confusing
+part. A script fetched from the internet also carries the quarantine bit, so
+Gatekeeper interposes its own dialog. **§5.4's bundle remains in reserve, and
+lane 6 has now produced a second and independent argument for it** — distinct
+from the one §5.4 anticipated, which was the recording panel failing its
+confidence test. That decision stays at the Phase 4 gate; a signed and notarized
+bundle costs an Apple Developer account and a notarization step, which is an
+operator decision and not an implementation detail.
+
+**Gate — what would reject this phase.**
+
+1. **A third person, on a machine that has never built software, reaches a first
+   dictation using only the script and the README.** Same conduct as lane 6:
+   observe silently, no hints, stop at 30 minutes, record every question asked.
+2. **Rejects if** any step of the manual README path still has a prerequisite the
+   README does not state. The test is a reading of the document against a fresh
+   machine, not a memory of what was needed.
+3. **Rejects if** the script does anything irreversible, installs anything
+   without saying what and why first, or requires `sudo` for any step that does
+   not genuinely need it.
+4. **Rejects if** it reports success in any state where the product does not then
+   dictate. A bootstrap that exits 0 into a broken install is worse than one that
+   fails loudly, for the same reason §5.7's guard refuses rather than injects.
+5. **The script's own failure modes are the deliverable**, not its happy path.
+   Record what it does on: no network, an interrupted tools install, a refused
+   permission, a Python already present at the wrong version, and a second run
+   over a completed install.
+
+**This gate does not replace lane 6.** Lane 6 measures the README; this measures
+the path to the point where the README starts. Both are n=1 and neither is
+repeatable with the same person.
+
 ### Phase 5 — LLM second pass — **UNRESOLVED, no longer corpus-blocked** (2026-08-02)
 
 Deferred, then un-deferred, then measured and found not shippable — all on
@@ -3609,6 +3678,7 @@ are generation-side only and its stated failure direction is `likely-underrun`.
 
 | Date | Change |
 |---|---|
+| 2026-09-16 | **Phase 4i opens: the install lane** (§9, `docs/gates/phase-4.md` lane 6). Two people have now attempted the README's Install section unaided and **neither reached a dictation**. The second never reached a clone: `git clone` on a machine that had never built software opened the Xcode Command Line Tools installer, and before that Terminal had to be granted access to `~/Documents`. **Step 1 has three unstated prerequisites stacked in one code block** — folder access, the command line tools, and Python 3.12, which the Requirements line demands and no step supplies. The document mentions none of them. So the phase is a **bootstrap script** that checks each prerequisite, says what it is about to do before every system dialog, installs what is missing, builds the environment, runs `manu install`, raises the permission prompts and opens their panes — plus the README rewritten to state the prerequisites it always had. **It sits between Phase 4's build and Phase 4's gate rather than after it**, because lane 6 cannot produce a reading anybody should believe until the path to the README works; nothing downstream of Phase 4 opens and §9's rule is intact. **It is explicitly not the `.app` bundle and does not close what the bundle closes**: macOS attaches grants to the launching process, so a script run from Terminal leaves Terminal the grant holder and the user still hunts for their terminal's name in panes that never say "Amanuensis" — the script automates the typing and keeps the confusing part, and a downloaded script carries the quarantine bit besides. **§5.4's bundle stays in reserve with a second, independent argument behind it** now, distinct from the recording-panel-fails case §5.4 anticipated; signing and notarisation cost an Apple Developer account and are an operator decision. The gate is a third person on a machine that has never built software reaching a first dictation, and it rejects if the script is silently irreversible, needs `sudo` where it need not, or **exits 0 into an install that does not dictate** — the §5.7 argument one layer out. |
 | 2026-09-15 | **`manu status` names the reason, and the string it assembles is testable at last** (§7.3 floor item 3, §7.6, HARNESS 2026-09-11 constraint, `docs/gates/phase-4.md` finding 5). `_status` was a closure inside `_daemon`, so the only way to reach its output was to start a daemon — tray, microphone and an AppKit run loop — and **nothing tested it**; the constraint written on 2026-09-11 has carried that extraction as its open item ever since. `_status_detail` is now module-level and four tests assert the line, including two controls. **It also answers *why*.** `state error` with no reason is the 2026-09-11 failure one surface along: the tooltip used to say "see the terminal" with nothing written there, and this said `error` with the words in a stderr belonging to the terminal the daemon was launched from — while `manu status` is asked from a different one. `_on_session_error` now retains what it prints, and the controller already reports `session.error` unconditionally, so the next success clears it with `None` rather than needing a second path. **The reason is appended only in `ERROR`, and that is a guard rather than tidiness**: `_report_error` is deliberately not routed through `_settle_state` (finding 1c), so a finished session's message can arrive while a newer session is recording — a line that appended whatever it held would answer "recording" while naming a failure the user had already moved past, which is the negative control. §7.6 is unchanged and re-asserted by a test: **no transcript content crosses this surface**, because a `status` returning the last transcript is an egress path G3's packet capture cannot see. |
 | 2026-09-15 | **G2 is CONFIRMED at 5% and stays missed** (§2, §9, `docs/gates/phase-4.md`). The Phase 3 gate measured **8.59%** against a **≤ 5%** goal and deferred the disposition to the Phase 4 gate; it is taken here and the threshold **does not move**. The engine question that justified deferring is settled — Moonshine is disqualified in both directions (ADR 0001 on long-form deletions; lane 4 at 14.37% / 16.25% short against the shipped chain's 4.38%, with 9 and 12 deleted words against faster-whisper's 0), and no model size rescues it (`small.en` 7.88% at 4.2× the decode, `base.en` worse *and* slower, stray capitals at every size). §7.5 records **99 of 171 edits as a class no rule reaches**. **The candidate replacement was 9%, and 9% is 8.59% rounded up** — a threshold computed from the measurement it judges cannot be missed by construction, and a target that cannot be missed is not a target. §2 already labels 5% *provisional* and its own G2 note warns that a number presented as derived when it was inherited is worse than one labelled a guess; a guess set **before** the data keeps the only property that matters. The case that 5% is too strict for this product is **not refuted, it is unevidenced** — no external benchmark, competitor figure or user-tolerance measurement exists in this repository, and §9 requires a reason a reader can check. **The attribution escape is closed by §2 itself**: 163 of 171 edits are the decoder's, so a chain-only metric would read ~0.4% and pass, but edit rate is defined as what the §4 user experiences and the user experiences 8.59% whoever caused it. Carried as debt and **revisited at the Phase 5 gate**, which is the phase aimed at the 99 — moving the bar to today's number would remove the only thing that gives Phase 5 a target. **This disposition does not gate Phase 4**; the runbook's single reject criterion is lane 6's install walk. |
 | 2026-09-14 | **The Accessibility prompt goes through `AXIsProcessTrustedWithOptions`, and `pyobjc-framework-ApplicationServices` becomes a runtime dependency** (§6.3, §7.6, `docs/gates/phase-4.md` lane 6). The same-day fix that added `CGRequestPostEventAccess` **did not work on macOS 26.6** — verifiably called, no dialog, pane still empty — and both machines that validated it run 27.0, which is the variable nobody controlled. `AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})` is the older and better-trodden route to the same grant; the option must be `True`, since the identical call without it is the silent check that already did not help. It lives in `HIServices`, carried until now only by the `gate` extra — so a plain `pip install .` had no route to the one API that can list the process in the pane its own remediation names. **The dependency is the fourth pyobjc framework and not the `pyobjc` umbrella**, which would pull dozens of frameworks for one function. `CGRequest*` is kept as a fallback for an install assembled without the bridge and is not called in addition, because two dialogs for one grant teach the dismissal reflex §6.3 was protecting against. **Input Monitoring is unchanged and its behaviour on 26.6 is unmeasured** — `IOHIDRequestAccess` needs `pyobjc-framework-IOKit`, a second dependency for a second unverified hypothesis. **A test guard came out of this**: `AXIsProcessTrustedWithOptions` with the prompt option raises a *modal* dialog, which on a machine without the grant blocks a pytest run rather than failing it — and returns silently on every machine this was developed on, so the hazard is invisible exactly where the suite is run. `tests/conftest.py::_no_real_ax_prompt` is autouse for the same reason `_no_real_microphone` is, and caught a pre-existing test reaching the real bridge on its first run. **The fix remains unverified against the failure it was written for**: no machine here runs 26.6 ungranted. |
