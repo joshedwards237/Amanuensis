@@ -208,3 +208,37 @@ def _no_real_ax_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(macos_injection, "_hiservices", _refuse)
+
+
+class RealIOKitBridgeReached(RuntimeError):
+    """A test reached the real IOKit bridge. See `_no_real_hid_prompt`."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_hid_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Input Monitoring half of `_no_real_ax_prompt`, added 2026-09-17.
+
+    `IOHIDRequestAccess` replaced `CGRequestListenEventAccess` on that date and
+    inherits the hazard the fixture above exists for: it presents a modal system
+    dialog on a machine that has not granted Input Monitoring, and returns
+    quietly on one that has. Every machine this is developed on has.
+
+    It was **not** added at the same time as its sibling, and the gap was not
+    theoretical — the first full run after the replacement called the real
+    symbol through `tests/test_cli.py`'s permission test, which had patched the
+    Quartz seam and could not know about a seam that did not exist when it was
+    written. Guarding one bridge and not the other is the shape this repository
+    keeps producing: the fix closed the path the review named and left its
+    sibling open.
+    """
+    from amanuensis.hotkey import macos as macos_hotkey
+
+    def _refuse() -> object:
+        raise RealIOKitBridgeReached(
+            "a test reached the real IOKit bridge. Patch "
+            "`amanuensis.hotkey.macos._iokit_request_access` — see "
+            "tests/conftest.py::_no_real_hid_prompt. Left unpatched this raises "
+            "a modal permission dialog on any machine without the grant."
+        )
+
+    monkeypatch.setattr(macos_hotkey, "_iokit_request_access", _refuse)
