@@ -204,6 +204,9 @@ class _Recorder:
     def cancel(self) -> None:
         self.events.append("cancel")
 
+    def latch(self) -> None:
+        self.events.append("latch")
+
 
 @pytest.fixture
 def quartz(monkeypatch: pytest.MonkeyPatch) -> _FakeQuartz:
@@ -1106,3 +1109,68 @@ def test_requesting_permission_falls_back_when_iokit_will_not_load(
     listener.request_permissions()
 
     assert quartz.request_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# `on_latch` — a notification, not an operation (2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_latching_notifies_once(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """The signal surfaces need in order to behave differently hands-free.
+
+    Emitted **after** `_latched` is set and **outside** the latch lock: a
+    handler that asks whether this is a latched session must not race the field
+    that answers, and one that runs on the event-tap thread must not do so
+    holding a lock that thread needs.
+    """
+    recorder = _Recorder()
+    latch_listener.start(
+        recorder.press, recorder.release, recorder.cancel, recorder.latch
+    )
+
+    _enter_latch(quartz, clock)
+
+    assert recorder.events.count("latch") == 1
+
+
+def test_latching_still_emits_no_cancel(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """The fix `on_latch` must not undo.
+
+    The latch used to fire `on_cancel` then `on_press` — discard the first
+    tap's capture, start again — which blinked the panel out and back across a
+    microphone that never closed, and cost up to `double_tap_ms` of the user's
+    own speech. `on_latch` is a notification: nothing about the session
+    changes, and a regression would show up here as a cancel.
+    """
+    recorder = _Recorder()
+    latch_listener.start(
+        recorder.press, recorder.release, recorder.cancel, recorder.latch
+    )
+
+    _enter_latch(quartz, clock)
+
+    assert recorder.events == ["press", "latch"]
+
+
+def test_a_listener_given_no_latch_callback_still_latches(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """Objection O10's shape, one callback later.
+
+    `_latch_enabled` once gated the entire latch on `on_cancel is not None`, so
+    a caller that passed none silently got no latch at all. `on_latch` is
+    optional for the same reason and must not acquire the same power.
+    """
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release)  # no on_latch
+
+    _enter_latch(quartz, clock)
+    clock.advance(30.0)
+    _tap_at(quartz, clock)
+
+    assert recorder.events == ["press", "release"], "the latch did not engage"

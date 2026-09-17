@@ -42,8 +42,15 @@ class HotkeyListener(ABC):
         on_press: HotkeyCallback,
         on_release: HotkeyCallback,
         on_cancel: HotkeyCallback | None = None,
+        on_latch: HotkeyCallback | None = None,
     ) -> None:
         """Begin listening. Returns once the tap is installed, not when it stops.
+
+        `on_latch` fires once when a double-tap latches — a **notification**,
+        not an operation. Nothing about the session changes: the capture opened
+        on the first press and keeps running (§5.2, as amended). It exists so
+        surfaces that must look different hands-free can learn that they should,
+        without any of them learning what a latch is.
 
         Raises if the OS refuses the tap — on macOS that means Input
         Monitoring has not been granted, which is a startup-time condition the

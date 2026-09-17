@@ -29,12 +29,35 @@ session: **✕** discards the dictation, **✓** ends it and processes.
 
 Two facts make this worth a gate rather than a look.
 
-**The ✕ is the only cancel affordance the product has.** §5.2's latch removes
-your hand from the key, and PRD §7.3's hotkey tap watches `flagsChanged` only —
-it refuses `keyDown` because a tap that watched it would see every character
-typed. So there is no Escape and cannot cheaply be one. If the ✕ is unreachable,
-a latched session has no way out except letting it run to
-`max_duration_seconds`.
+~~**The ✕ is the only cancel affordance the product has.**~~ **The question
+changed on 2026-09-17, and this section records that rather than adjusting for
+it.** The document's own instruction is to say so with the date and the reason
+and *not* to move the threshold, so the threshold does not move.
+
+The original reasoning:
+
+> §5.2's latch removes your hand from the key, and PRD §7.3's hotkey tap
+> watches `flagsChanged` only — it refuses `keyDown` because a tap that watched
+> it would see every character typed. So there is no Escape and cannot cheaply
+> be one. If the ✕ is unreachable, a latched session has no way out except
+> letting it run to `max_duration_seconds`.
+
+**There is now an Escape**, via `RegisterEventHotKey`, which delivers one key
+and never sees another — so the keystroke-surface objection that made this
+impossible does not apply to it. `hotkey/escape.py`, spec §11.
+
+What that does to this criterion, stated rather than assumed:
+
+* **Question 1, reachability, is worth less than it was.** A latched session
+  now has a way out that needs no pointer at all. A ✕ that is hard to hit is a
+  worse product and no longer a trap.
+* **Question 2, discrimination, is worth exactly what it was.** Escape does not
+  help someone who reached for ✓ and hit ✕. The irreversibility in the next
+  paragraph is unchanged: `abort_session` persists nothing, and a mis-hit
+  destroys the dictation with no confirmation and no undo.
+* **A new question this document does not ask**, and should not acquire by
+  amendment: whether users reach for Escape or for the button. That is a
+  different trial with a different criterion, written before it is run.
 
 **The ✕ is irreversible and unguarded** (objection O3). `abort_session` persists
 nothing — §8's guarantee does not reach a session that was never transcribed,

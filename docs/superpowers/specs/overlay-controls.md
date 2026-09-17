@@ -337,14 +337,42 @@ Order: findings 1 and 3 → lane 6 → this.
 
 ## 11. Open, and not decided here
 
-- **There is no Escape-to-cancel, and it cannot cheaply be added.** The request
-  described ✕ as "the UI version of pressing escape". `hotkey/macos.py` watches
-  `kCGEventFlagsChanged` only and refuses `keyDown` by design — "a tap that
-  watched keyDown would see every character the user types, which is a much
-  larger surface than a dictation hotkey needs." An Escape binding means a
-  second tap over every keystroke on the machine, which is a §7.6 decision, not
-  a UI one. **The ✕ is therefore the only cancel affordance the product has**,
-  which raises its importance rather than lowering it.
+- ~~**There is no Escape-to-cancel, and it cannot cheaply be added.**~~
+  **Resolved 2026-09-17: built, and the objection did not survive contact with
+  a second mechanism.** The original text is kept below because the reasoning
+  was sound and only the premise was incomplete.
+
+  > The request described ✕ as "the UI version of pressing escape".
+  > `hotkey/macos.py` watches `kCGEventFlagsChanged` only and refuses `keyDown`
+  > by design — "a tap that watched keyDown would see every character the user
+  > types, which is a much larger surface than a dictation hotkey needs." An
+  > Escape binding means a second tap over every keystroke on the machine,
+  > which is a §7.6 decision, not a UI one. **The ✕ is therefore the only
+  > cancel affordance the product has**, which raises its importance rather
+  > than lowering it.
+
+  All of that is true of a `CGEventTap`, and a tap is the only mechanism this
+  entry considered. **`RegisterEventHotKey` asks the OS for one key combination
+  and is delivered only that combination** — the process is never sent another
+  key, so there is no keystroke surface to weigh and §7.6 has nothing to
+  decide. Carbon, through ctypes, which is the same route and the same
+  no-dependency argument as `IOHIDRequestAccess`. See `hotkey/escape.py`.
+
+  What it costs instead, recorded here because it is a real cost and a
+  different one: **Escape belongs to this process while registered,
+  system-wide.** Registration is therefore scoped to a latched session — taken
+  when the latch closes, given back the moment the microphone is not open, and
+  again on daemon shutdown. A leaked registration is a dead Escape key for
+  every application on the machine.
+
+  **A second finding, and it is the one to remember.** Under a bare
+  `NSRunLoop`, `InstallEventHandler` returns 0, `RegisterEventHotKey` returns 0
+  with a non-null ref, and the handler **never fires**; Carbon's dispatcher is
+  pumped by `NSApplication`. Measured 2026-09-17. That is the exact shape of
+  `CGRequestPostEventAccess`, which shipped with 707 green tests and registered
+  nothing. The daemon runs `NSApplication` through `TrayApp.run`, so it works
+  where it ships — and no test in this repository can say so, because every
+  status code is identical in both configurations.
 - Whether ✓ should also end an **unlatched** hold. Currently release does it;
   no request, and §3's non-goals do not cover it.
 - Whether the controls need a hover state. macOS convention says yes; a panel

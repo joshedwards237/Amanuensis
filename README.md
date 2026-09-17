@@ -168,6 +168,22 @@ Run `python scripts/diagnose_permissions.py` either way — it asks every
 candidate API on your machine and prints what each one answered, which is the
 only way this gets settled.
 
+### Escape cancels a hands-free dictation
+
+Double-tap the hotkey and it latches — your hand comes off the key and the
+dictation keeps running. **Press Escape to throw that dictation away**, or tap
+the hotkey again to finish and process it normally.
+
+A known cost, stated rather than hidden: **while a latched dictation is running,
+Escape belongs to Amanuensis and no other application sees it.** It is taken
+when the latch closes and given back the moment the microphone closes, so it is
+yours again between dictations. Amanuensis does not watch your keyboard to do
+this — it asks macOS for that one key, and is sent no other.
+
+Escape **discards the recording and nothing is saved**. There is no
+confirmation and no undo: the audio was never transcribed, so there is nothing
+in `manu history` to recover.
+
 The grant is read once at launch, so **restart `manu daemon`** after granting —
 a running process does not notice.
 

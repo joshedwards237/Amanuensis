@@ -877,6 +877,7 @@ def _daemon(config: AppConfig) -> int:
         FasterWhisperEngine,
         ModelNotAvailableError,
     )
+    from amanuensis.hotkey.escape import EscapeHotkey
     from amanuensis.hotkey.factory import create_hotkey_listener
     from amanuensis.hotkey.macos import HotkeyPermissionError, UnsupportedBindingError
     from amanuensis.injection.factory import UnsupportedPlatformError, create_injector
@@ -1031,6 +1032,14 @@ def _daemon(config: AppConfig) -> int:
     #: went wrong.
     last_error: dict[str, str | None] = {"message": None}
 
+    # Escape cancels a latched session, and only a latched session. While it is
+    # registered no other application on the machine sees the key — see
+    # `hotkey/escape.py` — so it is taken when the latch closes and given back
+    # the moment the microphone is not open. A hands-free dictation is a window
+    # in which the user is speaking rather than pressing Escape at something
+    # else; the rest of the day it belongs to whatever is frontmost.
+    escape = EscapeHotkey(lambda: controller.abort_session())
+
     def _on_state_change(state: DictationState) -> None:
         # Two surfaces, one state, and the fan-out lives here rather than in
         # either of them: §6.2 makes the tray a status surface, and a tray that
@@ -1038,6 +1047,13 @@ def _daemon(config: AppConfig) -> int:
         # lifetime.
         tray.set_state(state)
         overlay.set_state(state)
+        if state is not DictationState.RECORDING:
+            # Released here rather than on any one end path, because there are
+            # several — a finished session, an abort, an error — and a leaked
+            # registration is not a bug in this product, it is a broken Escape
+            # key on the user's machine. `unregister` is idempotent, so the
+            # states this runs on that never took it cost nothing.
+            escape.unregister()
         if state is DictationState.IDLE:
             # Devices come and go while the daemon runs — a headset connected
             # after start-up is in no menu built at start-up. Idle is the one
@@ -1158,9 +1174,18 @@ def _daemon(config: AppConfig) -> int:
         # microseconds.
         controller.abort_session()
 
+    def _on_latch() -> None:
+        # A notification, not an operation: the capture opened on the first
+        # press and keeps running (§5.2 as amended). Nothing here touches the
+        # session.
+        if not escape.register():
+            # Not fatal and not silent. The ✕ control is the other way out, and
+            # §11 called it the only one for exactly this reason.
+            tray.set_error("Escape is unavailable for this dictation")
+
     try:
         controller.start()
-        listener.start(_start_session, _on_release, _on_cancel)
+        listener.start(_start_session, _on_release, _on_cancel, _on_latch)
     except (ModelNotAvailableError, DeviceNotFoundError, HotkeyPermissionError) as exc:
         controller.shutdown()
         print(f"manu daemon: {exc}", file=sys.stderr)
@@ -1337,6 +1362,10 @@ def _daemon(config: AppConfig) -> int:
         controller.shutdown()
         # The panel says the microphone is live. It outlives neither.
         overlay.hide()
+        # Belt and braces on the one resource whose leak is felt outside this
+        # process: a daemon that exits still holding Escape leaves the key dead
+        # for every other application until reboot.
+        escape.unregister()
         print("stopped.")
     return _EXIT_OK
 
