@@ -306,6 +306,10 @@ class MacOSHotkeyListener(HotkeyListener):
         #: covers exactly one event: the latching press's own release, which is
         #: a tap by every other rule here and would end the latch it opened.
         self._latched = False
+        #: Assigned by `start`. Declared here so a latch arriving before the
+        #: tap is installed — which cannot happen, but has no business being an
+        #: `AttributeError` if it ever does — finds a callback slot.
+        self._on_latch: HotkeyCallback | None = None
         self._pressed_at = 0.0
         self._deferred: Any | None = None
         self._swallow_release = False
@@ -389,6 +393,7 @@ class MacOSHotkeyListener(HotkeyListener):
         on_press: HotkeyCallback,
         on_release: HotkeyCallback,
         on_cancel: HotkeyCallback | None = None,
+        on_latch: HotkeyCallback | None = None,
     ) -> None:
         """Install the tap and begin listening. Returns once it is installed.
 
@@ -414,6 +419,7 @@ class MacOSHotkeyListener(HotkeyListener):
         self._on_press = on_press
         self._on_release = on_release
         self._on_cancel = on_cancel
+        self._on_latch = on_latch
         self._is_down = False
         self._session_open = False
         self._cancel_deferred()
@@ -612,6 +618,12 @@ class MacOSHotkeyListener(HotkeyListener):
             with self._latch_lock:
                 self._latched = True
                 self._swallow_release = True
+            # Fired **after** the flag is set and **outside** the lock. After,
+            # because a handler that asks whether this is a latched session
+            # must not race the field that answers; outside, because it runs
+            # arbitrary caller code on the event-tap thread and holding a lock
+            # across that is how this thread stops servicing the tap.
+            self._fire(self._on_latch)
             return
 
         with self._latch_lock:
