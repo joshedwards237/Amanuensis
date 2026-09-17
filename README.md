@@ -188,12 +188,15 @@ Hold **right-option**, speak, release. The text appears at your cursor in
 whatever application has focus.
 
 **A small pill sits near the edge of your screen the whole time the daemon
-runs** — a single dot while idle, widening into a live waveform while the
-microphone is open. Those are deliberately two different shapes rather than two
-shades of one: a panel that has frozen looks exactly like a resting one, and
+runs** — a short outlined pill while idle, growing into a live waveform while
+the microphone is open. Those are deliberately two different sizes rather than
+two shades of one: a panel that has frozen looks exactly like a resting one, and
 telling "idle" from "stopped" is the whole reason the idle form exists. Turn it
 off with `[feedback] overlay_idle = false` and nothing appears until you
 dictate.
+
+The growth is animated. `[feedback] overlay_animate = false` turns that off, and
+so does macOS's own **Reduce Motion** — you do not have to set both.
 
 There is also a glyph in your
 menu bar — `○` idle, `●` recording, `◐` transcribing — and a panel near the edge

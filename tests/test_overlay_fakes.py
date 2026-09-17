@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 
 class _FakePanel:
@@ -17,6 +17,10 @@ class _FakePanel:
         self.frame: tuple[float, float, float, float] | None = None
         self.content: Any = None
         self.frames_set = 0
+        #: `setFrame:display:animate:` — the call that blocks the main queue
+        #: for the length of the animation. Recorded so a test can assert it is
+        #: never made, which is the only assertion that protects the daemon.
+        self.animated_frames: list[Any] = []
         self.owner: Any = None
 
     def initWithContentRect_styleMask_backing_defer_(
@@ -45,6 +49,13 @@ class _FakePanel:
 
     def setContentView_(self, view: Any) -> None:
         self.content = view
+
+    def setFrame_display_animate_(
+        self, rect: Any, _display: bool, animate: bool
+    ) -> None:
+        if animate:
+            self.animated_frames.append(rect)
+        self.setFrame_display_(rect, _display)
 
     def setFrame_display_(self, rect: Any, _display: bool) -> None:
         self.frame = rect
@@ -109,6 +120,8 @@ class _FakeLayer:
         #: are toggled rather than rebuilt, so this is how a test tells the
         #: idle pill from the recording one.
         self.hidden = False
+        self.border_width = 0.0
+        self.border_color: Any = None
 
     @classmethod
     def layer(cls) -> _FakeLayer:
@@ -125,6 +138,12 @@ class _FakeLayer:
 
     def setBackgroundColor_(self, value: Any) -> None:
         self.background = value
+
+    def setBorderWidth_(self, value: float) -> None:
+        self.border_width = value
+
+    def setBorderColor_(self, value: Any) -> None:
+        self.border_color = value
 
     def setHidden_(self, value: bool) -> None:
         self.hidden = bool(value)
@@ -172,11 +191,58 @@ def install(fake: Any) -> None:
     fake.NSTextField = _FakeTextField
     fake.NSView = _FakeView
     fake.CALayer = _FakeLayer
-    fake.Quartz = type(
-        "Quartz",
-        (),
-        {"CGColorCreateGenericGray": staticmethod(lambda _g, _a: "cgcolor")},
-    )
+    class _FakeQuartz:
+        """`CGColor` plus the `CATransaction` the pill's resize runs inside.
+
+        The transaction is recorded rather than executed. What a test needs to
+        know is the *decision* — how long, and whether animation was disabled —
+        and that is exactly what a real `CATransaction` swallows into the render
+        server where nothing can read it back.
+        """
+
+        transactions: ClassVar[list[dict[str, Any]]] = []
+        _open: ClassVar[list[dict[str, Any]]] = []
+
+        @staticmethod
+        def CGColorCreateGenericGray(_gray: float, _alpha: float) -> str:
+            return "cgcolor"
+
+        @classmethod
+        def CATransactionBegin(cls) -> None:
+            cls._open.append({"duration": None, "disabled": False})
+
+        @classmethod
+        def CATransactionSetAnimationDuration_(cls, value: float) -> None:
+            cls._open[-1]["duration"] = value
+
+        @classmethod
+        def CATransactionSetDisableActions_(cls, value: bool) -> None:
+            cls._open[-1]["disabled"] = bool(value)
+
+        @classmethod
+        def CATransactionCommit(cls) -> None:
+            cls.transactions.append(cls._open.pop())
+
+    _FakeQuartz.transactions = []
+    _FakeQuartz._open = []
+    fake.Quartz = _FakeQuartz
+    # macOS's Reduce Motion switch, read through `NSWorkspace`. Default off:
+    # the animation is the behaviour under test almost everywhere, and a fake
+    # that reduced motion by default would make every animation assertion pass
+    # for the wrong reason.
+    if not hasattr(fake, "reduce_motion"):
+        fake.reduce_motion = False
+
+    class _Workspace:
+        @staticmethod
+        def sharedWorkspace() -> Any:
+            return _Workspace
+
+        @staticmethod
+        def accessibilityDisplayShouldReduceMotion() -> bool:
+            return bool(fake.reduce_motion)
+
+    fake.NSWorkspace = _Workspace
     fake.NSWindowStyleMaskBorderless = 0
     fake.NSWindowStyleMaskNonactivatingPanel = 128
     fake.NSBackingStoreBuffered = 2

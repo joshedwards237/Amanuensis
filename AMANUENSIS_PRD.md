@@ -602,6 +602,13 @@ overlay_idle = true         # added 2026-09-17. Draw the panel while idle, as a
                             # restores the pre-2026-09-17 behaviour — nothing
                             # on screen until RECORDING — and keeps the
                             # recording indicator either way.
+overlay_animate = true      # added 2026-09-17. Animate the growth between the
+                            # idle and recording forms. ON: the transition is
+                            # what tells the user the two pills are the same
+                            # object rather than two unrelated things
+                            # appearing. macOS's Reduce Motion overrides this
+                            # without the user finding the key; this exists for
+                            # someone who wants motion everywhere except here.
 overlay_position = "bottom" # bottom | top. Where the panel sits. It must not
                             # cover the caret in the application being dictated
                             # into, and which edge is safe depends on the user's
@@ -726,7 +733,7 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   alive either way. Two consequences bind:
 
   1. **The idle and recording appearances differ on two independent cues**, not
-     one. Width and motion. Motion alone is rejected: a frozen render is
+     one. Size and motion. Motion alone is rejected: a frozen render is
      indistinguishable from a resting one, which is finding 1 wearing a new
      costume, and the same reasoning already forbids `MIN_BAR_HEIGHT = 0`.
   2. **Nothing but RECORDING may draw the wide, moving form.** The bars are
@@ -741,6 +748,30 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   change fails outright. Lane 2 is re-run on the new panel before the Phase 4
   gate closes. Operator disposition 2026-09-17: build it, re-score, and let
   lane 6 see the panel that ships.
+
+  **Revised 2026-09-17, same day, after seeing it on screen.** The idle form
+  was a 22x22 circle; it is now a short pill — 34x10, wider than tall and
+  thinner than the recording form — with a light hairline border. The circle
+  was chosen so the two forms differed in *shape*; the operator's verdict on
+  using it was that a short pill reads better, and the border earns its place
+  on a different argument: the fill is dark and translucent, so on a white
+  document the pill is an edgeless grey smudge, and an always-present
+  affordance most needs to be legible when the user is writing rather than
+  looking for it.
+
+  Both axes shrink rather than one. Length alone reads as a pill sliding out
+  sideways; changing both makes it read as the same object inflating, which is
+  what tells the user the two forms are one thing in two states.
+
+  **The transition is animated, and the window is what made that possible.**
+  The panel is built at the recording form's size and never resized — the pill
+  *layer* inside it is what grows. `setFrame:display:animate:` on a window
+  blocks the main queue for the whole animation, and this panel's failures
+  terminated the daemon once already (2026-09-02); a `CALayer` animates on the
+  render server and blocks nothing. Off-switchable via `[feedback]
+  overlay_animate`, and **macOS's own Reduce Motion overrides it** without the
+  user having to find the key — someone who set that switch has already said
+  what they want about motion.
 
   Off-switchable via `[feedback] overlay_idle`. On by default — a confidence
   affordance that ships off is one nobody sees — but the pill sits on screen
