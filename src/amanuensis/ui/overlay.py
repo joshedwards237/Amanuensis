@@ -15,12 +15,33 @@ whether this module passes it or repeats the failure it was built to fix:
 `CanJoinAllSpaces` and `FullScreenAuxiliary`. Without the second, the panel is
 invisible in precisely the case the criterion names.
 
-**It shows only while RECORDING, and TRANSCRIBING is the trap.** Transcribing is
-the longest state, it looks busy, and carrying the panel through it is the
-natural thing to do. The microphone is already closed by then, so a panel that
-stayed up would tell the user they were being recorded when they were not. For a
-privacy affordance, an over-report is not the safe direction — it is the
-direction that teaches people to ignore it.
+**Only RECORDING draws the active form, and TRANSCRIBING is the trap.**
+Transcribing is the longest state, it looks busy, and carrying the recording
+appearance through it is the natural thing to do. The microphone is already
+closed by then, so a panel that kept it would tell the user they were being
+recorded when they were not. For a privacy affordance, an over-report is not the
+safe direction — it is the direction that teaches people to ignore it.
+
+**The pill is persistent as of 2026-09-17, and that moves the hazard.** It used
+to be absent when idle; it is now a narrow pill carrying a static dot, widening
+to the full pill with live bars while recording. What this buys is liveness:
+gate finding 1 was a panel that had stopped drawing, which looked exactly like a
+panel with no reason to draw, for days. What it costs is that the user's
+discrimination changes from *presence versus absence* — the easiest kind — to
+*state A versus state B*, which is the direction of §5.4's own named failure.
+
+Two rules follow, and both are load-bearing rather than stylistic:
+
+* **The two forms differ on width *and* motion, never motion alone.** A frozen
+  render is indistinguishable from a resting one, so a motion-only distinction
+  reintroduces finding 1 wearing a new costume. Width survives a frozen render.
+  This is the same argument that already forbids `MIN_BAR_HEIGHT = 0`.
+* **Levels are ignored while idle, not merely unfed.** The capture thread and
+  the state thread are different threads, so a level published microseconds
+  after the microphone closed can still arrive at an idle panel. Honouring it
+  would twitch the idle pill, and a twitching idle pill reads as recording.
+
+`[feedback] overlay_idle = false` restores the previous behaviour exactly.
 
 **It never takes focus.** It appears over the application the user is dictating
 into; taking key focus would send their keystrokes somewhere else, from
@@ -39,20 +60,24 @@ import math
 import threading
 from collections import deque
 from collections.abc import Callable, Sequence
+from enum import Enum
 from typing import Any, Final
 
 from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 
 __all__ = [
+    "ACTIVE_WIDTH",
     "BAR_COUNT",
     "CORNER_RADIUS",
+    "IDLE_WIDTH",
     "MAX_BAR_HEIGHT",
     "OVERLAY_FAILURE_LIMIT",
+    "OverlayMode",
     "RecordingOverlay",
     "bar_heights",
     "frame_for",
-    "should_show",
+    "mode_for",
 ]
 
 #: A pill, not a panel. The first version was 220x44 with the text
@@ -61,6 +86,16 @@ __all__ = [
 #: one question and a moving waveform answers it faster than a label you have to
 #: read. §5.4 asks for *confidence*, which is a glance, not a sentence.
 _WIDTH: Final = 72.0
+#: The recording form's width. Named separately from `_WIDTH` because there are
+#: now two, and a reader asking "how wide is the pill" needs the question to
+#: have an answer per state rather than per module.
+ACTIVE_WIDTH: Final = _WIDTH
+#: The idle form's width. Enough for the dot and its breathing room and no more:
+#: the width difference *is* one of the two cues, so a narrow-ish pill that
+#: reads as "the same pill" would spend the cue without buying it. At 22 it is
+#: exactly the height, which makes the idle form a circle rather than a pill —
+#: a different shape, not merely a shorter one.
+IDLE_WIDTH: Final = 22.0
 _HEIGHT: Final = 22.0
 #: Half the height, so the ends are fully round rather than rounded-off.
 CORNER_RADIUS: Final = _HEIGHT / 2.0
@@ -75,6 +110,9 @@ _BAR_GAP: Final = 3.0
 #: "is it live or is it broken" is the ambiguity §5.4 exists to remove.
 MIN_BAR_HEIGHT: Final = 2.0
 MAX_BAR_HEIGHT: Final = 16.0
+#: The idle dot. Static by construction — see the preamble on why nothing but
+#: RECORDING is allowed to move.
+IDLE_DOT_SIZE: Final = 6.0
 #: Deflection is calibrated to **this operator's measured speech**, not to a
 #: guess. 8,684 blocks across ten of his own takes, 6,461 above the noise
 #: floor:
@@ -130,13 +168,37 @@ _NOISE_FLOOR: Final = 0.005
 _CURVE: Final = 0.5
 
 
-def should_show(state: DictationState) -> bool:
-    """Is the microphone live *right now*?
+class OverlayMode(Enum):
+    """What the panel draws. Three, since 2026-09-17; two before it.
 
-    One state, and the enum is not consulted for anything else. See the module
-    preamble on why TRANSCRIBING is excluded rather than included.
+    An enum rather than the two booleans it replaces. `visible` and `recording`
+    can express a fourth combination — hidden-but-recording — that has no
+    picture, and a state space with an unrepresentable member in it is a bug
+    waiting for the thread that constructs it.
     """
-    return state is DictationState.RECORDING
+
+    HIDDEN = "hidden"
+    IDLE = "idle"
+    ACTIVE = "active"
+
+
+def mode_for(state: DictationState, *, idle_enabled: bool) -> OverlayMode:
+    """Which form the panel takes. Pure, and the privacy rule lives here.
+
+    **`ACTIVE` is returned for exactly one state and no setting changes that.**
+    That is the whole of §5.4's guarantee reduced to one expression: whatever
+    else the panel does, the appearance that says "you are being recorded"
+    follows the microphone and nothing else. See the preamble on why
+    TRANSCRIBING is excluded rather than included — it was the trap when the
+    alternative was hiding, and it is the same trap now that the alternative is
+    the idle form.
+
+    `idle_enabled` decides only what the *other* states draw: the narrow pill,
+    or nothing at all, which is the behaviour before this existed.
+    """
+    if state is DictationState.RECORDING:
+        return OverlayMode.ACTIVE
+    return OverlayMode.IDLE if idle_enabled else OverlayMode.HIDDEN
 
 
 def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
@@ -166,7 +228,10 @@ def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
 
 
 def frame_for(
-    position: str, screen: tuple[float, float, float, float]
+    position: str,
+    screen: tuple[float, float, float, float],
+    *,
+    width: float = ACTIVE_WIDTH,
 ) -> tuple[float, float, float, float]:
     """Panel rect for a screen rect, in AppKit's origin-at-bottom-left space.
 
@@ -176,7 +241,10 @@ def frame_for(
     on a small display without a second display or a small display.
     """
     screen_x, screen_y, screen_width, screen_height = screen
-    width = min(_WIDTH, screen_width)
+    # `width` is the form's width and the screen is the ceiling, in that order.
+    # Both forms are centred on the same point, so the transition between them
+    # reads as a growth from the middle rather than a jump across the screen.
+    width = min(width, screen_width)
     height = min(_HEIGHT, screen_height)
     margin = min(_MARGIN, max(0.0, (screen_height - height) / 2))
 
@@ -220,28 +288,57 @@ class RecordingOverlay:
         #: on the capture thread's hot path.
         self._levels: deque[float] = deque([0.0] * BAR_COUNT, maxlen=BAR_COUNT)
         self._bars: list[Any] = []
+        #: The idle dot's layer. Built with the bars and shown by mode.
+        self._dot: Any | None = None
         self._panel: Any | None = None
-        self._visible = False
+        self._mode = OverlayMode.HIDDEN
         #: Guards `_panel` and `_visible`. Set from the event tap and the
         #: worker, drawn on the main queue — the indicator's shape exactly.
         self._lock = threading.Lock()
 
     @property
     def visible(self) -> bool:
-        return self._visible
+        return self._mode is not OverlayMode.HIDDEN
+
+    @property
+    def mode(self) -> OverlayMode:
+        return self._mode
+
+    def start(self) -> None:
+        """Draw the idle pill, before any dictation has happened.
+
+        Separate from `set_state` because the daemon emits no state until its
+        first session, and the period before that is exactly when a user is
+        wondering whether the thing is running. `cli.py` calls this once the
+        daemon is up.
+
+        A no-op when `[feedback] overlay_idle` is off — that setting's whole
+        content is that nothing appears until RECORDING.
+        """
+        self._apply(mode_for(DictationState.IDLE, idle_enabled=self._idle_enabled))
+
+    @property
+    def _idle_enabled(self) -> bool:
+        return self._config.overlay_idle
 
     def set_state(self, state: DictationState) -> None:
         """Safe from any thread, and safe before anything is shown."""
+        self._apply(mode_for(state, idle_enabled=self._idle_enabled))
+
+    def _apply(self, wanted: OverlayMode) -> None:
+        """Move the panel to a mode, off the main thread.
+
+        The early return on an unchanged mode is what makes `vad_auto` free:
+        it can flip states repeatedly with no user action, and the panel is
+        created once and re-ordered rather than rebuilt per transition — which
+        would leave a pile of them on screen.
+        """
         if not self._config.overlay or self._failed:
             return
-        wanted = should_show(state)
         with self._lock:
-            if wanted == self._visible:
+            if wanted is self._mode:
                 return
-            self._visible = wanted
-        # `vad_auto` can flip this repeatedly with no user action, so the panel
-        # is created once and re-ordered — never rebuilt per transition, which
-        # would leave a pile of them on screen.
+            self._mode = wanted
         from amanuensis.ui.indicator import _main_queue
 
         _main_queue().addOperationWithBlock_(lambda: self._render(wanted))
@@ -257,7 +354,11 @@ class RecordingOverlay:
             return
         self._levels.append(rms)
         with self._lock:
-            if not self._visible or self._panel is None:
+            # `is not ACTIVE`, not `is HIDDEN`. An idle pill that honours a
+            # level twitches, and a twitching idle pill reads as recording —
+            # see the preamble. The level is still appended, so the deque is
+            # warm if a dictation starts, but nothing is drawn.
+            if self._mode is not OverlayMode.ACTIVE or self._panel is None:
                 return
         from amanuensis.ui.indicator import _main_queue
 
@@ -280,13 +381,19 @@ class RecordingOverlay:
             layer.setFrame_(((x, (_HEIGHT - height) / 2.0), (width, height)))
 
     def hide(self) -> None:
+        """Off the screen entirely, whatever `overlay_idle` says.
+
+        Teardown, not a state transition: this is what the daemon calls on its
+        way out, and a pill left on a dead daemon's screen is the inverse of
+        the defect the idle form was added to fix.
+        """
         with self._lock:
-            self._visible = False
+            self._mode = OverlayMode.HIDDEN
         from amanuensis.ui.indicator import _main_queue
 
-        _main_queue().addOperationWithBlock_(lambda: self._render(False))
+        _main_queue().addOperationWithBlock_(lambda: self._render(OverlayMode.HIDDEN))
 
-    def _render(self, wanted: bool) -> None:
+    def _render(self, wanted: OverlayMode) -> None:
         """Main thread only — see `set_state`.
 
         Wrapped, and the reason is not defensiveness in general. This runs
@@ -338,30 +445,60 @@ class RecordingOverlay:
                         f"and is off: {exc}"
                     )
             elif self._on_error is not None:
-                self._on_error(
-                    f"the recording overlay failed and will retry: {exc}"
-                )
+                self._on_error(f"the recording overlay failed and will retry: {exc}")
         else:
             self._failures = 0
 
-    def _render_unguarded(self, wanted: bool) -> None:
+    def _render_unguarded(self, wanted: OverlayMode) -> None:
         panel = self._panel if self._panel is not None else self._build()
         if panel is None:  # pragma: no cover — AppKit returned nil
             return
-        if wanted:
-            self._reframe_if_the_screen_moved(panel)
+        if wanted is OverlayMode.HIDDEN:
+            panel.orderOut_(None)
+            return
+
+        self._reframe(panel, wanted)
+        if wanted is OverlayMode.ACTIVE:
             # Reset before showing. A pill that opens holding the previous
             # dictation's levels looks frozen for the first thirty milliseconds,
             # which is exactly the "is it live or is it stuck" ambiguity.
             self._levels.clear()
             self._levels.extend([0.0] * BAR_COUNT)
             self._draw_bars()
-            panel.orderFrontRegardless()
-        else:
-            panel.orderOut_(None)
+        self._apply_form(wanted)
+        panel.orderFrontRegardless()
 
-    def _reframe_if_the_screen_moved(self, panel: Any) -> None:
-        """Re-position the panel when the display it was built against changed.
+    def _apply_form(self, wanted: OverlayMode) -> None:
+        """Show the dot or the bars. Main thread only.
+
+        Hidden rather than removed: the layers are built once and toggled,
+        because this runs on every transition and `vad_auto` can produce a lot
+        of them. Rebuilding seven layers per transition is the same mistake
+        `_draw_bars` already refuses to make thirty times a second.
+        """
+        recording = wanted is OverlayMode.ACTIVE
+        for bar in self._bars:
+            bar.setHidden_(not recording)
+        if self._dot is not None:
+            self._dot.setHidden_(recording)
+
+    def _reframe(self, panel: Any, wanted: OverlayMode) -> None:
+        """Re-position and re-size the panel for the mode it is entering.
+
+        **Revised 2026-09-17.** This used to run only when the screen had
+        changed, and the condition was the test — re-framing on every show
+        would nudge a panel the user is looking at. The width now depends on
+        the mode, so the frame must be recomputed whenever the mode changes as
+        well, and `_mode` having already moved is what keeps this from firing
+        on every level update.
+
+        No animation. `setFrame:display:animate:` blocks the main queue for the
+        duration, and this panel's failures have terminated the daemon once
+        already (2026-09-02); a blocking call on the thread that draws it is
+        not a trade worth making for a 200 ms flourish. The growth is a hard
+        cut, and whether that is enough is lane 2's question, not this
+        module's.
+
 
         Checked on show rather than driven by
         `NSApplicationDidChangeScreenParameters`, because the notification is
@@ -374,17 +511,18 @@ class RecordingOverlay:
         make a test of this indistinguishable from a test of nothing.
         """
         current = self._screen_rect()
-        if current is None or current == self._screen:
-            # `None` means `NSScreen.mainScreen()` gave nil — every display
-            # asleep, or a clamshell with nothing attached. A panel that cannot
-            # be positioned because there is no screen has nothing to position
-            # on; that is not a fault, and charging it to the failure budget
-            # spends what exists for faults. Added 2026-09-10 after S1 put this
-            # call on every show.
+        if current is None:
+            # `NSScreen.mainScreen()` gave nil — every display asleep, or a
+            # clamshell with nothing attached. A panel that cannot be
+            # positioned because there is no screen has nothing to position on;
+            # that is not a fault, and charging it to the failure budget spends
+            # what exists for faults. Added 2026-09-10 after S1 put this call
+            # on every show.
             return
         from amanuensis.ui.indicator import _appkit
 
-        rect = frame_for(self._config.overlay_position, current)
+        width = IDLE_WIDTH if wanted is OverlayMode.IDLE else ACTIVE_WIDTH
+        rect = frame_for(self._config.overlay_position, current, width=width)
         panel.setFrame_display_(_appkit().NSMakeRect(*rect), True)
         self._screen = current
 
@@ -452,6 +590,7 @@ class RecordingOverlay:
         panel.setContentView_(container)
 
         self._bars = self._build_bars(appkit, layer)
+        self._dot = self._build_dot(layer)
         self._panel = panel
         return panel
 
@@ -504,3 +643,27 @@ class RecordingOverlay:
             parent.addSublayer_(bar)
             bars.append(bar)
         return bars
+
+    def _build_dot(self, parent: Any) -> Any:
+        """The idle form: one static circle, centred in the narrow pill.
+
+        Centred on `IDLE_WIDTH` rather than on `_WIDTH`, because the panel is
+        that wide when the dot is the thing being shown. Getting this wrong
+        puts the dot off-centre in the idle pill and centred in nothing.
+
+        It never moves and never changes size. That is the point: the *only*
+        moving thing this module draws is the recording form, so motion means
+        one thing.
+        """
+        calayer = self._calayer()
+        dot = calayer.layer()
+        dot.setFrame_(
+            (
+                ((IDLE_WIDTH - IDLE_DOT_SIZE) / 2.0, (_HEIGHT - IDLE_DOT_SIZE) / 2.0),
+                (IDLE_DOT_SIZE, IDLE_DOT_SIZE),
+            )
+        )
+        dot.setCornerRadius_(IDLE_DOT_SIZE / 2.0)
+        dot.setBackgroundColor_(self._quartz().CGColorCreateGenericGray(1.0, 0.92))
+        parent.addSublayer_(dot)
+        return dot

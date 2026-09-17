@@ -105,6 +105,10 @@ class _FakeLayer:
         self.corner_radius = 0.0
         self.background: Any = None
         self.sublayers: list[_FakeLayer] = []
+        #: Which form is drawn. The bars and the idle dot share a parent and
+        #: are toggled rather than rebuilt, so this is how a test tells the
+        #: idle pill from the recording one.
+        self.hidden = False
 
     @classmethod
     def layer(cls) -> _FakeLayer:
@@ -121,6 +125,12 @@ class _FakeLayer:
 
     def setBackgroundColor_(self, value: Any) -> None:
         self.background = value
+
+    def setHidden_(self, value: bool) -> None:
+        self.hidden = bool(value)
+
+    def isHidden(self) -> bool:
+        return self.hidden
 
     def addSublayer_(self, layer: _FakeLayer) -> None:
         self.sublayers.append(layer)
@@ -175,6 +185,7 @@ def install(fake: Any) -> None:
     fake.NSWindowCollectionBehaviorStationary = 16
     fake.NSStatusWindowLevel = 25
     fake.NSMakeRect = staticmethod(lambda x, y, w, h: (x, y, w, h))
+
     class _Color:
         @staticmethod
         def CGColor() -> str:
@@ -186,9 +197,7 @@ def install(fake: Any) -> None:
         {
             "clearColor": staticmethod(lambda: "clear"),
             "whiteColor": staticmethod(lambda: "white"),
-            "colorWithCalibratedWhite_alpha_": staticmethod(
-                lambda _w, _a: _Color()
-            ),
+            "colorWithCalibratedWhite_alpha_": staticmethod(lambda _w, _a: _Color()),
         },
     )
 

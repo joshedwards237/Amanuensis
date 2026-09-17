@@ -157,6 +157,28 @@ opposite of a cheap check.
 
 ### Does lane 2's 6/6 still describe the panel that ships?
 
+> **No, as of 2026-09-17. The persistent idle pill voided it.** Everything below
+> this line was true and is kept because the *method* is what matters — it is
+> the criterion this section applies, and it is the criterion the idle pill
+> fails. The panel is now drawn whenever the daemon runs, as a narrow pill with
+> a static dot, widening to the full pill with live bars while recording (PRD
+> §5.4, amended that day). That changes what the panel looks like when it is
+> working, which is exactly the test below, and it changes the perceptual task
+> from *presence versus absence* to *state A versus state B*.
+>
+> **Lane 2 is UNSCORED for the panel that ships and must be re-run before this
+> gate closes.** Operator disposition 2026-09-17: build it, re-score, and let
+> lane 6 see the panel that ships rather than one it will not recognise.
+>
+> The re-run is not the same test. The old criterion asked whether the user
+> noticed the panel appear. The new one has to ask whether they can tell the two
+> forms apart — including at a glance, in peripheral vision, and on a panel that
+> has stopped updating, which is the failure mode the two-cue rule exists for.
+> Writing that criterion before the re-run, not after, is S6's lesson and this
+> repository has the counter-example on record twice.
+
+**Everything from here is the 2026-09-15 reading, retained for its method.**
+
 **Yes, and the reason is worth stating rather than assumed.** Between the score
 on 2026-09-08 and today the overlay changed three times — S1, its stress pass,
 and S2 — and a confidence test scored against a panel that no longer exists
@@ -831,6 +853,16 @@ nobody.
 
 **S3, S4 and S5 are not built and should not be**, per the operator's own
 sequencing: they change the panel lane 2 scored, and lane 6 has not run.
+
+> **Superseded in part, 2026-09-17.** The persistent idle pill was built ahead
+> of lane 6 on an explicit operator disposition, which voids lane 2 outright —
+> see the note under *Does lane 2's 6/6 still describe the panel that ships?*.
+> That removes the argument that was holding S3–S5 back, since the re-score they
+> were waiting to avoid is now owed regardless. **It does not make them urgent**:
+> each still has to be worth its own risk, and folding three unbuilt slices into
+> a re-score that is already going to be hard to read is how a confidence test
+> ends up measuring four things at once. Sequence them deliberately or not at
+> all.
 
 - **The microphone picker** (2026-09-11, §5.4 and §11.6). A `Device:` row in the
   tray with every input on the machine beneath it, closing the discoverability

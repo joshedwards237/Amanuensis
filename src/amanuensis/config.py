@@ -300,6 +300,18 @@ class FeedbackConfig:
     #: *correctness* half regardless of what this product draws — so the
     #: overlay is a confidence feature, and confidence is user-settable.
     overlay: bool = True
+    #: Draw the panel while idle too, as a narrow pill with a static dot
+    #: (§5.4, added 2026-09-17). ON: until this existed, idle meant nothing on
+    #: screen, so "the daemon is alive and idle" and "the daemon is dead" were
+    #: the same picture near the cursor — which is gate finding 1, where a
+    #: panel that had stopped drawing went unnoticed for days.
+    #:
+    #: A key rather than a bounded exception because a pill that sits on screen
+    #: permanently is a taste, and §5.3 puts a decision that could reasonably go
+    #: either way in the config. `false` restores the pre-2026-09-17 behaviour
+    #: exactly; the recording indicator survives either way, so declining the
+    #: idle form never costs the affordance §5.4 requires.
+    overlay_idle: bool = True
     #: Which screen edge. The panel must not cover the caret in the application
     #: being dictated into, and which edge is safe depends on the user's
     #: layout, so this cannot be hardcoded.
@@ -496,6 +508,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     },
     "feedback": {
         "overlay": _Rule((bool,)),
+        "overlay_idle": _Rule((bool,)),
         "overlay_position": _Rule((str,), _one_of("bottom", "top")),
         "sounds": _Rule((bool,)),
     },
@@ -848,7 +861,7 @@ def write_audio_device(path: Path, device: str) -> None:
     if any(ch in stripped for ch in '"\\') or not stripped.isprintable():
         raise ConfigError(
             f"audio.device: {device!r} cannot be written to config.toml — a "
-            'device name must not contain a quote, a backslash or a line break.'
+            "device name must not contain a quote, a backslash or a line break."
         )
     _write_table_key(path, "audio", "device", stripped)
 
@@ -877,9 +890,7 @@ def write_hotkey_binding(path: Path, binding: str) -> None:
     """
     from amanuensis.hotkey.macos import available_bindings
 
-    _write_hotkey_key(
-        path, "binding", binding, available_bindings(), "hotkey.binding"
-    )
+    _write_hotkey_key(path, "binding", binding, available_bindings(), "hotkey.binding")
 
 
 def _write_hotkey_key(
