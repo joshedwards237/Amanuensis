@@ -128,6 +128,32 @@ class _FakeLayer:
         return cls()
 
     def setFrame_(self, rect: Any) -> None:
+        """Validated, because the un-validated version shipped a crash.
+
+        PyObjC depythonifies an `NSRect` as `((x, y), (width, height))` — two
+        members, nested. A flat four-tuple raises
+        `ValueError: depythonifying struct of 2 members, got tuple of 4`, and
+        on 2026-09-17 the idle pill shipped with exactly that: `pill_frame`
+        returns the module's flat convention and it was handed to `setFrame_`
+        without conversion.
+
+        **The suite was green the whole time**, because this method used to
+        store whatever it was given. A fake that accepts a shape the framework
+        rejects is not a test double, it is a second implementation with a
+        bug — and it is the *forgiving* direction, which is the one that
+        cannot be caught by reading. The module preamble already records the
+        same error crashing a daemon on 2026-09-02 with every test passing
+        against a flat fake; this is the second occurrence and the first one
+        this file could have prevented.
+        """
+        if not (
+            isinstance(rect, tuple)
+            and len(rect) == 2
+            and all(isinstance(part, tuple) and len(part) == 2 for part in rect)
+        ):
+            raise ValueError(
+                f"depythonifying struct of 2 members, got tuple of {len(rect)}"
+            )
         self.frame_rect = rect
 
     def frame(self) -> Any:
@@ -207,21 +233,33 @@ def install(fake: Any) -> None:
         def CGColorCreateGenericGray(_gray: float, _alpha: float) -> str:
             return "cgcolor"
 
-        @classmethod
-        def CATransactionBegin(cls) -> None:
-            cls._open.append({"duration": None, "disabled": False})
+        class CATransaction:
+            """Mirrors the real shape: a class with class methods.
 
-        @classmethod
-        def CATransactionSetAnimationDuration_(cls, value: float) -> None:
-            cls._open[-1]["duration"] = value
+            The first version of this fake invented four free functions —
+            `CATransactionBegin` and friends — which do not exist in Quartz.
+            The suite was green and the first transition on a real machine
+            raised `AttributeError`, swallowed by the overlay's render guard
+            into "the recording overlay failed and will retry". A fake whose
+            *shape* is invented tests nothing about the framework; see
+            `test_quartz_exposes_the_transaction_api_this_module_calls`.
+            """
 
-        @classmethod
-        def CATransactionSetDisableActions_(cls, value: bool) -> None:
-            cls._open[-1]["disabled"] = bool(value)
+            @staticmethod
+            def begin() -> None:
+                _FakeQuartz._open.append({"duration": None, "disabled": False})
 
-        @classmethod
-        def CATransactionCommit(cls) -> None:
-            cls.transactions.append(cls._open.pop())
+            @staticmethod
+            def setAnimationDuration_(value: float) -> None:
+                _FakeQuartz._open[-1]["duration"] = value
+
+            @staticmethod
+            def setDisableActions_(value: bool) -> None:
+                _FakeQuartz._open[-1]["disabled"] = bool(value)
+
+            @staticmethod
+            def commit() -> None:
+                _FakeQuartz.transactions.append(_FakeQuartz._open.pop())
 
     _FakeQuartz.transactions = []
     _FakeQuartz._open = []
