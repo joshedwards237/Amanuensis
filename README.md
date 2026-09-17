@@ -185,7 +185,17 @@ manu daemon
 ```
 
 Hold **right-option**, speak, release. The text appears at your cursor in
-whatever application has focus. While the daemon runs there is a glyph in your
+whatever application has focus.
+
+**A small pill sits near the edge of your screen the whole time the daemon
+runs** — a single dot while idle, widening into a live waveform while the
+microphone is open. Those are deliberately two different shapes rather than two
+shades of one: a panel that has frozen looks exactly like a resting one, and
+telling "idle" from "stopped" is the whole reason the idle form exists. Turn it
+off with `[feedback] overlay_idle = false` and nothing appears until you
+dictate.
+
+There is also a glyph in your
 menu bar — `○` idle, `●` recording, `◐` transcribing — and a panel near the edge
 of the screen whenever the microphone is open. Stop with Ctrl-C, or from the
 tray menu.

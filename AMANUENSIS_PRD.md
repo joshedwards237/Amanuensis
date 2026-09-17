@@ -594,6 +594,14 @@ overlay = true              # the §5.4 recording affordance with more presence
                             # microphone indicator carries §5.4's *correctness*
                             # half regardless, which is what makes this a key
                             # rather than a §5.3 bounded exception.
+overlay_idle = true         # added 2026-09-17. Draw the panel while idle, as a
+                            # narrow pill with a static dot, so the daemon's
+                            # liveness is visible without a dictation in
+                            # flight. ON: gate finding 1 was a dead panel that
+                            # looked exactly like an idle one for days. OFF
+                            # restores the pre-2026-09-17 behaviour — nothing
+                            # on screen until RECORDING — and keeps the
+                            # recording indicator either way.
 overlay_position = "bottom" # bottom | top. Where the panel sits. It must not
                             # cover the caret in the application being dictated
                             # into, and which edge is safe depends on the user's
@@ -698,6 +706,46 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   wrong, and §5.4's purpose is served by it regardless of what Amanuensis
   draws. That is a reason to build the richer affordance for *confidence*
   rather than for *correctness*.
+- **The affordance is persistent, and recording is a transition rather than an
+  appearance** (added 2026-09-17, operator request). The panel is drawn
+  whenever the daemon runs: a narrow pill carrying a single static dot while
+  idle, widening to the full pill with live bars while recording.
+
+  **What this closes.** Until now idle meant nothing on screen, so "the daemon
+  is alive and idle" and "the daemon is dead" were identical near the cursor.
+  That is not hypothetical — Phase 4 gate finding 1 is exactly it: the panel
+  stopped appearing while dictation kept working, and the absence of a panel
+  was indistinguishable from the absence of a reason to draw one. It took days
+  to notice. A persistent affordance makes the daemon's liveness continuously
+  observable at the place the user is already looking.
+
+  **What it costs, stated because it is the more important half.** The
+  discrimination the user must make changes from *presence versus absence* —
+  the easiest kind — to *state A versus state B*. That is the direction of
+  §5.4's own named failure: a live microphone with an indicator that looks
+  alive either way. Two consequences bind:
+
+  1. **The idle and recording appearances differ on two independent cues**, not
+     one. Width and motion. Motion alone is rejected: a frozen render is
+     indistinguishable from a resting one, which is finding 1 wearing a new
+     costume, and the same reasoning already forbids `MIN_BAR_HEIGHT = 0`.
+  2. **Nothing but RECORDING may draw the wide, moving form.** The bars are
+     ignored — not merely unfed — in every other state, so an audio level
+     arriving late cannot animate an idle pill. Transcribing keeps the idle
+     form for the reason it was previously hidden: the microphone is closed,
+     and a privacy affordance must not over-report.
+
+  **This voids lane 2's 6/6.** `docs/gates/phase-4.md` scored the confidence
+  test against a panel that is absent when idle, and the criterion it applies —
+  does the change alter what the panel looks like when it is working — this
+  change fails outright. Lane 2 is re-run on the new panel before the Phase 4
+  gate closes. Operator disposition 2026-09-17: build it, re-score, and let
+  lane 6 see the panel that ships.
+
+  Off-switchable via `[feedback] overlay_idle`. On by default — a confidence
+  affordance that ships off is one nobody sees — but the pill sits on screen
+  permanently, which is a taste the user must be able to decline without losing
+  the recording indicator.
 
   **The affordance is a waveform pill, not a labelled panel** (2026-09-03,
   second round of the same provenance). The first build was 220×44 with the

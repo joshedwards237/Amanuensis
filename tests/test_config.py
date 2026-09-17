@@ -675,3 +675,21 @@ def test_an_absent_device_may_still_be_written(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     write_audio_device(path, "A Microphone Not Plugged In")
     assert load_config(path).audio.device == "A Microphone Not Plugged In"
+
+
+def test_the_idle_overlay_key_round_trips(tmp_path: Path) -> None:
+    """`[feedback] overlay_idle`, added 2026-09-17 (§5.4).
+
+    A key the validator does not know is rejected, so a user who follows the
+    PRD's config block and gets an error learns the documentation is ahead of
+    the code. Both directions are asserted: the default is on, and a written
+    `false` survives the load — the second is what the setting promises and the
+    first is what ships.
+    """
+    assert AppConfig().feedback.overlay_idle is True
+
+    path = tmp_path / "config.toml"
+    path.write_text("[feedback]\noverlay_idle = false\n")
+
+    assert load_config(path).feedback.overlay_idle is False
+    assert load_config(path).feedback.overlay is True, "it took the panel with it"

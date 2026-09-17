@@ -1320,6 +1320,12 @@ def _daemon(config: AppConfig) -> int:
         flush=True,
     )
     tray.show()
+    # The idle pill, drawn now rather than at the first dictation (§5.4,
+    # 2026-09-17). The period between the daemon coming up and the first press
+    # is exactly when a user is asking whether it is running, and it was the
+    # period with nothing on screen near the cursor. A no-op under
+    # `[feedback] overlay_idle = false`.
+    overlay.start()
     try:
         tray.run()
     finally:

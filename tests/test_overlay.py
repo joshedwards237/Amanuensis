@@ -21,15 +21,18 @@ from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
 from amanuensis.ui.overlay import (
+    ACTIVE_WIDTH,
     BAR_COUNT,
     CORNER_RADIUS,
+    IDLE_WIDTH,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
     OVERLAY_FAILURE_LIMIT,
+    OverlayMode,
     RecordingOverlay,
     bar_heights,
     frame_for,
-    should_show,
+    mode_for,
 )
 from test_indicator import _FakeAppKit, _FakeFoundation, _FakeMainQueue
 
@@ -38,25 +41,101 @@ from test_indicator import _FakeAppKit, _FakeFoundation, _FakeMainQueue
 # ---------------------------------------------------------------------------
 
 
-def test_it_shows_while_recording() -> None:
-    assert should_show(DictationState.RECORDING) is True
+def test_it_is_active_while_recording() -> None:
+    assert mode_for(DictationState.RECORDING, idle_enabled=True) is OverlayMode.ACTIVE
+    assert mode_for(DictationState.RECORDING, idle_enabled=False) is OverlayMode.ACTIVE
+
+
+@pytest.mark.parametrize("idle_enabled", [True, False])
+@pytest.mark.parametrize(
+    "state",
+    [s for s in DictationState if s is not DictationState.RECORDING],
+)
+def test_nothing_but_recording_draws_the_active_form(
+    state: DictationState, idle_enabled: bool
+) -> None:
+    """The panel answers exactly one question — *is the microphone live?* —
+    and the microphone is live in exactly one state.
+
+    TRANSCRIBING is the trap. It is the longest-running state, it looks busy,
+    and showing the active form through it would be the natural thing to do. It
+    is also the state in which the microphone has already been released, so a
+    panel that kept the wide, moving form would tell the user they were being
+    recorded when they were not. For a privacy affordance that is not a
+    cosmetic error.
+
+    **Unchanged in substance by the 2026-09-17 persistent idle pill**, and that
+    is the point of asserting it across both settings. The panel is now on
+    screen in those states; what it must never do is *look like recording* in
+    them. Widening the affordance's presence must not widen what it claims.
+    """
+    assert (
+        mode_for(state, idle_enabled=idle_enabled) is not OverlayMode.ACTIVE
+    ), "a state with a closed microphone drew the recording form"
 
 
 @pytest.mark.parametrize(
     "state",
     [s for s in DictationState if s is not DictationState.RECORDING],
 )
-def test_it_hides_whenever_the_microphone_is_closed(state: DictationState) -> None:
-    """The panel answers exactly one question — *is the microphone live?* —
-    and the microphone is live in exactly one state.
+def test_the_pill_stays_on_screen_when_the_microphone_closes(
+    state: DictationState,
+) -> None:
+    """§5.4, 2026-09-17. Idle is a *state of the panel*, not its absence.
 
-    TRANSCRIBING is the trap. It is the longest-running state, it looks busy,
-    and showing the panel through it would be the natural thing to do. It is
-    also the state in which the microphone has already been released, so a
-    panel that stayed up would tell the user they were being recorded when they
-    were not. For a privacy affordance that is not a cosmetic error.
+    Gate finding 1 is the argument: a panel that had stopped drawing looked
+    exactly like a panel with no reason to draw, and the two were
+    indistinguishable for days. They are now different pictures.
     """
-    assert should_show(state) is False
+    assert mode_for(state, idle_enabled=True) is OverlayMode.IDLE
+
+
+@pytest.mark.parametrize(
+    "state",
+    [s for s in DictationState if s is not DictationState.RECORDING],
+)
+def test_the_idle_pill_can_be_declined(state: DictationState) -> None:
+    """`[feedback] overlay_idle = false` restores the pre-2026-09-17 behaviour
+    exactly — nothing on screen until RECORDING — rather than approximating it.
+
+    A permanent pill is a taste, and §5.3 requires a decision that could
+    reasonably go either way to be a key. The recording indicator is kept
+    either way: declining the idle form must not cost the affordance.
+    """
+    assert mode_for(state, idle_enabled=False) is OverlayMode.HIDDEN
+
+
+def test_idle_and_active_differ_in_width_as_well_as_motion() -> None:
+    """§5.4's first binding consequence: **two independent cues**.
+
+    Motion alone is rejected. A frozen render is indistinguishable from a
+    resting one, so a user looking at a stopped panel would read it as idle and
+    a user looking at an idle panel could not rule out that it was stopped —
+    which is finding 1 with a new costume. The same reasoning already forbids
+    `MIN_BAR_HEIGHT = 0`.
+
+    Width is the cue that survives a frozen render, so it must actually differ.
+    """
+    assert IDLE_WIDTH < ACTIVE_WIDTH
+
+
+def test_the_idle_pill_is_framed_at_its_own_width() -> None:
+    """The geometry has to know about both, or the pill is drawn wide and empty.
+
+    Same screen, same edge, same centring — only the width differs, so the two
+    forms share a centre and the transition reads as a growth rather than a
+    jump across the screen.
+    """
+    screen = (0.0, 0.0, 1440.0, 900.0)
+    idle_x, idle_y, idle_w, idle_h = frame_for("bottom", screen, width=IDLE_WIDTH)
+    active_x, active_y, active_w, active_h = frame_for(
+        "bottom", screen, width=ACTIVE_WIDTH
+    )
+
+    assert idle_w == IDLE_WIDTH
+    assert active_w == ACTIVE_WIDTH
+    assert idle_y == active_y and idle_h == active_h
+    assert idle_x + idle_w / 2 == pytest.approx(active_x + active_w / 2)
 
 
 def test_disabling_the_overlay_means_it_never_shows() -> None:
@@ -148,8 +227,7 @@ def test_the_panel_joins_all_spaces_and_full_screen(appkit: _FakeAppKit) -> None
     panel = appkit.panels[-1]
     assert panel.collection_behavior & appkit.NSWindowCollectionBehaviorCanJoinAllSpaces
     assert (
-        panel.collection_behavior
-        & appkit.NSWindowCollectionBehaviorFullScreenAuxiliary
+        panel.collection_behavior & appkit.NSWindowCollectionBehaviorFullScreenAuxiliary
     )
 
 
@@ -165,11 +243,44 @@ def test_the_panel_never_takes_focus(appkit: _FakeAppKit) -> None:
     assert panel.ignores_mouse is True
 
 
-def test_it_is_removed_when_recording_stops(appkit: _FakeAppKit) -> None:
+def test_the_active_form_is_dropped_when_recording_stops(
+    appkit: _FakeAppKit,
+) -> None:
+    """**Rewritten 2026-09-17.** This used to assert the panel was ordered out.
+
+    It is not, any more — it drops to the idle form and stays on screen. What
+    the original test was really protecting is unchanged and is asserted here
+    instead: when the microphone closes, the *recording appearance* goes away.
+    Which of the two the panel drops to is the new behaviour; that it drops is
+    the old requirement.
+    """
     overlay = RecordingOverlay(FeedbackConfig())
     overlay.set_state(DictationState.RECORDING)
-    assert overlay.visible is True
+    assert overlay.mode is OverlayMode.ACTIVE
+
     overlay.set_state(DictationState.TRANSCRIBING)
+
+    assert overlay.mode is OverlayMode.IDLE
+    assert appkit.panels[-1].ordered_out is False
+    assert all(bar.hidden for bar in overlay._bars), "the bars outlived the microphone"
+    assert overlay._dot is not None and not overlay._dot.hidden
+
+
+def test_it_is_removed_when_recording_stops_and_the_idle_pill_is_off(
+    appkit: _FakeAppKit,
+) -> None:
+    """The original assertion, kept where it still holds.
+
+    `overlay_idle = false` promises the pre-2026-09-17 behaviour *exactly*, and
+    the cheapest way for that promise to rot is for nothing to check it once
+    the new path is the interesting one.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(overlay_idle=False))
+    overlay.set_state(DictationState.RECORDING)
+    assert overlay.visible is True
+
+    overlay.set_state(DictationState.TRANSCRIBING)
+
     assert overlay.visible is False
     assert appkit.panels[-1].ordered_out is True
 
@@ -241,9 +352,9 @@ def test_a_failing_panel_disables_the_overlay_and_reports_it(
     for _ in range(OVERLAY_FAILURE_LIMIT + 3):
         overlay.set_state(DictationState.IDLE)
         overlay.set_state(DictationState.RECORDING)
-    assert len(reported) < OVERLAY_FAILURE_LIMIT, (
-        "a permanently failing overlay is still reporting on every dictation"
-    )
+    assert (
+        len(reported) < OVERLAY_FAILURE_LIMIT
+    ), "a permanently failing overlay is still reporting on every dictation"
 
 
 # ---------------------------------------------------------------------------
@@ -326,13 +437,13 @@ def test_the_pill_is_mostly_waveform_not_padding() -> None:
     from amanuensis.ui.overlay import _BAR_GAP, _BAR_WIDTH, _WIDTH
 
     span = BAR_COUNT * _BAR_WIDTH + (BAR_COUNT - 1) * _BAR_GAP
-    assert span / _WIDTH >= 0.5, (
-        f"the bars occupy {span / _WIDTH:.0%} of the pill; the rest is padding"
-    )
+    assert (
+        span / _WIDTH >= 0.5
+    ), f"the bars occupy {span / _WIDTH:.0%} of the pill; the rest is padding"
 
 
 def test_ordinary_speech_uses_most_of_the_range() -> None:
-    """"A little more dynamics and amplitude."
+    """ "A little more dynamics and amplitude."
 
     0.0152 is the operator's **measured** median speech level over 6,461
     blocks, not a plausible-looking number. At the original full scale of 0.35
@@ -365,9 +476,9 @@ def test_a_quiet_room_does_not_shimmer() -> None:
     would look like the microphone was hearing something."""
     for ambient in (0.0, 0.001, 0.0028, 0.004):
         heights = bar_heights([ambient] * BAR_COUNT)
-        assert max(heights) <= MIN_BAR_HEIGHT + 0.01, (
-            f"ambient {ambient} deflects to {max(heights)}"
-        )
+        assert (
+            max(heights) <= MIN_BAR_HEIGHT + 0.01
+        ), f"ambient {ambient} deflects to {max(heights)}"
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +545,9 @@ def test_a_persistently_failing_render_still_gives_up(appkit: _FakeAppKit) -> No
         overlay.set_state(DictationState.RECORDING)
         overlay.set_state(DictationState.IDLE)
 
-    assert len(reported) <= OVERLAY_FAILURE_LIMIT, (
-        f"it reported {len(reported)} times -- it is retrying forever"
-    )
+    assert (
+        len(reported) <= OVERLAY_FAILURE_LIMIT
+    ), f"it reported {len(reported)} times -- it is retrying forever"
 
 
 def test_a_success_resets_the_failure_budget(appkit: _FakeAppKit) -> None:
@@ -483,9 +594,9 @@ def test_a_success_resets_the_failure_budget(appkit: _FakeAppKit) -> None:
     built = len(appkit.panels)
     overlay.set_state(DictationState.RECORDING)
 
-    assert len(appkit.panels) > built or appkit.panels[-1].ordered_front_regardless, (
-        "no render happened — the budget did not reset and the overlay is off"
-    )
+    assert (
+        len(appkit.panels) > built or appkit.panels[-1].ordered_front_regardless
+    ), "no render happened — the budget did not reset and the overlay is off"
     assert not overlay._failed, "the overlay latched off despite the resets"
 
 
@@ -511,9 +622,7 @@ def test_a_failed_render_discards_the_panel_it_failed_on(
     overlay.set_state(DictationState.IDLE)
     overlay.set_state(DictationState.RECORDING)  # must recover
 
-    assert appkit.panels[-1] is not first, (
-        "it retried the panel that had just failed"
-    )
+    assert appkit.panels[-1] is not first, "it retried the panel that had just failed"
     assert appkit.panels[-1].ordered_front_regardless
 
 
@@ -536,26 +645,38 @@ def test_the_panel_is_reframed_when_the_screen_moves(appkit: _FakeAppKit) -> Non
     appkit.screen_frame = ((0.0, 0.0), (1280.0, 800.0))
     overlay.set_state(DictationState.RECORDING)
 
-    assert panel.frame != built, (
-        "the panel kept a frame derived from a screen that is no longer there"
-    )
+    assert (
+        panel.frame != built
+    ), "the panel kept a frame derived from a screen that is no longer there"
 
 
-def test_an_unchanged_screen_does_not_reframe(appkit: _FakeAppKit) -> None:
+def test_an_unchanged_screen_does_not_move_the_panel(appkit: _FakeAppKit) -> None:
     """The positive control on the check above.
 
-    Re-setting the frame on every show would satisfy that test while proving
-    nothing, and would nudge a panel the user is looking at on every dictation.
+    **Rewritten 2026-09-17, and the invariant is narrower than it was.** The
+    frame is now re-set on every mode change, because the two forms are
+    different widths — so "it did not call setFrame" is no longer available and
+    no longer means anything. What the original was protecting is the panel not
+    wandering under a user who is looking at it, and that survives intact: with
+    the screen unchanged, the *position* must be identical across a full
+    recording cycle, and only the width may differ.
+
+    Asserted on the geometry rather than on a call count for that reason. A
+    count could be satisfied by re-framing to the wrong place exactly once.
     """
     overlay = RecordingOverlay(FeedbackConfig(), on_error=lambda _m: None)
     overlay.set_state(DictationState.RECORDING)
     panel = appkit.panels[-1]
-    panel.frames_set = 0
+    recording_frame = panel.frame
 
     overlay.set_state(DictationState.IDLE)
+    idle_frame = panel.frame
     overlay.set_state(DictationState.RECORDING)
 
-    assert panel.frames_set == 0, "it re-framed a screen that had not moved"
+    assert panel.frame == recording_frame, "the panel moved on an unchanged screen"
+    assert idle_frame[1] == recording_frame[1], "the pill changed edge"
+    assert idle_frame[3] == recording_frame[3], "the pill changed height"
+    assert idle_frame[2] == IDLE_WIDTH and recording_frame[2] == ACTIVE_WIDTH
 
 
 def test_a_raising_layer_on_the_level_path_does_not_escape(
@@ -652,9 +773,9 @@ def test_a_draw_that_fails_every_show_reports_every_show(
         f"{len(reported)} reports across {shows} broken dictations — a draw "
         "that fails every time must say so every time"
     )
-    assert not overlay._failed, (
-        "it disabled the panel on transient failures separated by successes"
-    )
+    assert (
+        not overlay._failed
+    ), "it disabled the panel on transient failures separated by successes"
 
 
 def test_a_nil_main_screen_is_not_a_render_failure(appkit: _FakeAppKit) -> None:
@@ -681,3 +802,114 @@ def test_a_nil_main_screen_is_not_a_render_failure(appkit: _FakeAppKit) -> None:
 
     assert overlay._failures == 0, "a nil screen was charged to the failure budget"
     assert not overlay._failed
+
+
+# ---------------------------------------------------------------------------
+# The persistent idle pill, end to end (§5.4, 2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_the_pill_is_on_screen_before_any_dictation(appkit: _FakeAppKit) -> None:
+    """`start()` is what makes the affordance persistent.
+
+    Without it the panel appears at the first state change, which is the first
+    dictation — so the liveness signal is absent during exactly the period a
+    user is wondering whether the daemon is running. `cli.py` calls this once
+    the daemon is up.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+
+    overlay.start()
+
+    panel = appkit.panels[-1]
+    assert panel.ordered_front_regardless
+    assert not panel.ordered_out
+
+
+def test_sound_does_not_move_an_idle_pill(appkit: _FakeAppKit) -> None:
+    """§5.4's second binding consequence: **ignored, not merely unfed**.
+
+    The capture thread and the state thread are different threads, so a level
+    published microseconds after the microphone closed can still arrive while
+    the panel is idle. If the draw path honours it, the idle pill twitches —
+    and a twitching idle pill is a pill that looks like it is recording, which
+    is the failure §5.4 exists to name.
+
+    Asserted against the bar layers' geometry rather than against a call
+    count: the question is whether the picture moved, and a guard that returns
+    early after drawing would satisfy any assertion about calls.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    before = [layer.frame() for layer in overlay._bars]
+
+    overlay.set_level(0.5)
+
+    assert [layer.frame() for layer in overlay._bars] == before
+
+
+def test_sound_moves_the_pill_while_recording(appkit: _FakeAppKit) -> None:
+    """The positive control for the test above.
+
+    Without it, a `set_level` that did nothing at all in every state would pass
+    — and a recording indicator that never moves is the defect the whole
+    module exists to avoid.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+    before = [layer.frame() for layer in overlay._bars]
+
+    overlay.set_level(0.5)
+
+    assert [layer.frame() for layer in overlay._bars] != before
+
+
+def test_the_panel_widens_when_recording_starts(appkit: _FakeAppKit) -> None:
+    """The width cue, at the panel rather than in the geometry function.
+
+    `frame_for` being right is necessary and not sufficient: the panel has to
+    actually be re-framed on the transition, and a panel that computes the
+    right rect and never applies it looks identical to one that has no idle
+    form at all.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    idle_width = appkit.panels[-1].frame[2]
+
+    overlay.set_state(DictationState.RECORDING)
+
+    assert appkit.panels[-1].frame[2] == ACTIVE_WIDTH
+    assert idle_width == IDLE_WIDTH
+
+
+def test_the_panel_narrows_again_when_the_microphone_closes(
+    appkit: _FakeAppKit,
+) -> None:
+    """And back. A pill left wide after a dictation reports a live microphone
+    for as long as the daemon runs, which is the over-report the module
+    preamble refuses.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+
+    overlay.set_state(DictationState.TRANSCRIBING)
+
+    assert appkit.panels[-1].frame[2] == IDLE_WIDTH
+
+
+def test_declining_the_idle_pill_leaves_nothing_on_screen(
+    appkit: _FakeAppKit,
+) -> None:
+    """`overlay_idle = false` end to end, not merely in `mode_for`.
+
+    The config key has to reach the render path. A key that is honoured by the
+    pure function and ignored by the panel is worse than no key: the user turns
+    it off, the pill stays, and the setting is a lie.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(overlay_idle=False))
+
+    overlay.start()
+
+    assert not appkit.panels or not appkit.panels[-1].ordered_front_regardless
