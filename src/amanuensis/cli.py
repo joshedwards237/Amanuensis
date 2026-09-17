@@ -896,6 +896,12 @@ def _daemon(config: AppConfig) -> int:
         print(f"manu daemon: {exc}", file=sys.stderr)
         return _EXIT_ERROR
 
+    # Declared here rather than beside the pickers that reassign it, because
+    # `_on_state_change` needs the **current** listener and a state change can
+    # arrive before those are built. Holding `listener` directly would clear the
+    # latch on a tap that had already been swapped out for a new binding.
+    listener_box: dict[str, Any] = {"current": listener}
+
     # Both grants, before anything is loaded and before the microphone opens.
     # Reported together rather than one at a time: a user who fixes one and
     # restarts only to be told about the other has been sent to System
@@ -1077,6 +1083,12 @@ def _daemon(config: AppConfig) -> int:
             # key on the user's machine. `unregister` is idempotent, so the
             # states this runs on that never took it cost nothing.
             escape.unregister()
+            # The listener cannot see a session that ended without the key —
+            # Escape, the overlay's ✕, `manu toggle`, a VAD auto-end — so it is
+            # told. Left un-told it keeps thinking it is latched and swallows
+            # the first tap of the next double-tap, which is a dictation that
+            # will not start. Reported from use 2026-09-17.
+            listener_box["current"].clear_latch()
         if state is DictationState.IDLE:
             # Devices come and go while the daemon runs — a headset connected
             # after start-up is in no menu built at start-up. Idle is the one
@@ -1261,8 +1273,6 @@ def _daemon(config: AppConfig) -> int:
         write_hotkey_mode,
     )
     from amanuensis.hotkey.macos import available_bindings, available_modes
-
-    listener_box = {"current": listener}
 
     def _rebuild_listener(what: str, **changes: str) -> bool:
         """Swap the event tap for one built from `changes`. True on success.
