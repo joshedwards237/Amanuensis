@@ -79,6 +79,7 @@ __all__ = [
     "TRANSITION_SECONDS",
     "OverlayMode",
     "RecordingOverlay",
+    "as_rect",
     "bar_heights",
     "frame_for",
     "mode_for",
@@ -251,6 +252,33 @@ def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
     return tuple(heights)
 
 
+def as_rect(
+    flat: tuple[float, float, float, float],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """A flat `(x, y, w, h)` as the nested pair PyObjC wants for an `NSRect`.
+
+    This module computes geometry as flat four-tuples — `frame_for` and
+    `pill_frame` both do — because that is the shape that is pleasant to write
+    tests against. PyObjC depythonifies an `NSRect` as `((x, y), (w, h))`, two
+    members, nested, and a flat four raises *"depythonifying struct of 2
+    members, got tuple of 4"*.
+
+    The window path converts through `NSMakeRect(*rect)` and so never had the
+    problem. The **layer** path has no such call, and on 2026-09-17 the idle
+    pill shipped handing `pill_frame`'s flat tuple straight to `setFrame_`.
+    That is the second time this exact mistake has reached a running daemon;
+    the first is in the preamble, dated 2026-09-02. Both times the suite was
+    green, because the fake layer stored whatever it was given.
+
+    So: one named conversion, used everywhere a layer is framed, rather than a
+    nested literal written out at each call site. A literal is what the bars
+    already do and it worked — and it is also how the pill came to be written
+    differently from the bars without anything noticing.
+    """
+    x, y, width, height = flat
+    return ((x, y), (width, height))
+
+
 def pill_frame(mode: OverlayMode) -> tuple[float, float, float, float]:
     """The visible pill's rect *inside* the window, which never changes size.
 
@@ -421,7 +449,7 @@ class RecordingOverlay:
         for layer, height in zip(self._bars, heights, strict=False):
             frame = layer.frame()
             (x, _y), (width, _h) = frame
-            layer.setFrame_(((x, (_HEIGHT - height) / 2.0), (width, height)))
+            layer.setFrame_(as_rect((x, (_HEIGHT - height) / 2.0, width, height)))
 
     def hide(self) -> None:
         """Off the screen entirely, whatever `overlay_idle` says.
@@ -525,19 +553,24 @@ class RecordingOverlay:
         space — briefly, and visibly.
         """
         recording = wanted is OverlayMode.ACTIVE
-        quartz = self._quartz()
-        quartz.CATransactionBegin()
+        # `CATransaction` is a class with class methods, not a module of free
+        # functions. Written as `CATransactionBegin()` first, which does not
+        # exist and raises `AttributeError` on the first transition — caught by
+        # `_render`'s guard, so it would have surfaced as a panel that failed
+        # and retried rather than as anything naming the real problem.
+        transaction = self._quartz().CATransaction
+        transaction.begin()
         try:
             if self._animates():
-                quartz.CATransactionSetAnimationDuration_(TRANSITION_SECONDS)
+                transaction.setAnimationDuration_(TRANSITION_SECONDS)
             else:
                 # Not a zero duration: implicit animation is on by default for
                 # a standalone layer, so zero still runs an animation of zero
                 # length. `setDisableActions_` is what removes it.
-                quartz.CATransactionSetDisableActions_(True)
+                transaction.setDisableActions_(True)
             if self._pill is not None:
                 rect = pill_frame(wanted)
-                self._pill.setFrame_(rect)
+                self._pill.setFrame_(as_rect(rect))
                 self._pill.setCornerRadius_(rect[3] / 2.0)
             for bar in self._bars:
                 bar.setHidden_(not recording)
@@ -546,7 +579,7 @@ class RecordingOverlay:
             # leaves the transaction open, and every later implicit animation
             # in the process then joins it — a leak that shows up as the whole
             # UI animating at the wrong duration, nowhere near this module.
-            quartz.CATransactionCommit()
+            transaction.commit()
 
     def _animates(self) -> bool:
         """Config, unless macOS has been told to reduce motion.
@@ -679,7 +712,7 @@ class RecordingOverlay:
         """The visible pill: dark translucent fill, light hairline border."""
         quartz = self._quartz()
         pill = self._calayer().layer()
-        pill.setFrame_(pill_frame(OverlayMode.IDLE))
+        pill.setFrame_(as_rect(pill_frame(OverlayMode.IDLE)))
         pill.setCornerRadius_(IDLE_HEIGHT / 2.0)
         pill.setBackgroundColor_(quartz.CGColorCreateGenericGray(0.0, 0.62))
         pill.setBorderWidth_(PILL_BORDER_WIDTH)
@@ -731,7 +764,14 @@ class RecordingOverlay:
             bar = calayer.layer()
             x = left + index * (_BAR_WIDTH + _BAR_GAP)
             bar.setFrame_(
-                ((x, (_HEIGHT - MIN_BAR_HEIGHT) / 2.0), (_BAR_WIDTH, MIN_BAR_HEIGHT))
+                as_rect(
+                    (
+                        x,
+                        (_HEIGHT - MIN_BAR_HEIGHT) / 2.0,
+                        _BAR_WIDTH,
+                        MIN_BAR_HEIGHT,
+                    )
+                )
             )
             bar.setCornerRadius_(_BAR_WIDTH / 2.0)
             bar.setBackgroundColor_(white)

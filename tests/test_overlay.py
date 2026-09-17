@@ -32,6 +32,7 @@ from amanuensis.ui.overlay import (
     TRANSITION_SECONDS,
     OverlayMode,
     RecordingOverlay,
+    as_rect,
     bar_heights,
     frame_for,
     mode_for,
@@ -313,7 +314,7 @@ def test_the_active_form_is_dropped_when_recording_stops(
     assert overlay.mode is OverlayMode.IDLE
     assert appkit.panels[-1].ordered_out is False
     assert all(bar.hidden for bar in overlay._bars), "the bars outlived the microphone"
-    assert overlay._pill.frame() == pill_frame(OverlayMode.IDLE)
+    assert overlay._pill.frame() == as_rect(pill_frame(OverlayMode.IDLE))
 
 
 def test_it_is_removed_when_recording_stops_and_the_idle_pill_is_off(
@@ -926,8 +927,8 @@ def test_the_pill_grows_when_recording_starts(appkit: _FakeAppKit) -> None:
 
     overlay.set_state(DictationState.RECORDING)
 
-    assert overlay._pill.frame() == pill_frame(OverlayMode.ACTIVE)
-    assert idle == pill_frame(OverlayMode.IDLE)
+    assert overlay._pill.frame() == as_rect(pill_frame(OverlayMode.ACTIVE))
+    assert idle == as_rect(pill_frame(OverlayMode.IDLE))
 
 
 def test_the_panel_narrows_again_when_the_microphone_closes(
@@ -943,7 +944,7 @@ def test_the_panel_narrows_again_when_the_microphone_closes(
 
     overlay.set_state(DictationState.TRANSCRIBING)
 
-    assert overlay._pill.frame() == pill_frame(OverlayMode.IDLE)
+    assert overlay._pill.frame() == as_rect(pill_frame(OverlayMode.IDLE))
 
 
 def test_declining_the_idle_pill_leaves_nothing_on_screen(
@@ -1064,3 +1065,91 @@ def test_the_pill_is_outlined(appkit: _FakeAppKit) -> None:
 
     assert overlay._pill.border_width == PILL_BORDER_WIDTH
     assert overlay._pill.border_color is not None
+
+
+# ---------------------------------------------------------------------------
+# The NSRect shape, twice shipped (2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_a_layer_rect_is_nested_not_flat() -> None:
+    """`as_rect` exists because the flat form reaches PyObjC as a crash.
+
+    Asserted on the shape rather than on the values: the values are whatever
+    the caller computed, and the *shape* is the whole content of the bug. A
+    four-tuple raises "depythonifying struct of 2 members, got tuple of 4" the
+    first time a real CALayer sees it, which is on a user's machine and not in
+    this suite.
+    """
+    assert as_rect((19.0, 6.0, 34.0, 10.0)) == ((19.0, 6.0), (34.0, 10.0))
+
+
+def test_every_pill_rect_survives_a_real_calayer() -> None:
+    """The control the fake cannot be, run against the framework itself.
+
+    The fake is a Python object that now checks a shape; PyObjC is the thing
+    that actually rejects one. This project has shipped this exact error twice
+    with a green suite, and both times the missing step was asking the
+    framework rather than asking a stand-in for it.
+
+    Skipped off macOS and without pyobjc, which is the only honest thing to do
+    — a check that silently passes where it cannot run is worse than absent.
+    """
+    Quartz = pytest.importorskip("Quartz")
+
+    layer = Quartz.CALayer.layer()
+    for mode in (OverlayMode.IDLE, OverlayMode.ACTIVE):
+        layer.setFrame_(as_rect(pill_frame(mode)))
+        (x, y), (width, height) = layer.frame()
+        assert (x, y, width, height) == pytest.approx(pill_frame(mode))
+
+
+def test_a_real_calayer_rejects_the_flat_form() -> None:
+    """The negative control for the test above.
+
+    Without it, `as_rect` returning its input unchanged would pass — the
+    positive test would be satisfied by a CALayer that accepted anything, and
+    nothing would show that the conversion is load-bearing.
+    """
+    Quartz = pytest.importorskip("Quartz")
+
+    layer = Quartz.CALayer.layer()
+    with pytest.raises(ValueError, match="depythonifying struct"):
+        layer.setFrame_(pill_frame(OverlayMode.IDLE))
+
+
+def test_quartz_exposes_the_transaction_api_this_module_calls() -> None:
+    """A contract test against the framework, not against the fake.
+
+    Every other assertion about the transition runs through a stand-in that
+    this repository wrote, so it can only confirm that the module calls what
+    the fake was built to receive. When the fake's *shape* is wrong — as it was
+    on 2026-09-17, inventing `CATransactionBegin` where Quartz has
+    `CATransaction.begin` — a green suite says nothing at all.
+
+    `getattr` rather than a call: the point is that the names resolve. PyObjC
+    binds these lazily and `dir()` does not list them, so a membership test
+    would fail against a working framework.
+    """
+    Quartz = pytest.importorskip("Quartz")
+
+    transaction = Quartz.CATransaction
+    for name in ("begin", "commit", "setAnimationDuration_", "setDisableActions_"):
+        assert getattr(transaction, name, None) is not None, (
+            f"Quartz.CATransaction has no {name} — overlay.py calls it"
+        )
+
+
+def test_appkit_exposes_the_reduce_motion_api_this_module_calls() -> None:
+    """The third framework call added on 2026-09-17, checked the same way.
+
+    Two of that day's three new framework calls were wrong — a flat `NSRect`
+    and an invented `CATransaction` shape — and both were green against fakes
+    this repository wrote. The third is asserted here rather than assumed
+    because "the other two were wrong" is the only evidence that matters about
+    how carefully the set was checked.
+    """
+    AppKit = pytest.importorskip("AppKit")
+
+    workspace = AppKit.NSWorkspace.sharedWorkspace()
+    assert isinstance(workspace.accessibilityDisplayShouldReduceMotion(), bool)
