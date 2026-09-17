@@ -3703,7 +3703,7 @@ same day.
 |---|---|---|
 | Slicing — `amanuensis-prd` | `docs/superpowers/slices/amanuensis-prd.md` | 7 slices — 3 accepted, 4 merged |
 | Slicing — `dictionary` | `docs/superpowers/slices/dictionary.md` | 5 slices — 4 accepted, 1 merged |
-| Slicing — `overlay-controls` | `docs/superpowers/slices/overlay-controls.md` | 6 slices — **all accepted** |
+| Slicing — `overlay-controls` | `docs/superpowers/slices/overlay-controls.md` | 6 slices — 5 accepted, 1 built |
 | Slicing — `phase-4-tray-modes` | `docs/superpowers/slices/phase-4-tray-modes.md` | 8 slices — **all accepted** |
 | Objections — `amanuensis-prd-2026-07-31-amendments` | `docs/superpowers/objections/amanuensis-prd-2026-07-31-amendments.md` | 9 objections — **all accepted** |
 | Objections — `amanuensis-prd` | `docs/superpowers/objections/amanuensis-prd.md` | 12 objections — **all accepted** |
