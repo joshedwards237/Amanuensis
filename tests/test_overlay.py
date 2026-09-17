@@ -22,6 +22,7 @@ from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
 from amanuensis.ui.overlay import (
     BAR_COUNT,
+    CONTROL_SIZE,
     CORNER_RADIUS,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
@@ -36,6 +37,8 @@ from amanuensis.ui.overlay import (
     bar_heights,
     control_frame,
     frame_for,
+    icon_polylines,
+    icon_stroke_width,
     is_recording,
     mode_for,
     pill_frame,
@@ -1359,19 +1362,79 @@ def test_the_controls_clear_themselves_when_the_microphone_closes(
     assert overlay.mode is OverlayMode.ACTIVE, "the controls outlived their session"
 
 
-def test_the_glyphs_are_not_swapped(appkit: _FakeAppKit) -> None:
-    """✕ on the left, ✓ on the right, asserted on the strings.
+def test_the_icons_are_not_swapped(appkit: _FakeAppKit) -> None:
+    """`x` on the left, `check` on the right, asserted on what was drawn.
 
-    No geometry test can see this. A ✓ drawn where ✕ belongs is a destructive
-    button wearing the safe one's glyph — the worst possible version of this
-    feature, and invisible to every other assertion here.
+    **Rewritten 2026-09-17** with the icons: the old version compared font
+    glyph strings and there are no strings any more. The property is the same
+    and is the one no geometry test can see — a `check` drawn where `x` belongs
+    is a destructive button wearing the safe one's icon, and both frames are
+    identical in size and position.
+
+    The stroke *count* is checked as well as the points, because it is the
+    cheapest thing that tells the two apart and cannot be satisfied by drawing
+    the same shape into both.
     """
     overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
     overlay.start()
 
-    assert overlay._controls_layers["cancel"].string_value == "✕"
-    assert overlay._controls_layers["finish"].string_value == "✓"
+    cancel = overlay._controls_layers["cancel"].path.polylines
+    finish = overlay._controls_layers["finish"].path.polylines
+
+    assert len(cancel) == 2, "Lucide's x is two strokes"
+    assert len(finish) == 1, "Lucide's check is one stroke"
+    assert [tuple(line) for line in cancel] == list(icon_polylines("cancel"))
+    assert [tuple(line) for line in finish] == list(icon_polylines("finish"))
     assert control_frame("cancel")[0] < control_frame("finish")[0]
+
+
+def test_the_icons_are_stroked_not_filled(appkit: _FakeAppKit) -> None:
+    """Lucide is a stroke set. Filled, these paths are a blob at 16 px.
+
+    `setFillColor_(None)` is the correct call, so the fake starts from a
+    sentinel rather than from `None` — otherwise "never set the fill" and "set
+    it to None" read identically, and the first one draws a solid shape.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+
+    for which in ("cancel", "finish"):
+        layer = overlay._controls_layers[which]
+        assert layer.fill is None, f"{which} is filled"
+        assert layer.stroke is not None, f"{which} has no stroke"
+        assert layer.line_width == pytest.approx(icon_stroke_width())
+        assert layer.line_cap == "round" and layer.line_join == "round"
+
+
+def test_the_icons_fit_their_control_box() -> None:
+    """Scaled from Lucide's 24x24 into `CONTROL_SIZE`, and no larger.
+
+    A point outside the box is clipped by the layer, silently and on one side
+    only, which looks like a thinner icon rather than like a defect.
+    """
+    for which in ("cancel", "finish"):
+        for polyline in icon_polylines(which):
+            for x, y in polyline:
+                assert 0.0 <= x <= CONTROL_SIZE, f"{which} is clipped at x={x}"
+                assert 0.0 <= y <= CONTROL_SIZE, f"{which} is clipped at y={y}"
+
+
+def test_the_check_points_the_right_way_up() -> None:
+    """The flip SVG needs, which `x` would not have caught.
+
+    SVG counts y down from the top; `CALayer` counts up from the bottom. Drawn
+    unflipped, Lucide's check is a tick pointing the wrong way — obvious on
+    screen and invisible in the `x`, which is symmetric about both axes.
+
+    A checkmark's elbow is its lowest point and its long arm ends higher than
+    its short one. Both are asserted: the lowest-point test alone is satisfied
+    by a `v`.
+    """
+    ((start, elbow, end),) = icon_polylines("finish")
+
+    assert elbow[1] < start[1] and elbow[1] < end[1], "the elbow is not the bottom"
+    assert start[1] > end[1], "the long arm is not the tall one"
+    assert start[0] > elbow[0] > end[0], "the stroke does not run right to left"
 
 
 def test_the_controls_can_be_declined(appkit: _FakeAppKit) -> None:

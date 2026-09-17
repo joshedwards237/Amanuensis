@@ -181,30 +181,58 @@ class _FakeLayer:
         self.sublayers.append(layer)
 
 
-class _FakeTextLayer(_FakeLayer):
-    """A `CATextLayer`. The string is the assertion for the two controls —
-    a ✕ drawn where ✓ belongs is a destructive button wearing the safe one's
-    glyph, which no geometry check can see."""
+class _FakePath:
+    """A `CGMutablePath`, recorded as the polylines that were drawn into it.
+
+    The points are the assertion for the two controls. A `check` drawn where
+    `x` belongs is a destructive button wearing the safe one's icon, and no
+    geometry check of the *frames* can see it — they are the same size and in
+    the same places.
+    """
+
+    def __init__(self) -> None:
+        self.polylines: list[list[tuple[float, float]]] = []
+
+    def move_to(self, x: float, y: float) -> None:
+        self.polylines.append([(x, y)])
+
+    def line_to(self, x: float, y: float) -> None:
+        assert self.polylines, "a line was drawn before any move"
+        self.polylines[-1].append((x, y))
+
+
+class _FakeShapeLayer(_FakeLayer):
+    """A `CAShapeLayer`."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.string_value = ""
-        self.font_size = 0.0
-        self.alignment = ""
-        self.foreground: Any = None
+        self.path: Any = None
+        self.stroke: Any = None
+        #: Sentinel, not None: `setFillColor_(None)` is the correct call and a
+        #: fake initialised to None could not tell it from never being made.
+        self.fill: Any = "unset"
+        self.line_width = 0.0
+        self.line_cap = ""
+        self.line_join = ""
         self.contents_scale = 1.0
 
-    def setString_(self, value: str) -> None:
-        self.string_value = value
+    def setPath_(self, value: Any) -> None:
+        self.path = value
 
-    def setFontSize_(self, value: float) -> None:
-        self.font_size = value
+    def setStrokeColor_(self, value: Any) -> None:
+        self.stroke = value
 
-    def setAlignmentMode_(self, value: str) -> None:
-        self.alignment = value
+    def setFillColor_(self, value: Any) -> None:
+        self.fill = value
 
-    def setForegroundColor_(self, value: Any) -> None:
-        self.foreground = value
+    def setLineWidth_(self, value: float) -> None:
+        self.line_width = value
+
+    def setLineCap_(self, value: str) -> None:
+        self.line_cap = value
+
+    def setLineJoin_(self, value: str) -> None:
+        self.line_join = value
 
     def setContentsScale_(self, value: float) -> None:
         self.contents_scale = value
@@ -284,11 +312,29 @@ def install(fake: Any) -> None:
         transactions: ClassVar[list[dict[str, Any]]] = []
         _open: ClassVar[list[dict[str, Any]]] = []
 
-        CATextLayer = _FakeTextLayer
+        CAShapeLayer = _FakeShapeLayer
+        kCALineCapRound = "round"
+        kCALineJoinRound = "round"
 
         @staticmethod
         def CGColorCreateGenericGray(_gray: float, _alpha: float) -> str:
             return "cgcolor"
+
+        @staticmethod
+        def CGPathCreateMutable() -> _FakePath:
+            return _FakePath()
+
+        @staticmethod
+        def CGPathMoveToPoint(
+            path: _FakePath, _transform: Any, x: float, y: float
+        ) -> None:
+            path.move_to(x, y)
+
+        @staticmethod
+        def CGPathAddLineToPoint(
+            path: _FakePath, _transform: Any, x: float, y: float
+        ) -> None:
+            path.line_to(x, y)
 
         class CATransaction:
             """Mirrors the real shape: a class with class methods.

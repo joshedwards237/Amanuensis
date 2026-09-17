@@ -87,6 +87,8 @@ __all__ = [
     "bar_heights",
     "control_frame",
     "frame_for",
+    "icon_polylines",
+    "icon_stroke_width",
     "is_recording",
     "mode_for",
     "pill_frame",
@@ -118,12 +120,36 @@ PANEL_HEIGHT: Final = _HEIGHT
 #: The two controls. 16 px is the spec's number and is the smallest thing S6's
 #: reachability criterion is willing to judge.
 CONTROL_SIZE: Final = 16.0
-#: Smaller than the box it sits in: a glyph set at its frame's height overflows
-#: its own line box and is clipped at the top on some fonts.
-_CONTROL_FONT_SIZE: Final = 12.0
-#: `CATextLayer` renders at 1x unless told, and 1x text on a Retina display
-#: reads as broken rather than as plain.
+#: `CAShapeLayer` renders at 1x unless told, and a 1x hairline on a Retina
+#: display reads as broken rather than as plain.
 _RETINA_SCALE: Final = 2.0
+
+#: **Lucide**, drawn rather than typeset. The controls were `CATextLayer`s
+#: carrying ✕ (U+2715) and ✓ (U+2713) until 2026-09-17; a font glyph is whatever
+#: the system font has, which is not the same shape twice across macOS versions
+#: and is not the shape the rest of the product is drawn in.
+#:
+#: Lucide's icons are **strokes, not fills**, which is why these are polylines
+#: and a `CAShapeLayer` rather than a filled path. Filling them would produce a
+#: blob at this size.
+#:
+#: Points are in Lucide's own 24x24 viewBox with **y already flipped** —
+#: SVG counts down from the top and `CALayer` counts up from the bottom, and a
+#: checkmark drawn in the wrong direction is an unmistakable tick pointing the
+#: wrong way. `x` is symmetric and would not have shown it, which is why the
+#: flip is applied here once rather than per icon.
+#:
+#: `x`     = M18 6 6 18   /  m6 6 12 12
+#: `check` = M20 6 9 17 l-5-5
+_LUCIDE_VIEWBOX: Final = 24.0
+_LUCIDE_STROKE: Final = 2.0
+_LUCIDE_POLYLINES: Final[dict[str, tuple[tuple[tuple[float, float], ...], ...]]] = {
+    "cancel": (
+        ((18.0, 18.0), (6.0, 6.0)),
+        ((6.0, 18.0), (18.0, 6.0)),
+    ),
+    "finish": (((20.0, 18.0), (9.0, 7.0), (4.0, 12.0)),),
+}
 #: Distance from the panel's centre to each control's centre. Sized so both sit
 #: inside the latched pill and outside the bars, with the bars' half-span
 #: (19.5) and the control's half-width (8) both cleared.
@@ -432,6 +458,29 @@ def _control_view_class() -> Any:
 
         _CONTROL_VIEW_CLASS = _AmanuensisControlView
     return _CONTROL_VIEW_CLASS
+
+
+def icon_polylines(which: str) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """Lucide's `x` or `check`, scaled into a `CONTROL_SIZE` box. Pure.
+
+    Separated from the drawing so the geometry is testable without Quartz, a
+    layer or a display — the same reason `frame_for` takes a tuple rather than
+    an `NSScreen`.
+
+    `x` is two strokes and `check` is one, so this returns a tuple of polylines
+    rather than a single list of points. Joining `x`'s two diagonals into one
+    path would draw a `Z`.
+    """
+    scale = CONTROL_SIZE / _LUCIDE_VIEWBOX
+    return tuple(
+        tuple((x * scale, y * scale) for x, y in polyline)
+        for polyline in _LUCIDE_POLYLINES[which]
+    )
+
+
+def icon_stroke_width() -> float:
+    """Lucide's stroke, scaled with the icon so the proportions are theirs."""
+    return _LUCIDE_STROKE * CONTROL_SIZE / _LUCIDE_VIEWBOX
 
 
 def control_hit(x: float, y: float) -> str | None:
@@ -895,25 +944,42 @@ class RecordingOverlay:
         return panel
 
     def _build_controls(self, parent: Any) -> dict[str, Any]:
-        """✕ and ✓ as text layers, hidden until a session latches."""
+        """Lucide's `x` and `check`, stroked, hidden until a session latches."""
         quartz = self._quartz()
         white = quartz.CGColorCreateGenericGray(1.0, 0.92)
         layers: dict[str, Any] = {}
-        for which, glyph in (("cancel", "\u2715"), ("finish", "\u2713")):
-            layer = self._catextlayer().layer()
-            layer.setString_(glyph)
-            layer.setFontSize_(_CONTROL_FONT_SIZE)
-            layer.setAlignmentMode_("center")
-            layer.setForegroundColor_(white)
-            # Without this the glyph is drawn at 1x and is visibly soft on a
-            # Retina display, on a control small enough that softness reads as
-            # a rendering fault rather than as a style.
+        for which in ("cancel", "finish"):
+            layer = self._cashapelayer().layer()
+            layer.setPath_(self._icon_path(which))
+            layer.setStrokeColor_(white)
+            # **Stroked, not filled.** Lucide is a stroke set; filling these
+            # paths produces a blob at 16 px rather than an icon. `None` rather
+            # than a clear colour — a fill colour that happens to be
+            # transparent still rasterises.
+            layer.setFillColor_(None)
+            layer.setLineWidth_(icon_stroke_width())
+            layer.setLineCap_(quartz.kCALineCapRound)
+            layer.setLineJoin_(quartz.kCALineJoinRound)
+            # Without this the stroke is rasterised at 1x and is visibly soft
+            # on a Retina display, on a control small enough that softness
+            # reads as a rendering fault rather than as a style.
             layer.setContentsScale_(_RETINA_SCALE)
             layer.setFrame_(as_rect(control_frame(which)))
             layer.setHidden_(True)
             parent.addSublayer_(layer)
             layers[which] = layer
         return layers
+
+    def _icon_path(self, which: str) -> Any:
+        """A `CGPath` for one icon, in the layer's own coordinates."""
+        quartz = self._quartz()
+        path = quartz.CGPathCreateMutable()
+        for polyline in icon_polylines(which):
+            first, *rest = polyline
+            quartz.CGPathMoveToPoint(path, None, first[0], first[1])
+            for x, y in rest:
+                quartz.CGPathAddLineToPoint(path, None, x, y)
+        return path
 
     def _on_click(self, x: float, y: float) -> None:
         """A click landed on the panel. Main thread, inside AppKit's dispatch.
@@ -951,10 +1017,10 @@ class RecordingOverlay:
         return _control_view_class()
 
     @classmethod
-    def _catextlayer(cls) -> Any:
-        """`CATextLayer`, off the same seam as `_calayer` and for its reason:
+    def _cashapelayer(cls) -> Any:
+        """`CAShapeLayer`, off the same seam as `_calayer` and for its reason:
         tests replace one attribute rather than the framework."""
-        return cls._quartz().CATextLayer
+        return cls._quartz().CAShapeLayer
 
     def _build_pill(self, parent: Any) -> Any:
         """The visible pill: dark translucent fill, light hairline border."""
