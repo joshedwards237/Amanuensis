@@ -395,6 +395,10 @@ def test_the_daemon_reports_both_missing_permissions_at_once(
     monkeypatch.setattr(macos_injection, "_hiservices", lambda: _DeniedAX)
     monkeypatch.setattr(macos_injection, "_quartz", _Denied)
     monkeypatch.setattr(macos_hotkey, "_quartz", _Denied)
+    # The IOKit seam, bound 2026-09-17 for the same reason as the Quartz ones
+    # above: this test denies both grants, so the product requests both, and an
+    # unbound seam reaches the real `IOHIDRequestAccess`.
+    monkeypatch.setattr(macos_hotkey, "_iokit_request_access", lambda: lambda _: False)
 
     exit_code = _daemon(AppConfig())
 
@@ -592,12 +596,12 @@ def test_both_console_scripts_are_declared_and_point_at_one_entry_point() -> Non
     with (root / "pyproject.toml").open("rb") as handle:
         scripts = tomllib.load(handle)["project"]["scripts"]
 
-    assert set(scripts) == set(PROGRAM_NAMES), (
-        "pyproject and PROGRAM_NAMES disagree about which commands exist"
-    )
-    assert set(scripts.values()) == {"amanuensis.cli:main"}, (
-        "both names must reach the same entry point, or they are two products"
-    )
+    assert set(scripts) == set(
+        PROGRAM_NAMES
+    ), "pyproject and PROGRAM_NAMES disagree about which commands exist"
+    assert set(scripts.values()) == {
+        "amanuensis.cli:main"
+    }, "both names must reach the same entry point, or they are two products"
 
 
 @pytest.mark.parametrize("typed", ["manu", "amanuensis"])
@@ -700,7 +704,9 @@ def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
             return False
 
         def CGRequestListenEventAccess(self) -> bool:
-            events.append("request:Input Monitoring")
+            # The 26.6-broken call. Reachable only when IOKit will not load,
+            # and recorded distinctly so a silent regression to it is visible.
+            events.append("request:Input Monitoring(quartz-fallback)")
             return False
 
     class _FakeHIServices:
@@ -719,9 +725,24 @@ def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
             events.append("request:Accessibility")
             return False
 
+    def _fake_hid_request(request_type: int) -> bool:
+        """The Input Monitoring twin of `_FakeHIServices`, bound 2026-09-17.
+
+        `IOHIDRequestAccess` replaced `CGRequestListenEventAccess` on that date
+        and raises a modal dialog for the same reason. The request type is
+        recorded, not just the call: 0 is Accessibility and 1 is Input
+        Monitoring, and a daemon that registers for the wrong one still leaves
+        the pane it names empty.
+        """
+        events.append(f"request:Input Monitoring({request_type})")
+        return False
+
     monkeypatch.setattr(macos_injection, "_quartz", lambda: _Denied("inject"))
     monkeypatch.setattr(macos_injection, "_hiservices", lambda: _FakeHIServices)
     monkeypatch.setattr(macos_hotkey, "_quartz", lambda: _Denied("hotkey"))
+    monkeypatch.setattr(
+        macos_hotkey, "_iokit_request_access", lambda: _fake_hid_request
+    )
 
     real_print = print
 
@@ -738,7 +759,8 @@ def test_the_daemon_registers_with_tcc_before_it_sends_the_user_to_settings(
     assert exit_code != 0
     assert "request:Accessibility" in events, "nothing registered for Accessibility"
     assert (
-        "request:Input Monitoring" in events
+        f"request:Input Monitoring({macos_hotkey._IOHID_REQUEST_TYPE_LISTEN_EVENT})"
+        in events
     ), "nothing registered for Input Monitoring"
     assert events.index("request:Accessibility") < events.index(
         "printed"

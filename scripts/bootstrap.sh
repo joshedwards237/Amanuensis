@@ -91,12 +91,18 @@ dim "Fully local dictation. This sets up everything it needs and stops if it can
 MACOS_VERSION="$(sw_vers -productVersion)"
 info "macOS ${MACOS_VERSION}"
 
-# Recorded rather than acted on. Input Monitoring has no working prompt on 26.x
-# (gate finding 4b) and the user has to add their terminal by hand there. Saying
-# so now beats them discovering it at the last step.
+# Recorded rather than acted on. `CGRequestListenEventAccess` raised no dialog on
+# 26.6 (gate finding 4b); `IOHIDRequestAccess` replaced it on 2026-09-17 and is
+# **unverified on 26.x** — both development machines run 27.0 holding both
+# grants, so neither can see this fail. Worded to be honest whichever way it
+# goes, because a promise that does not come true at the last step is worse than
+# no promise.
 case "$MACOS_VERSION" in
-    26.*) warn "on macOS 26.x the Input Monitoring permission will not prompt."
-          dim  "You will add Terminal to that list by hand at the end. Known, and documented." ;;
+    26.*) warn "on macOS 26.x the Input Monitoring prompt has failed to appear before."
+          dim  "A different API is used as of 2026-09-17 and it has not yet been"
+          dim  "confirmed on 26.x. If no dialog appears, add Terminal by hand with"
+          dim  "the + button — step 5 of the README has the procedure."
+          dim  "Either way, \`scripts/diagnose_permissions.py\` will say what happened." ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -249,13 +255,40 @@ info "speech model once, checks it against a hash this project recorded, and"
 info "times your machine. After this the product never connects to anything."
 info "Expect a few minutes."
 
-if [[ ! -f "tests/fixtures/tier-clip.wav" ]] && [[ -x "scripts/make_tier_clip.sh" ]]; then
+# The reference clip the timed check measures against (PRD §7.2). Three things
+# here were wrong on 2026-09-16 and cost a tester the install:
+#
+#   1. The guard tested `tests/fixtures/tier-clip.wav`. `make_tier_clip.sh`
+#      writes `src/amanuensis/assets/tier_check.wav`. Nothing has ever written
+#      the path being guarded, so the guard was decorative.
+#   2. Step 4 installs NON-EDITABLE, so the package is copied into
+#      site-packages before this runs, and `tier.py`'s `default_clip_path()`
+#      resolves inside that copy. A clip generated into the checkout afterwards
+#      can never reach it. Passing `--clip` sidesteps the packaging question
+#      entirely and works editable or not.
+#   3. Errors were swallowed by `>/dev/null 2>&1 || true`, so a failed
+#      generation was indistinguishable from a successful one.
+#
+# None of it was visible here: the file is gitignored and every development
+# machine already has one, which is the same shape as the permission grants
+# both machines already held.
+CLIP="$CHECKOUT/src/amanuensis/assets/tier_check.wav"
+if [[ ! -f "$CLIP" ]]; then
+    [[ -x "scripts/make_tier_clip.sh" ]] \
+        || die "the reference clip is missing and scripts/make_tier_clip.sh is not
+    executable. Re-clone, or point the check at a ten-second recording of your
+    own with: $MANU install --clip /path/to/clip.wav"
     dim "Generating the reference clip with the macOS \`say\` voice (no microphone)..."
-    ./scripts/make_tier_clip.sh >/dev/null 2>&1 || true
+    ./scripts/make_tier_clip.sh "$CLIP" >/dev/null \
+        || die "could not generate the reference clip. The output above says why.
+    You can supply your own ten-second recording instead:
+        $MANU install --clip /path/to/clip.wav"
 fi
+[[ -f "$CLIP" ]] || die "the reference clip was reported generated and is not at
+    $CLIP. This is a bug — please report it."
 
 require_network
-"$MANU" install || die "\`manu install\` failed. The output above says why.
+"$MANU" install --clip "$CLIP" || die "\`manu install\` failed. The output above says why.
     Nothing is broken — re-run this script to try again."
 ok "model downloaded and verified"
 

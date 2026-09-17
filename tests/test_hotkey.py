@@ -726,8 +726,11 @@ class _Clock:
         return self.now
 
     def schedule(self, delay: float, action: Any) -> Any:
-        entry: dict[str, Any] = {"at": self.now + delay, "action": action,
-                                 "cancelled": False}
+        entry: dict[str, Any] = {
+            "at": self.now + delay,
+            "action": action,
+            "cancelled": False,
+        }
         self.pending.append(entry)
 
         class _Handle:
@@ -862,15 +865,13 @@ def test_a_second_press_inside_the_window_never_stops_the_session(
     clock.advance(0.12)
     _down(quartz)
 
-    assert recorder.events == ["press"], (
-        "the latch stopped and restarted the session the user is speaking into"
-    )
+    assert recorder.events == [
+        "press"
+    ], "the latch stopped and restarted the session the user is speaking into"
     assert clock.live == [], "the deferred end must be cancelled, not just ignored"
 
 
-def test_the_latch_needs_no_cancel_callback(
-    quartz: _FakeQuartz, clock: _Clock
-) -> None:
+def test_the_latch_needs_no_cancel_callback(quartz: _FakeQuartz, clock: _Clock) -> None:
     """Objection O10. `_latch_enabled` gated the whole latch on
     `on_cancel is not None`, with a docstring calling the requirement 'not a
     convenience' — because the latch used to emit it. It no longer does, so a
@@ -980,9 +981,12 @@ def test_double_tap_ms_zero_disables_the_latch_and_the_deferral_together(
         _down(quartz)
         clock.advance(0.08)
         _up(quartz)
-        assert recorder.events == ["press", "release", "press", "release"], (
-            "a double-tap with the latch off is two ordinary dictations"
-        )
+        assert recorder.events == [
+            "press",
+            "release",
+            "press",
+            "release",
+        ], "a double-tap with the latch off is two ordinary dictations"
     finally:
         if listener.is_running:
             listener.stop()
@@ -1006,9 +1010,9 @@ def test_the_latch_is_inert_outside_push_to_talk(
 
         assert "cancel" not in recorder.events
         assert clock.live == [], "no deferral outside push_to_talk"
-        assert recorder.events == ["press"], (
-            f"{mode} starts on the press and is unchanged by the latch"
-        )
+        assert recorder.events == [
+            "press"
+        ], f"{mode} starts on the press and is unchanged by the latch"
     finally:
         if listener.is_running:
             listener.stop()
@@ -1019,13 +1023,83 @@ def test_the_latch_is_inert_outside_push_to_talk(
 # ---------------------------------------------------------------------------
 
 
-def test_requesting_permission_calls_the_prompting_half(quartz: _FakeQuartz) -> None:
-    """The positive half of the pair above.
+class _FakeIOKit:
+    """`IOHIDRequestAccess`, and a record of what it was asked for.
 
-    Input Monitoring behaves as Accessibility does: a process that has only
-    preflighted is not listed in the pane, so the remediation sends the user
-    to an empty list. `CGRequestListenEventAccess` is what puts the row there.
+    Deliberately not a `Mock`: the argument is the whole assertion. IOKit's
+    request type is an enum where 0 is Accessibility and 1 is Input
+    Monitoring, so a fix that calls the right symbol with the wrong constant
+    raises the wrong dialog and would pass any test that only counted calls.
     """
+
+    def __init__(self, *, granted: bool = False) -> None:
+        self.granted = granted
+        self.requested: list[int] = []
+
+    def request(self, request_type: int) -> bool:
+        self.requested.append(request_type)
+        return self.granted
+
+
+@pytest.fixture
+def iokit(monkeypatch: pytest.MonkeyPatch) -> _FakeIOKit:
+    fake = _FakeIOKit()
+    monkeypatch.setattr(macos_hotkey, "_iokit_request_access", lambda: fake.request)
+    return fake
+
+
+def test_requesting_permission_asks_iokit_for_input_monitoring(
+    quartz: _FakeQuartz, iokit: _FakeIOKit
+) -> None:
+    """`IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)`, and nothing else.
+
+    **Revised 2026-09-17, and the call this replaces did not work.**
+    `CGRequestListenEventAccess` was the obvious twin of the preflight the
+    check uses, and on macOS 26.6 it registered nothing — measured on the
+    machine that fails, with `scripts/diagnose_permissions.py`. It is the same
+    defect `MacOSInjector.request_permissions` hit on 2026-09-14 and for the
+    same reason, one pane over.
+
+    The Quartz call must **not** also fire. Both can present a dialog, and two
+    prompts for one grant teaches the dismissal reflex §6.3 exists to avoid —
+    the injector's revision note makes the same argument.
+    """
+    quartz.granted = False
+    listener = MacOSHotkeyListener(HotkeyConfig())
+
+    listener.request_permissions()
+
+    assert iokit.requested == [macos_hotkey._IOHID_REQUEST_TYPE_LISTEN_EVENT]
+    assert quartz.request_calls == 0
+
+
+def test_request_type_is_listen_event_not_post_event() -> None:
+    """The constant, pinned against IOKit's header.
+
+    0 is `kIOHIDRequestTypePostEvent` (Accessibility) and 1 is
+    `kIOHIDRequestTypeListenEvent` (Input Monitoring). Transposing them is
+    silent: the call succeeds, a dialog appears, and it is the dialog for the
+    grant this module does not need. `scripts/diagnose_permissions.py` carries
+    the same two values and is the instrument they were read off.
+    """
+    assert macos_hotkey._IOHID_REQUEST_TYPE_LISTEN_EVENT == 1
+
+
+def test_requesting_permission_falls_back_when_iokit_will_not_load(
+    quartz: _FakeQuartz, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No IOKit, no silence: the old call is still better than nothing.
+
+    ctypes costs no dependency and buys a hand-declared signature instead,
+    which crashes rather than raises when it is wrong. The load is guarded for
+    that reason, and a guard with no fallback would leave the user with a pane
+    that stays empty and a product that never said why.
+    """
+
+    def _unavailable() -> Any:
+        raise OSError("IOKit did not load")
+
+    monkeypatch.setattr(macos_hotkey, "_iokit_request_access", _unavailable)
     quartz.granted = False
     listener = MacOSHotkeyListener(HotkeyConfig())
 

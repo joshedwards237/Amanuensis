@@ -21,6 +21,23 @@ remediation here says which one it is *and* says the other is not it. Both are
 the non-prompting halves of documented pairs: the `CGRequest*` twins raise a
 system dialog, which a daemon that starts at login must never do at startup.
 
+**Revised 2026-09-17: the prompting twin does not work, and IOKit's does.**
+`CGRequestListenEventAccess` was measured on macOS 26.6 — demonstrably called,
+no dialog, pane still empty — which is the same defect and the same failure
+signature `CGRequestPostEventAccess` produced one pane over on 2026-09-14.
+`IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)` is what registers this
+process with TCC there. It is reached through **ctypes**, not pyobjc:
+`pyobjc-framework-IOKit` does not exist on PyPI and no installed pyobjc package
+exports the symbol, so the choice was ctypes or nothing. ctypes costs no
+dependency and costs a hand-declared signature instead, which crashes rather
+than raises when it is wrong — hence the explicit `argtypes`/`restype` below
+and the guard around the load.
+
+**This module cannot verify its own fix.** Both development machines run 27.0
+holding both grants, so every check here passes for the reason the bug is
+invisible. `scripts/diagnose_permissions.py` is the instrument; it runs every
+candidate on the machine that actually fails and returns a table.
+
 **Modifier state is read from the per-side device bits, not the generic mask.**
 `kCGEventFlagMaskAlternate` is set while *either* option key is down. Release
 right-option while left-option is held and the generic bit does not change, so
@@ -45,6 +62,7 @@ decide what a press means. It converts OS events into two callbacks.
 
 from __future__ import annotations
 
+import ctypes
 import threading
 import time
 from collections.abc import Callable
@@ -202,6 +220,30 @@ def _schedule(delay: float, action: Callable[[], None]) -> Any:
     return timer
 
 
+#: IOKit's HID access enum. 0 is `kIOHIDRequestTypePostEvent` (Accessibility),
+#: 1 is `kIOHIDRequestTypeListenEvent` (Input Monitoring). Transposing them is
+#: silent — the call succeeds and raises the dialog for the other grant.
+_IOHID_REQUEST_TYPE_LISTEN_EVENT: Final = 1
+
+_IOKIT_PATH: Final = "/System/Library/Frameworks/IOKit.framework/IOKit"
+
+
+def _iokit_request_access() -> Callable[[int], bool]:
+    """`IOHIDRequestAccess`, with its signature declared.
+
+    Raises `OSError` if the framework will not load and `AttributeError` if the
+    symbol is absent, so the caller can fall back rather than crash. Declaring
+    `argtypes` and `restype` is not optional: ctypes defaults to `int` for
+    both, and passing a Python int where the ABI wants a `uint32` is the kind
+    of mistake that works on one machine and corrupts the stack on another.
+    """
+    iokit = ctypes.cdll.LoadLibrary(_IOKIT_PATH)
+    request = iokit.IOHIDRequestAccess
+    request.argtypes = [ctypes.c_uint32]
+    request.restype = ctypes.c_bool
+    return request
+
+
 def _quartz() -> Any:
     """Import Quartz at the point of use, never at module import.
 
@@ -326,9 +368,21 @@ class MacOSHotkeyListener(HotkeyListener):
         Same mechanism, different pane: preflighting never lists the process,
         so a user sent to Input Monitoring by the remediation above finds
         nothing to switch on. The return value is discarded for the same
-        reason — the grant is read at launch.
+        reason — the grant is read at launch, so even an immediate yes does
+        not reach this process.
+
+        **Revised 2026-09-17; the call this replaces registered nothing.** See
+        the module docstring. `CGRequestListenEventAccess` is kept only for an
+        install where IOKit will not load, and is **not** called in addition:
+        both can present a dialog, and two prompts for one grant teaches the
+        dismissal reflex §6.3 exists to avoid.
         """
-        _quartz().CGRequestListenEventAccess()
+        try:
+            request = _iokit_request_access()
+        except (OSError, AttributeError):
+            _quartz().CGRequestListenEventAccess()
+            return
+        request(_IOHID_REQUEST_TYPE_LISTEN_EVENT)
 
     def start(
         self,
@@ -477,10 +531,7 @@ class MacOSHotkeyListener(HotkeyListener):
         latch no longer emits it, so the gate would protect nothing and cost
         that.
         """
-        return (
-            self._config.mode == "push_to_talk"
-            and self._config.double_tap_ms > 0
-        )
+        return self._config.mode == "push_to_talk" and self._config.double_tap_ms > 0
 
     def _cancel_deferred(self) -> None:
         """Abandon a pending end. Safe to call when there is none."""

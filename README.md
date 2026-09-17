@@ -152,11 +152,21 @@ If your terminal still is not listed, add it with the `+` button. Terminal lives
 at `/System/Applications/Utilities/Terminal.app`, which the file picker hides
 until you press **Cmd-Shift-G** and paste that path.
 
-**On macOS 26.6 you will have to do this for Input Monitoring.** Measured there
-2026-09-14: the Accessibility dialog appears, and the Input Monitoring one does
-not — so that pane stays empty until you add your terminal by hand. Whether
-other 26.x versions behave the same way is unmeasured. The `+` route above is
-the whole procedure.
+**On macOS 26.6 you may have to do this for Input Monitoring.** Measured there
+2026-09-14: the Accessibility dialog appeared, and the Input Monitoring one did
+not — so that pane stayed empty until you added your terminal by hand.
+
+That was `CGRequestListenEventAccess`, and on 2026-09-17 it was replaced with
+`IOHIDRequestAccess`, which is the call that registers the process with TCC.
+**This is not yet confirmed on 26.x.** Both machines this project is developed
+on run macOS 27.0 holding both grants, so neither can reproduce the failure, and
+a fix is unverified until it runs where it can fail. If the dialog appears, the
+`+` route below is unnecessary. If it does not, the `+` route is the whole
+procedure and nothing has regressed.
+
+Run `python scripts/diagnose_permissions.py` either way — it asks every
+candidate API on your machine and prints what each one answered, which is the
+only way this gets settled.
 
 The grant is read once at launch, so **restart `manu daemon`** after granting —
 a running process does not notice.
