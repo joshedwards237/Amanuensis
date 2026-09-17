@@ -70,18 +70,24 @@ __all__ = [
     "ACTIVE_HEIGHT",
     "ACTIVE_WIDTH",
     "BAR_COUNT",
+    "CONTROL_SIZE",
     "CORNER_RADIUS",
     "IDLE_HEIGHT",
     "IDLE_WIDTH",
+    "LATCHED_WIDTH",
     "MAX_BAR_HEIGHT",
     "OVERLAY_FAILURE_LIMIT",
+    "PANEL_HEIGHT",
+    "PANEL_WIDTH",
     "PILL_BORDER_WIDTH",
     "TRANSITION_SECONDS",
     "OverlayMode",
     "RecordingOverlay",
     "as_rect",
     "bar_heights",
+    "control_frame",
     "frame_for",
+    "is_recording",
     "mode_for",
     "pill_frame",
 ]
@@ -98,6 +104,30 @@ _HEIGHT: Final = 22.0
 #: layer inside it is what changes. See `pill_frame`.
 ACTIVE_WIDTH: Final = _WIDTH
 ACTIVE_HEIGHT: Final = _HEIGHT
+#: The latched form: the recording pill with a ✕ and a ✓ either side of the
+#: bars (§5.2, spec `overlay-controls.md` S5). 114 is the spec's number.
+LATCHED_WIDTH: Final = 114.0
+
+#: **The window is built at the widest form and never resized**, so it is this
+#: wide in every state — see `pill_frame`. Everything drawn inside is positioned
+#: in this coordinate space, which is why the bars do not move when the pill
+#: changes width: they are children of the container, not of the pill.
+PANEL_WIDTH: Final = LATCHED_WIDTH
+PANEL_HEIGHT: Final = _HEIGHT
+
+#: The two controls. 16 px is the spec's number and is the smallest thing S6's
+#: reachability criterion is willing to judge.
+CONTROL_SIZE: Final = 16.0
+#: Smaller than the box it sits in: a glyph set at its frame's height overflows
+#: its own line box and is clipped at the top on some fonts.
+_CONTROL_FONT_SIZE: Final = 12.0
+#: `CATextLayer` renders at 1x unless told, and 1x text on a Retina display
+#: reads as broken rather than as plain.
+_RETINA_SCALE: Final = 2.0
+#: Distance from the panel's centre to each control's centre. Sized so both sit
+#: inside the latched pill and outside the bars, with the bars' half-span
+#: (19.5) and the control's half-width (8) both cleared.
+_CONTROL_OFFSET: Final = 36.0
 #: The idle form. A short pill — wider than it is tall, and thinner than the
 #: recording form — revised 2026-09-17 from a 22x22 circle on the operator's
 #: verdict after seeing it on screen.
@@ -205,9 +235,15 @@ class OverlayMode(Enum):
     HIDDEN = "hidden"
     IDLE = "idle"
     ACTIVE = "active"
+    #: Recording, hands-free, with the two controls drawn. Still recording —
+    #: everything §5.4 says about the ACTIVE form applies here too, which is
+    #: why `is_recording` exists rather than callers testing for ACTIVE.
+    LATCHED = "latched"
 
 
-def mode_for(state: DictationState, *, idle_enabled: bool) -> OverlayMode:
+def mode_for(
+    state: DictationState, *, idle_enabled: bool, controls: bool = False
+) -> OverlayMode:
     """Which form the panel takes. Pure, and the privacy rule lives here.
 
     **`ACTIVE` is returned for exactly one state and no setting changes that.**
@@ -222,8 +258,19 @@ def mode_for(state: DictationState, *, idle_enabled: bool) -> OverlayMode:
     or nothing at all, which is the behaviour before this existed.
     """
     if state is DictationState.RECORDING:
-        return OverlayMode.ACTIVE
+        return OverlayMode.LATCHED if controls else OverlayMode.ACTIVE
     return OverlayMode.IDLE if idle_enabled else OverlayMode.HIDDEN
+
+
+def is_recording(mode: OverlayMode) -> bool:
+    """Does this mode mean the microphone is open?
+
+    Two modes do, and every rule that used to read `is ACTIVE` must read this
+    instead. Adding LATCHED without it would have left the bars hidden and the
+    level path dead in exactly the sessions the controls are for — a
+    hands-free dictation showing a motionless pill, which is §5.4's failure.
+    """
+    return mode in (OverlayMode.ACTIVE, OverlayMode.LATCHED)
 
 
 def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
@@ -291,13 +338,35 @@ def pill_frame(mode: OverlayMode) -> tuple[float, float, float, float]:
     drawn empty — and returns the idle one so a panel coming back does not have
     to animate from nowhere.
     """
-    if mode is OverlayMode.ACTIVE:
-        return (0.0, 0.0, ACTIVE_WIDTH, ACTIVE_HEIGHT)
+    if mode is OverlayMode.LATCHED:
+        width, height = LATCHED_WIDTH, PANEL_HEIGHT
+    elif mode is OverlayMode.ACTIVE:
+        width, height = ACTIVE_WIDTH, ACTIVE_HEIGHT
+    else:
+        width, height = IDLE_WIDTH, IDLE_HEIGHT
     return (
-        (ACTIVE_WIDTH - IDLE_WIDTH) / 2.0,
-        (ACTIVE_HEIGHT - IDLE_HEIGHT) / 2.0,
-        IDLE_WIDTH,
-        IDLE_HEIGHT,
+        (PANEL_WIDTH - width) / 2.0,
+        (PANEL_HEIGHT - height) / 2.0,
+        width,
+        height,
+    )
+
+
+def control_frame(which: str) -> tuple[float, float, float, float]:
+    """Where ✕ and ✓ sit, in the container's coordinate space.
+
+    Fixed. They are children of the container rather than of the pill, so they
+    do not move when the pill changes width — and `mouseDown_` hit-tests
+    against exactly these rects, so a control that drifted from its own
+    hit-target would look right and click wrong.
+    """
+    centre = PANEL_WIDTH / 2.0
+    offset = -_CONTROL_OFFSET if which == "cancel" else _CONTROL_OFFSET
+    return (
+        centre + offset - CONTROL_SIZE / 2.0,
+        (PANEL_HEIGHT - CONTROL_SIZE) / 2.0,
+        CONTROL_SIZE,
+        CONTROL_SIZE,
     )
 
 
@@ -315,8 +384,8 @@ def frame_for(
     # The window is always the recording form's size. It is the pill layer
     # inside it that shrinks, which is what keeps `setFrame:display:animate:`
     # — a call that blocks the main queue — off this module's critical path.
-    width = min(ACTIVE_WIDTH, screen_width)
-    height = min(ACTIVE_HEIGHT, screen_height)
+    width = min(PANEL_WIDTH, screen_width)
+    height = min(PANEL_HEIGHT, screen_height)
     margin = min(_MARGIN, max(0.0, (screen_height - height) / 2))
 
     x = screen_x + (screen_width - width) / 2
@@ -329,6 +398,58 @@ def frame_for(
     return (x, y, width, height)
 
 
+#: Built on first use, never at import — `manu --help` does not load the
+#: Objective-C runtime, and defining the class twice would register two
+#: Objective-C classes with one name, which PyObjC refuses. Exactly
+#: `tray.py:_menu_target_class`'s arrangement and for the same two reasons.
+_CONTROL_VIEW_CLASS: Any | None = None
+
+
+def _control_view_class() -> Any:
+    """An `NSView` that routes a click to whichever control it landed in.
+
+    **`acceptsFirstMouse_` returns True**, and that is the whole reason this is
+    a subclass rather than a plain view. The panel never becomes key (§5.4: it
+    must not steal the keystrokes the transcript is about to join), and a
+    non-key window's first click is normally spent activating it. Without this
+    the user's first press on ✕ would do nothing and the second would work,
+    which reads as a button that misses.
+    """
+    global _CONTROL_VIEW_CLASS
+    if _CONTROL_VIEW_CLASS is None:
+        from AppKit import NSView
+
+        class _AmanuensisControlView(NSView):  # type: ignore[misc]
+            def acceptsFirstMouse_(self, _event: Any) -> bool:
+                return True
+
+            def mouseDown_(self, event: Any) -> None:
+                handler = getattr(self, "handler", None)
+                if handler is None:  # pragma: no cover — view outlived overlay
+                    return
+                point = self.convertPoint_fromView_(event.locationInWindow(), None)
+                handler(float(point.x), float(point.y))
+
+        _CONTROL_VIEW_CLASS = _AmanuensisControlView
+    return _CONTROL_VIEW_CLASS
+
+
+def control_hit(x: float, y: float) -> str | None:
+    """Which control a point lands in, or None. Pure, and the hit-test.
+
+    Separated from the view so the rule is testable without an event, a window
+    or a run loop. A click outside both is **None and does nothing** — not a
+    nearest-match — because ✕ is irreversible and unguarded, and a generous
+    hit-target on a destructive control is a way to lose a dictation to a
+    misplaced click (objection O3).
+    """
+    for which in ("cancel", "finish"):
+        left, bottom, width, height = control_frame(which)
+        if left <= x <= left + width and bottom <= y <= bottom + height:
+            return which
+    return None
+
+
 class RecordingOverlay:
     """A borderless panel, shown while the microphone is open."""
 
@@ -337,6 +458,8 @@ class RecordingOverlay:
         config: FeedbackConfig | None = None,
         *,
         on_error: Callable[[str], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        on_finish: Callable[[], None] | None = None,
     ) -> None:
         self._config = config if config is not None else FeedbackConfig()
         #: Set once the panel has failed. A panel that raised once will raise
@@ -353,14 +476,25 @@ class RecordingOverlay:
         #: error and why the two mechanisms could not be told apart.
         self._screen: tuple[float, float, float, float] | None = None
         self._on_error = on_error
+        #: §5.2's two verbs. The overlay calls them and knows nothing else
+        #: about them — it does not know what a session is, which is §6.2's
+        #: rule and the reason `set_controls` takes a bool rather than a latch.
+        self._on_cancel = on_cancel
+        self._on_finish = on_finish
+        #: Whether the controls should be drawn. Set by `set_controls`, and
+        #: cleared by the overlay itself whenever the microphone closes — a
+        #: flag that outlived its session would put a live ✓ on an idle pill.
+        self._controls = False
         #: Recent audio levels, newest last. Bounded, and read on the main
         #: queue while the PortAudio thread appends — a deque with a maxlen is
         #: atomic enough for both under the GIL, and the alternative is a lock
         #: on the capture thread's hot path.
         self._levels: deque[float] = deque([0.0] * BAR_COUNT, maxlen=BAR_COUNT)
         self._bars: list[Any] = []
-        #: The visible pill. Resized between the two forms; the window is not.
+        #: The visible pill. Resized between the three forms; the window is not.
         self._pill: Any | None = None
+        #: The ✕ and ✓ layers, by name. Built with the bars, shown by mode.
+        self._controls_layers: dict[str, Any] = {}
         self._panel: Any | None = None
         self._mode = OverlayMode.HIDDEN
         #: Guards `_panel` and `_visible`. Set from the event tap and the
@@ -394,7 +528,37 @@ class RecordingOverlay:
 
     def set_state(self, state: DictationState) -> None:
         """Safe from any thread, and safe before anything is shown."""
-        self._apply(mode_for(state, idle_enabled=self._idle_enabled))
+        wanted = mode_for(
+            state, idle_enabled=self._idle_enabled, controls=self._controls
+        )
+        if not is_recording(wanted):
+            # Cleared here rather than by the caller. A latch ends several ways
+            # — the ending tap, Escape, an abort, an error — and requiring each
+            # to remember is how one of them forgets and leaves a ✓ on a pill
+            # whose microphone is shut.
+            self._controls = False
+        self._apply(wanted)
+
+    def set_controls(self, showing: bool) -> None:
+        """Draw the ✕ and ✓, or stop drawing them.
+
+        **A bool, not a latch.** §6.2 makes this a renderer: it is told what to
+        draw and never learns what a latch is, which is the question the spec
+        left open (slice S5). `cli.py` owns the translation, because `cli.py`
+        is already where the listener's callbacks meet the controller.
+        """
+        if not self._config.overlay_controls:
+            return
+        with self._lock:
+            if showing == self._controls:
+                return
+            self._controls = showing
+            current = self._mode
+        if not is_recording(current):
+            # Nothing to redraw: the controls only exist on the recording form,
+            # and the next `set_state` will pick the flag up.
+            return
+        self._apply(OverlayMode.LATCHED if showing else OverlayMode.ACTIVE)
 
     def _apply(self, wanted: OverlayMode) -> None:
         """Move the panel to a mode, off the main thread.
@@ -425,11 +589,13 @@ class RecordingOverlay:
             return
         self._levels.append(rms)
         with self._lock:
-            # `is not ACTIVE`, not `is HIDDEN`. An idle pill that honours a
+            # `not is_recording`, not `is HIDDEN`. An idle pill that honours a
             # level twitches, and a twitching idle pill reads as recording —
             # see the preamble. The level is still appended, so the deque is
-            # warm if a dictation starts, but nothing is drawn.
-            if self._mode is not OverlayMode.ACTIVE or self._panel is None:
+            # warm if a dictation starts, but nothing is drawn. **LATCHED is a
+            # recording mode**: reading this as `is not ACTIVE` would freeze
+            # the bars for exactly the hands-free sessions the controls are for.
+            if not is_recording(self._mode) or self._panel is None:
                 return
         from amanuensis.ui.indicator import _main_queue
 
@@ -449,7 +615,9 @@ class RecordingOverlay:
         for layer, height in zip(self._bars, heights, strict=False):
             frame = layer.frame()
             (x, _y), (width, _h) = frame
-            layer.setFrame_(as_rect((x, (_HEIGHT - height) / 2.0, width, height)))
+            layer.setFrame_(
+                as_rect((x, (PANEL_HEIGHT - height) / 2.0, width, height))
+            )
 
     def hide(self) -> None:
         """Off the screen entirely, whatever `overlay_idle` says.
@@ -537,6 +705,13 @@ class RecordingOverlay:
             self._levels.extend([0.0] * BAR_COUNT)
             self._draw_bars()
         self._apply_form(wanted)
+        # **The click-through this panel now costs, and the whole mitigation.**
+        # Taking mouse events means the window's transparent margins swallow
+        # clicks aimed at whatever is behind them, and the window is 114 wide in
+        # every state while the pill is 34 in most of them. So it takes them
+        # only while the controls are on screen — a latched dictation — and
+        # gives them back for the rest of the day.
+        panel.setIgnoresMouseEvents_(wanted is not OverlayMode.LATCHED)
         panel.orderFrontRegardless()
 
     def _apply_form(self, wanted: OverlayMode) -> None:
@@ -552,7 +727,8 @@ class RecordingOverlay:
         the pill has grown to hold them, which is a frame of bars hanging in
         space — briefly, and visibly.
         """
-        recording = wanted is OverlayMode.ACTIVE
+        recording = is_recording(wanted)
+        latched = wanted is OverlayMode.LATCHED
         # `CATransaction` is a class with class methods, not a module of free
         # functions. Written as `CATransactionBegin()` first, which does not
         # exist and raises `AttributeError` on the first transition — caught by
@@ -574,6 +750,8 @@ class RecordingOverlay:
                 self._pill.setCornerRadius_(rect[3] / 2.0)
             for bar in self._bars:
                 bar.setHidden_(not recording)
+            for layer in self._controls_layers.values():
+                layer.setHidden_(not latched)
         finally:
             # In a `finally` because an exception between begin and commit
             # leaves the transaction open, and every later implicit animation
@@ -691,9 +869,12 @@ class RecordingOverlay:
         # have round corners, the corners would be drawn square in black.
         panel.setBackgroundColor_(appkit.NSColor.clearColor())
 
-        container = appkit.NSView.alloc().initWithFrame_(
-            appkit.NSMakeRect(0.0, 0.0, _WIDTH, _HEIGHT)
+        container = (
+            self._control_view()
+            .alloc()
+            .initWithFrame_(appkit.NSMakeRect(0.0, 0.0, PANEL_WIDTH, PANEL_HEIGHT))
         )
+        container.handler = self._on_click
         container.setWantsLayer_(True)
         layer = container.layer()
         panel.setContentView_(container)
@@ -704,9 +885,76 @@ class RecordingOverlay:
         # the render server, which costs the main queue nothing. The window
         # itself is never resized — see `pill_frame`.
         self._pill = self._build_pill(layer)
-        self._bars = self._build_bars(appkit, self._pill)
+        # Bars and controls are children of the **container**, not of the pill.
+        # The pill changes width between three forms; its sublayers would move
+        # with it, and a hit-target that drifts from the glyph it belongs to
+        # looks right and clicks wrong.
+        self._bars = self._build_bars(appkit, layer)
+        self._controls_layers = self._build_controls(layer)
         self._panel = panel
         return panel
+
+    def _build_controls(self, parent: Any) -> dict[str, Any]:
+        """✕ and ✓ as text layers, hidden until a session latches."""
+        quartz = self._quartz()
+        white = quartz.CGColorCreateGenericGray(1.0, 0.92)
+        layers: dict[str, Any] = {}
+        for which, glyph in (("cancel", "\u2715"), ("finish", "\u2713")):
+            layer = self._catextlayer().layer()
+            layer.setString_(glyph)
+            layer.setFontSize_(_CONTROL_FONT_SIZE)
+            layer.setAlignmentMode_("center")
+            layer.setForegroundColor_(white)
+            # Without this the glyph is drawn at 1x and is visibly soft on a
+            # Retina display, on a control small enough that softness reads as
+            # a rendering fault rather than as a style.
+            layer.setContentsScale_(_RETINA_SCALE)
+            layer.setFrame_(as_rect(control_frame(which)))
+            layer.setHidden_(True)
+            parent.addSublayer_(layer)
+            layers[which] = layer
+        return layers
+
+    def _on_click(self, x: float, y: float) -> None:
+        """A click landed on the panel. Main thread, inside AppKit's dispatch.
+
+        Guarded for `_render`'s reason: an exception here crosses the PyObjC
+        bridge as an `NSException` and **terminates a process holding the
+        microphone**. A ✕ that fails to cancel is a bad afternoon; a ✕ that
+        kills the daemon mid-dictation loses the words.
+        """
+        if self._mode is not OverlayMode.LATCHED:
+            # Belt and braces against a press arriving between the mode
+            # changing and the window giving mouse events back.
+            return
+        which = control_hit(x, y)
+        if which is None:
+            return
+        callback = self._on_cancel if which == "cancel" else self._on_finish
+        if callback is None:
+            return
+        # Through the same guard as every other main-thread entry point. It
+        # charges the failure budget and rebuilds the panel, which is the right
+        # response to a callback that raises: the click was real, the panel is
+        # suspect, and the process must survive either way.
+        self._guarded(callback)
+
+    @staticmethod
+    def _control_view() -> Any:
+        """The click-taking `NSView` subclass, behind a seam like `_calayer`.
+
+        A seam and not a direct call because the subclass reaches the real
+        Objective-C runtime the moment it is defined, so a test that did not
+        replace it would build a real view against a fake `NSMakeRect` — which
+        is how this arrived: a flat rect into a real `initWithFrame_`.
+        """
+        return _control_view_class()
+
+    @classmethod
+    def _catextlayer(cls) -> Any:
+        """`CATextLayer`, off the same seam as `_calayer` and for its reason:
+        tests replace one attribute rather than the framework."""
+        return cls._quartz().CATextLayer
 
     def _build_pill(self, parent: Any) -> Any:
         """The visible pill: dark translucent fill, light hairline border."""
@@ -758,7 +1006,7 @@ class RecordingOverlay:
         white = self._quartz().CGColorCreateGenericGray(1.0, 0.92)
 
         span = BAR_COUNT * _BAR_WIDTH + (BAR_COUNT - 1) * _BAR_GAP
-        left = (_WIDTH - span) / 2.0
+        left = (PANEL_WIDTH - span) / 2.0
         bars: list[Any] = []
         for index in range(BAR_COUNT):
             bar = calayer.layer()
@@ -767,7 +1015,7 @@ class RecordingOverlay:
                 as_rect(
                     (
                         x,
-                        (_HEIGHT - MIN_BAR_HEIGHT) / 2.0,
+                        (PANEL_HEIGHT - MIN_BAR_HEIGHT) / 2.0,
                         _BAR_WIDTH,
                         MIN_BAR_HEIGHT,
                     )

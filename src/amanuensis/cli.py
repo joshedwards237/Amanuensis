@@ -1019,7 +1019,30 @@ def _daemon(config: AppConfig) -> int:
     # daemon: it runs inside an NSBlockOperation, where an uncaught Python
     # exception crosses the PyObjC bridge as an NSException and terminates
     # the process — which it did on 2026-09-02, over a confidence feature.
-    overlay = RecordingOverlay(config.feedback, on_error=tray.set_error)
+    # The ✕ and ✓ verbs. `abort_session` throws the audio away — §8 has nothing
+    # to persist because nothing was ever transcribed — and `end_session` is
+    # exactly what the ending tap does, so ✓ is the hotkey by another route.
+    #
+    # `end_session` is handed to a thread: it is called from AppKit's click
+    # dispatch on the main queue, and the main queue is what draws the panel and
+    # runs the tray. Blocking it on a decode would freeze the UI of a process
+    # holding the microphone (§6.3).
+    def _control_cancel() -> None:
+        controller.abort_session()
+
+    def _control_finish() -> None:
+        threading.Thread(
+            target=controller.end_session,
+            name="amanuensis-overlay-finish",
+            daemon=True,
+        ).start()
+
+    overlay = RecordingOverlay(
+        config.feedback,
+        on_error=tray.set_error,
+        on_cancel=_control_cancel,
+        on_finish=_control_finish,
+    )
 
     # Bound further down, once `capture` and the tray picker exist. A box
     # rather than a `nonlocal` because `_on_state_change` is handed to the
@@ -1175,6 +1198,11 @@ def _daemon(config: AppConfig) -> int:
         controller.abort_session()
 
     def _on_latch() -> None:
+        # The overlay learns "draw controls" and never learns what a latch is
+        # (§6.2, slice S5's open question). `cli.py` owns the translation
+        # because it is already where the listener's callbacks meet the
+        # controller.
+        overlay.set_controls(True)
         # A notification, not an operation: the capture opened on the first
         # press and keeps running (§5.2 as amended). Nothing here touches the
         # session.
