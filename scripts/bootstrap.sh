@@ -363,6 +363,31 @@ else
     warn "the speech model is not available — dictation cannot work"; FAILED=1
 fi
 
+# The Desktop launcher, which the closing message leads with. **Not fatal.**
+# `write_desktop_launcher` refuses when there is no Desktop directory, and a
+# machine without one still dictates perfectly well from `manu daemon` — so this
+# picks which instruction to print rather than failing the install.
+#
+# It asks `launcher.py` for the path and for the execute bit instead of building
+# either here. Finder runs a `.command` only when that bit is set and silently
+# opens it in a text editor otherwise, which looks to the user exactly like the
+# product being broken; that rule belongs to the module that writes the file.
+LAUNCHER_PRESENT=0
+LAUNCHER_PATH="$("$CHECKOUT/.venv/bin/python" - <<'PYLAUNCHER' 2>/dev/null
+from amanuensis.launcher import desktop_launcher_path, is_executable
+
+path = desktop_launcher_path()
+if path.is_file() and is_executable(path):
+    print(path)
+PYLAUNCHER
+)"
+if [[ -n "$LAUNCHER_PATH" ]]; then
+    LAUNCHER_PRESENT=1
+    ok "the Desktop launcher is in place"
+else
+    warn "no Desktop launcher — start from the terminal instead (not a failure)"
+fi
+
 if [[ $FAILED -ne 0 ]]; then
     die "the install is not working. Nothing above is a permission problem —
     those are expected at this stage. Send this whole output to whoever
@@ -370,8 +395,20 @@ if [[ $FAILED -ne 0 ]]; then
 fi
 
 printf '\n%sInstalled.%s\n\n' "$GREEN$BOLD" "$RESET"
-info "Start dictating:"
-printf '\n      %s\n\n' "$MANU daemon"
+if [[ $LAUNCHER_PRESENT -eq 1 ]]; then
+    info "Start dictating — double-click this on your Desktop:"
+    printf '\n      %s%s%s\n\n' "$BOLD" "$(basename "$LAUNCHER_PATH")" "$RESET"
+    info "A Terminal window opens and stays open while Amanuensis runs. Closing"
+    info "that window stops it."
+    info ""
+    dim  "Or, from a terminal: $MANU daemon"
+else
+    info "Start dictating:"
+    printf '\n      %s\n\n' "$MANU daemon"
+    dim  "There is normally a double-clickable launcher on your Desktop; this"
+    dim  "machine has no Desktop directory, so the command above is the way in."
+fi
+info ""
 info "Then hold **right-option**, speak, and release. Your words appear"
 info "wherever your cursor is."
 info ""

@@ -173,6 +173,13 @@ a running process does not notice.
 
 ### 5. Dictate
 
+Double-click **`Start Amanuensis`** on your Desktop. A Terminal window opens and
+stays open while Amanuensis runs; closing that window stops it. Step 4 wrote
+that file — see [The Desktop launcher](#the-desktop-launcher) if it is not
+there.
+
+Or, from a terminal:
+
 ```sh
 manu daemon
 ```
