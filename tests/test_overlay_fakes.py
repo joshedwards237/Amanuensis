@@ -181,16 +181,69 @@ class _FakeLayer:
         self.sublayers.append(layer)
 
 
+class _FakeTextLayer(_FakeLayer):
+    """A `CATextLayer`. The string is the assertion for the two controls —
+    a ✕ drawn where ✓ belongs is a destructive button wearing the safe one's
+    glyph, which no geometry check can see."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.string_value = ""
+        self.font_size = 0.0
+        self.alignment = ""
+        self.foreground: Any = None
+        self.contents_scale = 1.0
+
+    def setString_(self, value: str) -> None:
+        self.string_value = value
+
+    def setFontSize_(self, value: float) -> None:
+        self.font_size = value
+
+    def setAlignmentMode_(self, value: str) -> None:
+        self.alignment = value
+
+    def setForegroundColor_(self, value: Any) -> None:
+        self.foreground = value
+
+    def setContentsScale_(self, value: float) -> None:
+        self.contents_scale = value
+
+
 class _FakeView:
+    """Stands in for the click-taking container view.
+
+    `click(x, y)` is how a test presses a control: the real view converts an
+    `NSEvent`'s window coordinates and calls `handler`, and reproducing an
+    `NSEvent` here would be faking AppKit rather than testing the overlay.
+    What matters is that the overlay's handler receives view coordinates, which
+    is exactly what this hands it.
+    """
+
     def __init__(self) -> None:
         self._layer = _FakeLayer()
         self.wants_layer = False
+        self.handler: Any = None
+        self.frame_rect: Any = None
+
+    def click(self, x: float, y: float) -> None:
+        assert self.handler is not None, "nothing is listening for clicks"
+        self.handler(x, y)
+
+    #: Every view built, in order, so a test can press the one on screen.
+    #: Assigned by `install` — a class attribute rather than a parameter,
+    #: because `alloc` is a classmethod on AppKit's side and has nowhere to
+    #: take one.
+    built: ClassVar[list[_FakeView]] = []
 
     @classmethod
     def alloc(cls) -> _FakeView:
-        return cls()
+        view = cls()
+        cls.built.append(view)
+        return view
 
-    def initWithFrame_(self, _rect: Any) -> _FakeView:
+    def initWithFrame_(self, rect: Any) -> _FakeView:
+        self.frame_rect = rect
         return self
 
     def setWantsLayer_(self, value: bool) -> None:
@@ -215,7 +268,9 @@ def install(fake: Any) -> None:
 
     fake.NSPanel = NSPanel
     fake.NSTextField = _FakeTextField
+    _FakeView.built = []
     fake.NSView = _FakeView
+    fake.views = _FakeView.built
     fake.CALayer = _FakeLayer
     class _FakeQuartz:
         """`CGColor` plus the `CATransaction` the pill's resize runs inside.
@@ -228,6 +283,8 @@ def install(fake: Any) -> None:
 
         transactions: ClassVar[list[dict[str, Any]]] = []
         _open: ClassVar[list[dict[str, Any]]] = []
+
+        CATextLayer = _FakeTextLayer
 
         @staticmethod
         def CGColorCreateGenericGray(_gray: float, _alpha: float) -> str:

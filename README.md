@@ -168,11 +168,25 @@ Run `python scripts/diagnose_permissions.py` either way — it asks every
 candidate API on your machine and prints what each one answered, which is the
 only way this gets settled.
 
-### Escape cancels a hands-free dictation
+### A hands-free dictation, and the two ways out of it
 
 Double-tap the hotkey and it latches — your hand comes off the key and the
-dictation keeps running. **Press Escape to throw that dictation away**, or tap
-the hotkey again to finish and process it normally.
+dictation keeps running. The pill grows and shows **✕** on the left and **✓** on
+the right of the waveform:
+
+- **✕** throws the dictation away. Same as pressing **Escape**.
+- **✓** finishes it and types the text. Same as tapping the hotkey again.
+
+**Press Escape to throw that dictation away**, or tap the hotkey again to finish
+and process it normally — the buttons are there for when your hands are already
+on the mouse.
+
+A second known cost, alongside the Escape one below: **while the buttons are on
+screen the panel accepts mouse clicks**, and the window is wider than the pill,
+so its transparent edges will swallow a click aimed at whatever is behind them.
+That lasts only as long as a latched dictation — the rest of the time clicks
+pass straight through. `[feedback] overlay_controls = false` removes the buttons
+and the cost together; Escape still works.
 
 A known cost, stated rather than hidden: **while a latched dictation is running,
 Escape belongs to Amanuensis and no other application sees it.** It is taken

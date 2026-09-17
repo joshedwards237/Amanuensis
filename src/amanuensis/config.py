@@ -321,6 +321,16 @@ class FeedbackConfig:
     #: want about motion. The key exists for the person who wants motion
     #: everywhere *except* here.
     overlay_animate: bool = True
+    #: The ✕ and ✓ on a hands-free (latched) dictation (§5.2, added
+    #: 2026-09-17). ON: a latched session takes the user's hand off the key, so
+    #: without them the only ways out are Escape and waiting for
+    #: `max_duration_seconds`.
+    #:
+    #: A key because it has a cost the user may decline: while they are drawn
+    #: the panel accepts mouse clicks, and the window is wider than the pill, so
+    #: its transparent margins swallow clicks aimed at what is behind them. That
+    #: is bounded to a latched dictation and it is still real.
+    overlay_controls: bool = True
     #: Which screen edge. The panel must not cover the caret in the application
     #: being dictated into, and which edge is safe depends on the user's
     #: layout, so this cannot be hardcoded.
@@ -518,6 +528,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     "feedback": {
         "overlay": _Rule((bool,)),
         "overlay_animate": _Rule((bool,)),
+        "overlay_controls": _Rule((bool,)),
         "overlay_idle": _Rule((bool,)),
         "overlay_position": _Rule((str,), _one_of("bottom", "top")),
         "sounds": _Rule((bool,)),

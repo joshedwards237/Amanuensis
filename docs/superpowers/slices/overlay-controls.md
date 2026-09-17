@@ -44,8 +44,8 @@ slices:
     decision_focus: "How does the overlay learn it is latched? §3 requires latched-only controls; §5 rejects the overlay knowing; §6.2's constructor carries neither parameter nor setter. The spec asks for both and specifies neither."
     lens_used: decision-boundary
     sequencing_note: "Hard dependency on S1. S6's criterion must be written before this is built."
-    disposition: accepted
-    disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
+    disposition: built
+    disposition_rationale: "Built 2026-09-17. S6's criterion was written 2026-09-10, before any control existed, which was the precondition. The open decision question — how the overlay learns it is latched — was answered `set_controls(bool)` driven from cli.py by the listener's new `on_latch`: the overlay is told what to draw and never learns what a latch is, which is what §5 asked for and §6.2 requires. Two scope changes from the spec. The window is now built at LATCHED_WIDTH and never resized, with all three pill forms centred inside it, because a window sized for the recording form would clip both controls off the ends. And `setIgnoresMouseEvents_(False)` is applied only while the controls are drawn rather than for the life of the panel, which bounds the click-through cost to a latched dictation instead of all day."
   - id: S6
     title: "Can the operator hit the ✕ while speaking — criterion written first, then tried"
     scope: "A written reachability criterion authored *before* S5 is built, then a trial. Excludes all code. **The criterion is written: `docs/gates/overlay-controls-reachability.md`, 2026-09-10, before any control exists. The trial waits on S5.**"

@@ -854,6 +854,12 @@ nobody.
 **S3, S4 and S5 are not built and should not be**, per the operator's own
 sequencing: they change the panel lane 2 scored, and lane 6 has not run.
 
+> **S5 was built 2026-09-17** on the same disposition as the idle pill, which
+> is the operator's to make. The re-score owed by step 2b now covers the ✕ and
+> ✓ as well, and **S6's reachability trial is unblocked** — its criterion was
+> written 2026-09-10, before any control existed, and must not be amended now
+> that they do. S3 and S4 remain unbuilt.
+>
 > **Superseded in part, 2026-09-17.** The persistent idle pill was built ahead
 > of lane 6 on an explicit operator disposition, which voids lane 2 outright —
 > see the note under *Does lane 2's 6/6 still describe the panel that ships?*.

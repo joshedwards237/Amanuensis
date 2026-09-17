@@ -21,20 +21,22 @@ from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
 from amanuensis.ui.overlay import (
-    ACTIVE_HEIGHT,
-    ACTIVE_WIDTH,
     BAR_COUNT,
     CORNER_RADIUS,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
     OVERLAY_FAILURE_LIMIT,
+    PANEL_HEIGHT,
+    PANEL_WIDTH,
     PILL_BORDER_WIDTH,
     TRANSITION_SECONDS,
     OverlayMode,
     RecordingOverlay,
     as_rect,
     bar_heights,
+    control_frame,
     frame_for,
+    is_recording,
     mode_for,
     pill_frame,
 )
@@ -150,15 +152,31 @@ def test_both_forms_share_a_centre() -> None:
     assert iy + ih / 2 == pytest.approx(ay + ah / 2)
 
 
-def test_the_recording_form_fills_the_panel() -> None:
-    """The panel is sized for the recording form and never changes.
+def test_the_latched_form_fills_the_panel() -> None:
+    """**Rewritten 2026-09-17.** The widest form is now LATCHED, not ACTIVE.
 
-    If the active pill were smaller than its window there would be a
-    transparent margin the shadow falls on, and if it were larger it would be
-    clipped. Either is visible; neither is caught by a test of the idle form.
+    The window is built at the widest form and never resized, so whichever
+    form that is must fill it exactly: smaller leaves a transparent margin for
+    the shadow to fall on, larger is clipped. That used to be the recording
+    pill; the controls made it the latched one, and a window still sized for
+    the old widest would clip the ✕ and ✓ off both ends.
     """
-    x, y, width, height = pill_frame(OverlayMode.ACTIVE)
-    assert (x, y, width, height) == (0.0, 0.0, ACTIVE_WIDTH, ACTIVE_HEIGHT)
+    x, y, width, height = pill_frame(OverlayMode.LATCHED)
+    assert (x, y, width, height) == (0.0, 0.0, PANEL_WIDTH, PANEL_HEIGHT)
+
+
+def test_every_form_fits_inside_the_panel() -> None:
+    """The general version, which is what the rewrite above should have been.
+
+    Asserting one form fills the window says nothing about the other two, and
+    a form wider than its window is clipped silently — there is no error, just
+    a control the user cannot see or hit.
+    """
+    for mode in (OverlayMode.IDLE, OverlayMode.ACTIVE, OverlayMode.LATCHED):
+        x, y, width, height = pill_frame(mode)
+        assert x >= 0.0 and y >= 0.0, f"{mode.value} starts outside the panel"
+        assert x + width <= PANEL_WIDTH, f"{mode.value} is clipped horizontally"
+        assert y + height <= PANEL_HEIGHT, f"{mode.value} is clipped vertically"
 
 
 def test_idle_and_active_differ_in_width_as_well_as_motion() -> None:
@@ -186,7 +204,7 @@ def test_the_window_is_the_same_rect_in_both_forms() -> None:
     """
     screen = (0.0, 0.0, 1440.0, 900.0)
     _x, _y, width, height = frame_for("bottom", screen)
-    assert (width, height) == (ACTIVE_WIDTH, ACTIVE_HEIGHT)
+    assert (width, height) == (PANEL_WIDTH, PANEL_HEIGHT)
 
 
 def test_disabling_the_overlay_means_it_never_shows() -> None:
@@ -256,6 +274,12 @@ def appkit(monkeypatch: pytest.MonkeyPatch) -> _FakeAppKit:
         RecordingOverlay, "_calayer", staticmethod(lambda: fake.CALayer)
     )
     monkeypatch.setattr(RecordingOverlay, "_quartz", staticmethod(lambda: fake.Quartz))
+    # The container view defines a real Objective-C subclass the moment it is
+    # asked for, so it needs a seam of its own — without it a test builds a
+    # real NSView against the fake's flat NSMakeRect.
+    monkeypatch.setattr(
+        RecordingOverlay, "_control_view", staticmethod(lambda: fake.NSView)
+    )
     return fake
 
 
@@ -1153,3 +1177,217 @@ def test_appkit_exposes_the_reduce_motion_api_this_module_calls() -> None:
 
     workspace = AppKit.NSWorkspace.sharedWorkspace()
     assert isinstance(workspace.accessibilityDisplayShouldReduceMotion(), bool)
+
+
+# ---------------------------------------------------------------------------
+# The ✕ and ✓ on a latched session (slice S5, 2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_latched_is_a_recording_mode() -> None:
+    """The rule every `is ACTIVE` test in this file had to become.
+
+    LATCHED means the microphone is open. Adding it without this would leave
+    the bars hidden and the level path dead in exactly the hands-free sessions
+    the controls exist for — a motionless pill over a live microphone, which is
+    §5.4's named failure rather than a cosmetic miss.
+    """
+    assert is_recording(OverlayMode.LATCHED) is True
+    assert is_recording(OverlayMode.ACTIVE) is True
+    assert is_recording(OverlayMode.IDLE) is False
+    assert is_recording(OverlayMode.HIDDEN) is False
+
+
+@pytest.mark.parametrize(
+    "state",
+    [s for s in DictationState if s is not DictationState.RECORDING],
+)
+def test_controls_never_appear_without_the_microphone(state: DictationState) -> None:
+    """§5.4's guarantee, extended to the new mode rather than exempted from it.
+
+    `controls=True` must not conjure a latched pill out of a state whose
+    microphone is closed. A ✓ offering to "finish" a session that has already
+    ended is an invitation to click something that cannot do what it says.
+    """
+    assert (
+        mode_for(state, idle_enabled=True, controls=True) is OverlayMode.IDLE
+    ), "a closed microphone drew the latched form"
+
+
+def test_the_two_controls_do_not_overlap_and_clear_the_bars() -> None:
+    """Geometry, asserted as separation rather than as coordinates.
+
+    Coordinates would restate the constants. What matters is that the two
+    rects are disjoint — an overlap makes one control's edge belong to the
+    other, and one of them is irreversible — and that neither sits on the
+    waveform, which is the thing the user is looking at.
+    """
+    cancel = control_frame("cancel")
+    finish = control_frame("finish")
+
+    assert cancel[0] + cancel[2] < finish[0], "the controls overlap"
+    bars_half_span = (BAR_COUNT * 3.0 + (BAR_COUNT - 1) * 3.0) / 2.0
+    centre = PANEL_WIDTH / 2.0
+    assert cancel[0] + cancel[2] <= centre - bars_half_span, "✕ is over the bars"
+    assert finish[0] >= centre + bars_half_span, "✓ is over the bars"
+
+
+def test_both_controls_are_inside_the_latched_pill() -> None:
+    """Drawn outside it they would float on the transparent window.
+
+    The pill is the only thing with a background; a glyph beyond its edge sits
+    on whatever the user's screen shows there, which is unreadable about half
+    the time and looks like a rendering fault the rest.
+    """
+    px, py, pw, ph = pill_frame(OverlayMode.LATCHED)
+    for which in ("cancel", "finish"):
+        x, y, width, height = control_frame(which)
+        assert px <= x and x + width <= px + pw, f"{which} is outside the pill"
+        assert py <= y and y + height <= py + ph, f"{which} is outside the pill"
+
+
+@pytest.mark.parametrize("which", ["cancel", "finish"])
+def test_a_click_in_a_control_calls_that_control(
+    appkit: _FakeAppKit, which: str
+) -> None:
+    """The hit-test, through the overlay rather than against `control_hit`.
+
+    `control_hit` being right is necessary and not sufficient: the callbacks
+    have to be wired to the right sides. Swapping them produces a product where
+    ✓ destroys the dictation, which every geometry assertion in this file would
+    still pass.
+    """
+    called: list[str] = []
+    overlay = RecordingOverlay(
+        FeedbackConfig(),
+        on_cancel=lambda: called.append("cancel"),
+        on_finish=lambda: called.append("finish"),
+    )
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_controls(True)
+
+    x, y, width, height = control_frame(which)
+    appkit.views[-1].click(x + width / 2, y + height / 2)
+
+    assert called == [which]
+
+
+def test_a_click_between_the_controls_does_nothing(appkit: _FakeAppKit) -> None:
+    """No nearest-match, and the reason is objection O3.
+
+    `abort_session` persists nothing — §8's guarantee does not reach a session
+    that was never transcribed — so a mis-hit ✕ destroys the dictation with no
+    confirmation and nothing in `manu history` to recover. A generous hit
+    target on a destructive control is a way to lose words to a clumsy click.
+    """
+    called: list[str] = []
+    overlay = RecordingOverlay(
+        FeedbackConfig(),
+        on_cancel=lambda: called.append("cancel"),
+        on_finish=lambda: called.append("finish"),
+    )
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_controls(True)
+
+    appkit.views[-1].click(PANEL_WIDTH / 2, PANEL_HEIGHT / 2)
+
+    assert called == []
+
+
+def test_a_click_is_ignored_when_the_session_is_not_latched(
+    appkit: _FakeAppKit,
+) -> None:
+    """Belt and braces against the window giving mouse events back late.
+
+    The mode changes on one thread and `setIgnoresMouseEvents_` is applied on
+    the main queue, so there is a window in which a click can still arrive. It
+    must not cancel a session that is no longer hands-free.
+    """
+    called: list[str] = []
+    overlay = RecordingOverlay(
+        FeedbackConfig(), on_cancel=lambda: called.append("cancel")
+    )
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+
+    x, y, width, height = control_frame("cancel")
+    appkit.views[-1].click(x + width / 2, y + height / 2)
+
+    assert called == []
+
+
+def test_the_panel_takes_clicks_only_while_latched(appkit: _FakeAppKit) -> None:
+    """The click-through cost, and its whole mitigation.
+
+    The window is 114 wide in every state and the pill is 34 in most of them,
+    so a window that always accepted mouse events would swallow clicks aimed at
+    whatever is behind those transparent margins — all day, for a feature used
+    for seconds.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+    panel = appkit.panels[-1]
+    assert panel.ignores_mouse is True
+
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_controls(True)
+    assert panel.ignores_mouse is False, "the controls cannot be clicked"
+
+    overlay.set_state(DictationState.TRANSCRIBING)
+    assert panel.ignores_mouse is True, "the panel kept swallowing clicks"
+
+
+def test_the_controls_clear_themselves_when_the_microphone_closes(
+    appkit: _FakeAppKit,
+) -> None:
+    """A latch ends several ways and no caller is asked to remember.
+
+    The ending tap, Escape, an abort, an error. Requiring each to clear the
+    flag is how one of them forgets and leaves a live ✓ on an idle pill.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_controls(True)
+    assert overlay.mode is OverlayMode.LATCHED
+
+    overlay.set_state(DictationState.IDLE)
+    overlay.set_state(DictationState.RECORDING)
+
+    assert overlay.mode is OverlayMode.ACTIVE, "the controls outlived their session"
+
+
+def test_the_glyphs_are_not_swapped(appkit: _FakeAppKit) -> None:
+    """✕ on the left, ✓ on the right, asserted on the strings.
+
+    No geometry test can see this. A ✓ drawn where ✕ belongs is a destructive
+    button wearing the safe one's glyph — the worst possible version of this
+    feature, and invisible to every other assertion here.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+
+    assert overlay._controls_layers["cancel"].string_value == "✕"
+    assert overlay._controls_layers["finish"].string_value == "✓"
+    assert control_frame("cancel")[0] < control_frame("finish")[0]
+
+
+def test_the_controls_can_be_declined(appkit: _FakeAppKit) -> None:
+    """`[feedback] overlay_controls = false` must reach the render path.
+
+    A key honoured by the flag and ignored by the panel is worse than no key:
+    the user turns it off, the panel still takes their clicks, and the setting
+    is a lie about a cost they tried to decline.
+    """
+    overlay = RecordingOverlay(
+        FeedbackConfig(overlay_controls=False), on_cancel=lambda: None
+    )
+    overlay.start()
+    overlay.set_state(DictationState.RECORDING)
+
+    overlay.set_controls(True)
+
+    assert overlay.mode is OverlayMode.ACTIVE
+    assert appkit.panels[-1].ignores_mouse is True
