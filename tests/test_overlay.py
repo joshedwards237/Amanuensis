@@ -21,18 +21,21 @@ from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.ui import indicator as indicator_module
 from amanuensis.ui.overlay import (
+    ACTIVE_HEIGHT,
     ACTIVE_WIDTH,
     BAR_COUNT,
     CORNER_RADIUS,
-    IDLE_WIDTH,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
     OVERLAY_FAILURE_LIMIT,
+    PILL_BORDER_WIDTH,
+    TRANSITION_SECONDS,
     OverlayMode,
     RecordingOverlay,
     bar_heights,
     frame_for,
     mode_for,
+    pill_frame,
 )
 from test_indicator import _FakeAppKit, _FakeFoundation, _FakeMainQueue
 
@@ -105,6 +108,58 @@ def test_the_idle_pill_can_be_declined(state: DictationState) -> None:
     assert mode_for(state, idle_enabled=False) is OverlayMode.HIDDEN
 
 
+def test_the_idle_pill_is_a_short_pill_not_a_circle() -> None:
+    """Shape, 2026-09-17 (second revision).
+
+    The first idle form was 22x22 — a circle, chosen so the two forms differed
+    in shape and not merely in length. The operator's verdict on seeing it was
+    that it should be a short pill: wider than it is tall, and thinner than the
+    recording form. A pill is `width > height`, and that is the whole assertion
+    — a "pill" as tall as it is wide is the circle this replaces.
+    """
+    _x, _y, width, height = pill_frame(OverlayMode.IDLE)
+    assert width > height, "the idle form is not a pill"
+
+
+def test_the_idle_pill_is_thinner_than_the_recording_form() -> None:
+    """Thinner as well as shorter, which is what makes the growth read.
+
+    Length alone would be a pill sliding out sideways. Changing both axes makes
+    it read as the same object inflating, which is the transition the operator
+    asked for — and it keeps the width cue that §5.4 requires alongside motion.
+    """
+    _ix, _iy, idle_width, idle_height = pill_frame(OverlayMode.IDLE)
+    _ax, _ay, active_width, active_height = pill_frame(OverlayMode.ACTIVE)
+
+    assert idle_height < active_height, "it is not thinner"
+    assert idle_width < active_width, "it is not shorter"
+
+
+def test_both_forms_share_a_centre() -> None:
+    """So the transition is an inflation rather than a slide.
+
+    The panel itself no longer moves or resizes — see the module preamble — so
+    this is now a fact about the layer inside it, and it has to be asserted
+    there or not at all.
+    """
+    ix, iy, iw, ih = pill_frame(OverlayMode.IDLE)
+    ax, ay, aw, ah = pill_frame(OverlayMode.ACTIVE)
+
+    assert ix + iw / 2 == pytest.approx(ax + aw / 2)
+    assert iy + ih / 2 == pytest.approx(ay + ah / 2)
+
+
+def test_the_recording_form_fills_the_panel() -> None:
+    """The panel is sized for the recording form and never changes.
+
+    If the active pill were smaller than its window there would be a
+    transparent margin the shadow falls on, and if it were larger it would be
+    clipped. Either is visible; neither is caught by a test of the idle form.
+    """
+    x, y, width, height = pill_frame(OverlayMode.ACTIVE)
+    assert (x, y, width, height) == (0.0, 0.0, ACTIVE_WIDTH, ACTIVE_HEIGHT)
+
+
 def test_idle_and_active_differ_in_width_as_well_as_motion() -> None:
     """§5.4's first binding consequence: **two independent cues**.
 
@@ -116,26 +171,21 @@ def test_idle_and_active_differ_in_width_as_well_as_motion() -> None:
 
     Width is the cue that survives a frozen render, so it must actually differ.
     """
-    assert IDLE_WIDTH < ACTIVE_WIDTH
+    assert pill_frame(OverlayMode.IDLE)[2] < pill_frame(OverlayMode.ACTIVE)[2]
 
 
-def test_the_idle_pill_is_framed_at_its_own_width() -> None:
-    """The geometry has to know about both, or the pill is drawn wide and empty.
+def test_the_window_is_the_same_rect_in_both_forms() -> None:
+    """**Revised 2026-09-17 (second).** The window does not resize any more.
 
-    Same screen, same edge, same centring — only the width differs, so the two
-    forms share a centre and the transition reads as a growth rather than a
-    jump across the screen.
+    It is built at the recording form's size and left there; the pill *layer*
+    inside it is what changes. That is what makes the transition animatable at
+    all: `setFrame:display:animate:` blocks the main queue for its duration,
+    and this panel's failures have terminated the daemon once already. A
+    `CALayer` animates on the render server and blocks nothing.
     """
     screen = (0.0, 0.0, 1440.0, 900.0)
-    idle_x, idle_y, idle_w, idle_h = frame_for("bottom", screen, width=IDLE_WIDTH)
-    active_x, active_y, active_w, active_h = frame_for(
-        "bottom", screen, width=ACTIVE_WIDTH
-    )
-
-    assert idle_w == IDLE_WIDTH
-    assert active_w == ACTIVE_WIDTH
-    assert idle_y == active_y and idle_h == active_h
-    assert idle_x + idle_w / 2 == pytest.approx(active_x + active_w / 2)
+    _x, _y, width, height = frame_for("bottom", screen)
+    assert (width, height) == (ACTIVE_WIDTH, ACTIVE_HEIGHT)
 
 
 def test_disabling_the_overlay_means_it_never_shows() -> None:
@@ -263,7 +313,7 @@ def test_the_active_form_is_dropped_when_recording_stops(
     assert overlay.mode is OverlayMode.IDLE
     assert appkit.panels[-1].ordered_out is False
     assert all(bar.hidden for bar in overlay._bars), "the bars outlived the microphone"
-    assert overlay._dot is not None and not overlay._dot.hidden
+    assert overlay._pill.frame() == pill_frame(OverlayMode.IDLE)
 
 
 def test_it_is_removed_when_recording_stops_and_the_idle_pill_is_off(
@@ -674,9 +724,7 @@ def test_an_unchanged_screen_does_not_move_the_panel(appkit: _FakeAppKit) -> Non
     overlay.set_state(DictationState.RECORDING)
 
     assert panel.frame == recording_frame, "the panel moved on an unchanged screen"
-    assert idle_frame[1] == recording_frame[1], "the pill changed edge"
-    assert idle_frame[3] == recording_frame[3], "the pill changed height"
-    assert idle_frame[2] == IDLE_WIDTH and recording_frame[2] == ACTIVE_WIDTH
+    assert idle_frame == recording_frame, "the window resized instead of the pill"
 
 
 def test_a_raising_layer_on_the_level_path_does_not_escape(
@@ -865,22 +913,21 @@ def test_sound_moves_the_pill_while_recording(appkit: _FakeAppKit) -> None:
     assert [layer.frame() for layer in overlay._bars] != before
 
 
-def test_the_panel_widens_when_recording_starts(appkit: _FakeAppKit) -> None:
-    """The width cue, at the panel rather than in the geometry function.
+def test_the_pill_grows_when_recording_starts(appkit: _FakeAppKit) -> None:
+    """The size cue, at the layer rather than in the pure function.
 
-    `frame_for` being right is necessary and not sufficient: the panel has to
+    `pill_frame` being right is necessary and not sufficient: the layer has to
     actually be re-framed on the transition, and a panel that computes the
-    right rect and never applies it looks identical to one that has no idle
-    form at all.
+    right rect and never applies it looks identical to one with no idle form.
     """
     overlay = RecordingOverlay(FeedbackConfig())
     overlay.start()
-    idle_width = appkit.panels[-1].frame[2]
+    idle = overlay._pill.frame()
 
     overlay.set_state(DictationState.RECORDING)
 
-    assert appkit.panels[-1].frame[2] == ACTIVE_WIDTH
-    assert idle_width == IDLE_WIDTH
+    assert overlay._pill.frame() == pill_frame(OverlayMode.ACTIVE)
+    assert idle == pill_frame(OverlayMode.IDLE)
 
 
 def test_the_panel_narrows_again_when_the_microphone_closes(
@@ -896,7 +943,7 @@ def test_the_panel_narrows_again_when_the_microphone_closes(
 
     overlay.set_state(DictationState.TRANSCRIBING)
 
-    assert appkit.panels[-1].frame[2] == IDLE_WIDTH
+    assert overlay._pill.frame() == pill_frame(OverlayMode.IDLE)
 
 
 def test_declining_the_idle_pill_leaves_nothing_on_screen(
@@ -913,3 +960,107 @@ def test_declining_the_idle_pill_leaves_nothing_on_screen(
     overlay.start()
 
     assert not appkit.panels or not appkit.panels[-1].ordered_front_regardless
+
+
+# ---------------------------------------------------------------------------
+# The transition animation (§5.4, 2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_the_transition_is_animated(appkit: _FakeAppKit) -> None:
+    """A duration, set on the transaction that changes the pill.
+
+    Core Animation animates a standalone layer's frame implicitly, so the
+    *absence* of any transaction would also produce motion — with the default
+    0.25 s and no way to turn it off. Setting it explicitly is what makes the
+    duration a decision this module owns rather than a framework default it
+    inherited.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    appkit.Quartz.transactions.clear()
+
+    overlay.set_state(DictationState.RECORDING)
+
+    assert appkit.Quartz.transactions, "the pill changed outside a transaction"
+    assert appkit.Quartz.transactions[-1]["duration"] == pytest.approx(
+        TRANSITION_SECONDS
+    )
+    assert appkit.Quartz.transactions[-1]["disabled"] is False
+
+
+def test_the_animation_never_blocks_the_main_queue(appkit: _FakeAppKit) -> None:
+    """The reason this could not ship with the idle pill, now designed out.
+
+    `setFrame:display:animate:` on the *window* blocks the main queue for the
+    whole animation, and this panel's failures have terminated the daemon once
+    already (2026-09-02). Blocking the thread that draws it is not a trade
+    worth making for a flourish.
+
+    So the window is never animated at all: it is built at the recording form's
+    size and left there, and the pill layer inside it is what moves. Asserted
+    as the absence of the dangerous call rather than as the presence of the
+    safe one, because only the former can hurt anybody.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_state(DictationState.IDLE)
+
+    panel = appkit.panels[-1]
+    assert (
+        panel.animated_frames == []
+    ), "the window animated; that blocks the main queue"
+
+
+def test_the_animation_can_be_declined(appkit: _FakeAppKit) -> None:
+    """`[feedback] overlay_animate = false`, and it must reach the draw path.
+
+    Asserted as `disabled` on the transaction rather than as a zero duration:
+    Core Animation's implicit animation is on by default for a standalone
+    layer, so a zero duration still runs an animation of zero length while
+    `setDisableActions_` is what actually removes it. The distinction is
+    invisible in a screenshot and obvious on a machine that stutters.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(overlay_animate=False))
+    overlay.start()
+    appkit.Quartz.transactions.clear()
+
+    overlay.set_state(DictationState.RECORDING)
+
+    assert appkit.Quartz.transactions[-1]["disabled"] is True
+
+
+def test_reduced_motion_turns_the_animation_off(
+    appkit: _FakeAppKit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS's Reduce Motion, honoured without the user finding our key.
+
+    This pill is on screen for the whole session rather than for the length of
+    a dictation, which is what makes it worth asking. Someone who has set that
+    switch has already said what they want about motion, and a product that
+    makes them say it again in a TOML file has not listened.
+    """
+    appkit.reduce_motion = True
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+    appkit.Quartz.transactions.clear()
+
+    overlay.set_state(DictationState.RECORDING)
+
+    assert appkit.Quartz.transactions[-1]["disabled"] is True
+
+
+def test_the_pill_is_outlined(appkit: _FakeAppKit) -> None:
+    """A light border, so the pill reads against a light background.
+
+    The fill is dark and translucent. On a white document it is a grey smudge
+    with no edge, which is the case where an always-present affordance most
+    needs to be legible — the user is writing, not looking for it.
+    """
+    overlay = RecordingOverlay(FeedbackConfig())
+    overlay.start()
+
+    assert overlay._pill.border_width == PILL_BORDER_WIDTH
+    assert overlay._pill.border_color is not None

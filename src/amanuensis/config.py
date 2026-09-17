@@ -312,6 +312,15 @@ class FeedbackConfig:
     #: exactly; the recording indicator survives either way, so declining the
     #: idle form never costs the affordance §5.4 requires.
     overlay_idle: bool = True
+    #: Animate the growth between the idle and recording forms (§5.4, added
+    #: 2026-09-17). ON: the transition is what tells the user the two pills are
+    #: the same object rather than two unrelated things appearing.
+    #:
+    #: macOS's own Reduce Motion switch overrides this without the user having
+    #: to find the key — someone who set that switch has already said what they
+    #: want about motion. The key exists for the person who wants motion
+    #: everywhere *except* here.
+    overlay_animate: bool = True
     #: Which screen edge. The panel must not cover the caret in the application
     #: being dictated into, and which edge is safe depends on the user's
     #: layout, so this cannot be hardcoded.
@@ -508,6 +517,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
     },
     "feedback": {
         "overlay": _Rule((bool,)),
+        "overlay_animate": _Rule((bool,)),
         "overlay_idle": _Rule((bool,)),
         "overlay_position": _Rule((str,), _one_of("bottom", "top")),
         "sounds": _Rule((bool,)),

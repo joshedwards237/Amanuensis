@@ -67,17 +67,22 @@ from amanuensis.config import FeedbackConfig
 from amanuensis.controllers.dictation_controller import DictationState
 
 __all__ = [
+    "ACTIVE_HEIGHT",
     "ACTIVE_WIDTH",
     "BAR_COUNT",
     "CORNER_RADIUS",
+    "IDLE_HEIGHT",
     "IDLE_WIDTH",
     "MAX_BAR_HEIGHT",
     "OVERLAY_FAILURE_LIMIT",
+    "PILL_BORDER_WIDTH",
+    "TRANSITION_SECONDS",
     "OverlayMode",
     "RecordingOverlay",
     "bar_heights",
     "frame_for",
     "mode_for",
+    "pill_frame",
 ]
 
 #: A pill, not a panel. The first version was 220x44 with the text
@@ -86,17 +91,39 @@ __all__ = [
 #: one question and a moving waveform answers it faster than a label you have to
 #: read. §5.4 asks for *confidence*, which is a glance, not a sentence.
 _WIDTH: Final = 72.0
-#: The recording form's width. Named separately from `_WIDTH` because there are
-#: now two, and a reader asking "how wide is the pill" needs the question to
-#: have an answer per state rather than per module.
-ACTIVE_WIDTH: Final = _WIDTH
-#: The idle form's width. Enough for the dot and its breathing room and no more:
-#: the width difference *is* one of the two cues, so a narrow-ish pill that
-#: reads as "the same pill" would spend the cue without buying it. At 22 it is
-#: exactly the height, which makes the idle form a circle rather than a pill —
-#: a different shape, not merely a shorter one.
-IDLE_WIDTH: Final = 22.0
 _HEIGHT: Final = 22.0
+#: The recording form. This is also the **window's** size, in both states: the
+#: window is built at the larger of the two and never resized, and the pill
+#: layer inside it is what changes. See `pill_frame`.
+ACTIVE_WIDTH: Final = _WIDTH
+ACTIVE_HEIGHT: Final = _HEIGHT
+#: The idle form. A short pill — wider than it is tall, and thinner than the
+#: recording form — revised 2026-09-17 from a 22x22 circle on the operator's
+#: verdict after seeing it on screen.
+#:
+#: Both axes shrink rather than one. Length alone reads as a pill sliding out
+#: sideways; changing both makes it read as the same object inflating, which is
+#: what tells the user the two forms are one thing in two states rather than two
+#: unrelated things appearing.
+IDLE_WIDTH: Final = 34.0
+IDLE_HEIGHT: Final = 10.0
+
+#: A light hairline around the pill. The fill is dark and translucent, which on
+#: a white document is a grey smudge with no edge — and an always-present
+#: affordance most needs to be legible exactly when the user is writing rather
+#: than looking for it. The border reads as an inverse shadow: it separates the
+#: pill from the background instead of bleeding into it.
+PILL_BORDER_WIDTH: Final = 1.0
+_PILL_BORDER_GRAY: Final = 1.0
+_PILL_BORDER_ALPHA: Final = 0.28
+
+#: How long the growth takes. Short enough that a dictation started the instant
+#: the key goes down is not waiting on a flourish, long enough to be read as
+#: motion rather than as a jump. Not a measured number — there is nothing to
+#: measure it against — and it is a constant rather than a key because the
+#: decision a user actually has is *whether*, which is `[feedback]
+#: overlay_animate` and macOS's own Reduce Motion.
+TRANSITION_SECONDS: Final = 0.16
 #: Half the height, so the ends are fully round rather than rounded-off.
 CORNER_RADIUS: Final = _HEIGHT / 2.0
 #: Distance from the chosen screen edge.
@@ -110,9 +137,6 @@ _BAR_GAP: Final = 3.0
 #: "is it live or is it broken" is the ambiguity §5.4 exists to remove.
 MIN_BAR_HEIGHT: Final = 2.0
 MAX_BAR_HEIGHT: Final = 16.0
-#: The idle dot. Static by construction — see the preamble on why nothing but
-#: RECORDING is allowed to move.
-IDLE_DOT_SIZE: Final = 6.0
 #: Deflection is calibrated to **this operator's measured speech**, not to a
 #: guess. 8,684 blocks across ten of his own takes, 6,461 above the noise
 #: floor:
@@ -227,11 +251,30 @@ def bar_heights(levels: Sequence[float]) -> tuple[float, ...]:
     return tuple(heights)
 
 
+def pill_frame(mode: OverlayMode) -> tuple[float, float, float, float]:
+    """The visible pill's rect *inside* the window, which never changes size.
+
+    Centred, so the two forms share a centre and the transition is an inflation
+    rather than a slide. The recording form fills the window exactly: smaller
+    would leave a transparent margin for the shadow to fall on, larger would
+    clip.
+
+    `HIDDEN` has no rect of its own — the window is ordered out rather than
+    drawn empty — and returns the idle one so a panel coming back does not have
+    to animate from nowhere.
+    """
+    if mode is OverlayMode.ACTIVE:
+        return (0.0, 0.0, ACTIVE_WIDTH, ACTIVE_HEIGHT)
+    return (
+        (ACTIVE_WIDTH - IDLE_WIDTH) / 2.0,
+        (ACTIVE_HEIGHT - IDLE_HEIGHT) / 2.0,
+        IDLE_WIDTH,
+        IDLE_HEIGHT,
+    )
+
+
 def frame_for(
-    position: str,
-    screen: tuple[float, float, float, float],
-    *,
-    width: float = ACTIVE_WIDTH,
+    position: str, screen: tuple[float, float, float, float]
 ) -> tuple[float, float, float, float]:
     """Panel rect for a screen rect, in AppKit's origin-at-bottom-left space.
 
@@ -241,11 +284,11 @@ def frame_for(
     on a small display without a second display or a small display.
     """
     screen_x, screen_y, screen_width, screen_height = screen
-    # `width` is the form's width and the screen is the ceiling, in that order.
-    # Both forms are centred on the same point, so the transition between them
-    # reads as a growth from the middle rather than a jump across the screen.
-    width = min(width, screen_width)
-    height = min(_HEIGHT, screen_height)
+    # The window is always the recording form's size. It is the pill layer
+    # inside it that shrinks, which is what keeps `setFrame:display:animate:`
+    # — a call that blocks the main queue — off this module's critical path.
+    width = min(ACTIVE_WIDTH, screen_width)
+    height = min(ACTIVE_HEIGHT, screen_height)
     margin = min(_MARGIN, max(0.0, (screen_height - height) / 2))
 
     x = screen_x + (screen_width - width) / 2
@@ -288,8 +331,8 @@ class RecordingOverlay:
         #: on the capture thread's hot path.
         self._levels: deque[float] = deque([0.0] * BAR_COUNT, maxlen=BAR_COUNT)
         self._bars: list[Any] = []
-        #: The idle dot's layer. Built with the bars and shown by mode.
-        self._dot: Any | None = None
+        #: The visible pill. Resized between the two forms; the window is not.
+        self._pill: Any | None = None
         self._panel: Any | None = None
         self._mode = OverlayMode.HIDDEN
         #: Guards `_panel` and `_visible`. Set from the event tap and the
@@ -457,7 +500,7 @@ class RecordingOverlay:
             panel.orderOut_(None)
             return
 
-        self._reframe(panel, wanted)
+        self._reframe(panel)
         if wanted is OverlayMode.ACTIVE:
             # Reset before showing. A pill that opens holding the previous
             # dictation's levels looks frozen for the first thirty milliseconds,
@@ -469,20 +512,57 @@ class RecordingOverlay:
         panel.orderFrontRegardless()
 
     def _apply_form(self, wanted: OverlayMode) -> None:
-        """Show the dot or the bars. Main thread only.
+        """Grow or shrink the pill, and show or hide the bars. Main thread only.
 
         Hidden rather than removed: the layers are built once and toggled,
         because this runs on every transition and `vad_auto` can produce a lot
         of them. Rebuilding seven layers per transition is the same mistake
         `_draw_bars` already refuses to make thirty times a second.
+
+        The whole change goes inside one `CATransaction` so the pill and the
+        bars move together. Two transactions would let the bars appear before
+        the pill has grown to hold them, which is a frame of bars hanging in
+        space — briefly, and visibly.
         """
         recording = wanted is OverlayMode.ACTIVE
-        for bar in self._bars:
-            bar.setHidden_(not recording)
-        if self._dot is not None:
-            self._dot.setHidden_(recording)
+        quartz = self._quartz()
+        quartz.CATransactionBegin()
+        try:
+            if self._animates():
+                quartz.CATransactionSetAnimationDuration_(TRANSITION_SECONDS)
+            else:
+                # Not a zero duration: implicit animation is on by default for
+                # a standalone layer, so zero still runs an animation of zero
+                # length. `setDisableActions_` is what removes it.
+                quartz.CATransactionSetDisableActions_(True)
+            if self._pill is not None:
+                rect = pill_frame(wanted)
+                self._pill.setFrame_(rect)
+                self._pill.setCornerRadius_(rect[3] / 2.0)
+            for bar in self._bars:
+                bar.setHidden_(not recording)
+        finally:
+            # In a `finally` because an exception between begin and commit
+            # leaves the transaction open, and every later implicit animation
+            # in the process then joins it — a leak that shows up as the whole
+            # UI animating at the wrong duration, nowhere near this module.
+            quartz.CATransactionCommit()
 
-    def _reframe(self, panel: Any, wanted: OverlayMode) -> None:
+    def _animates(self) -> bool:
+        """Config, unless macOS has been told to reduce motion.
+
+        Read at transition time rather than cached: the switch can be thrown
+        while a daemon that starts at login is running, and a daemon that has
+        been up for a week would otherwise be the one process ignoring it.
+        """
+        if not self._config.overlay_animate:
+            return False
+        from amanuensis.ui.indicator import _appkit
+
+        workspace = _appkit().NSWorkspace.sharedWorkspace()
+        return not bool(workspace.accessibilityDisplayShouldReduceMotion())
+
+    def _reframe(self, panel: Any) -> None:
         """Re-position and re-size the panel for the mode it is entering.
 
         **Revised 2026-09-17.** This used to run only when the screen had
@@ -521,8 +601,7 @@ class RecordingOverlay:
             return
         from amanuensis.ui.indicator import _appkit
 
-        width = IDLE_WIDTH if wanted is OverlayMode.IDLE else ACTIVE_WIDTH
-        rect = frame_for(self._config.overlay_position, current, width=width)
+        rect = frame_for(self._config.overlay_position, current)
         panel.setFrame_display_(_appkit().NSMakeRect(*rect), True)
         self._screen = current
 
@@ -584,15 +663,31 @@ class RecordingOverlay:
         )
         container.setWantsLayer_(True)
         layer = container.layer()
-        layer.setCornerRadius_(CORNER_RADIUS)
-        quartz = self._quartz()
-        layer.setBackgroundColor_(quartz.CGColorCreateGenericGray(0.0, 0.62))
         panel.setContentView_(container)
 
-        self._bars = self._build_bars(appkit, layer)
-        self._dot = self._build_dot(layer)
+        # The pill is a sublayer rather than the view's own layer, and that is
+        # what makes the transition animatable. A view-backed layer has implicit
+        # animation switched off; a standalone `CALayer` animates its frame on
+        # the render server, which costs the main queue nothing. The window
+        # itself is never resized — see `pill_frame`.
+        self._pill = self._build_pill(layer)
+        self._bars = self._build_bars(appkit, self._pill)
         self._panel = panel
         return panel
+
+    def _build_pill(self, parent: Any) -> Any:
+        """The visible pill: dark translucent fill, light hairline border."""
+        quartz = self._quartz()
+        pill = self._calayer().layer()
+        pill.setFrame_(pill_frame(OverlayMode.IDLE))
+        pill.setCornerRadius_(IDLE_HEIGHT / 2.0)
+        pill.setBackgroundColor_(quartz.CGColorCreateGenericGray(0.0, 0.62))
+        pill.setBorderWidth_(PILL_BORDER_WIDTH)
+        pill.setBorderColor_(
+            quartz.CGColorCreateGenericGray(_PILL_BORDER_GRAY, _PILL_BORDER_ALPHA)
+        )
+        parent.addSublayer_(pill)
+        return pill
 
     @staticmethod
     def _quartz() -> Any:
@@ -643,27 +738,3 @@ class RecordingOverlay:
             parent.addSublayer_(bar)
             bars.append(bar)
         return bars
-
-    def _build_dot(self, parent: Any) -> Any:
-        """The idle form: one static circle, centred in the narrow pill.
-
-        Centred on `IDLE_WIDTH` rather than on `_WIDTH`, because the panel is
-        that wide when the dot is the thing being shown. Getting this wrong
-        puts the dot off-centre in the idle pill and centred in nothing.
-
-        It never moves and never changes size. That is the point: the *only*
-        moving thing this module draws is the recording form, so motion means
-        one thing.
-        """
-        calayer = self._calayer()
-        dot = calayer.layer()
-        dot.setFrame_(
-            (
-                ((IDLE_WIDTH - IDLE_DOT_SIZE) / 2.0, (_HEIGHT - IDLE_DOT_SIZE) / 2.0),
-                (IDLE_DOT_SIZE, IDLE_DOT_SIZE),
-            )
-        )
-        dot.setCornerRadius_(IDLE_DOT_SIZE / 2.0)
-        dot.setBackgroundColor_(self._quartz().CGColorCreateGenericGray(1.0, 0.92))
-        parent.addSublayer_(dot)
-        return dot

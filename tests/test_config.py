@@ -693,3 +693,20 @@ def test_the_idle_overlay_key_round_trips(tmp_path: Path) -> None:
 
     assert load_config(path).feedback.overlay_idle is False
     assert load_config(path).feedback.overlay is True, "it took the panel with it"
+
+
+def test_the_animation_key_round_trips(tmp_path: Path) -> None:
+    """`[feedback] overlay_animate`, added 2026-09-17 (§5.4).
+
+    Asserted alongside `overlay_idle` rather than instead of it: the two keys
+    are independent, and the combination a user is most likely to want — the
+    pill without the motion — is the one a shared default would quietly break.
+    """
+    assert AppConfig().feedback.overlay_animate is True
+
+    path = tmp_path / "config.toml"
+    path.write_text("[feedback]\noverlay_animate = false\n")
+
+    config = load_config(path)
+    assert config.feedback.overlay_animate is False
+    assert config.feedback.overlay_idle is True, "it took the idle pill with it"
