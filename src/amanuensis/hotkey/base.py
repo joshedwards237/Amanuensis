@@ -57,6 +57,24 @@ class HotkeyListener(ABC):
         tray must surface rather than a silent no-op.
         """
 
+    def clear_latch(self) -> None:  # noqa: B027
+        """Forget that a hands-free session is in progress.
+
+        Called when a session ends by any route that is **not** the key —
+        Escape, the overlay's ✕, `manu toggle`, a VAD auto-end. A listener that
+        tracks latch state cannot see those, and one that keeps thinking it is
+        latched swallows the next press.
+
+        Concrete rather than abstract, and a no-op by default: a listener with
+        no latch has nothing to clear, and making every implementation write an
+        empty method to say so is how the method stops being read.
+
+        `B027` flags exactly this — an empty non-abstract method on an ABC,
+        which subclasses inherit silently. That is the intent here and the
+        silence is the point, so the rule is waived rather than satisfied by
+        making every implementation carry a stub it does not need.
+        """
+
     @abstractmethod
     def stop(self) -> None:
         """Stop listening and release the tap. Must be idempotent."""

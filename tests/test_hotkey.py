@@ -1174,3 +1174,88 @@ def test_a_listener_given_no_latch_callback_still_latches(
     _tap_at(quartz, clock)
 
     assert recorder.events == ["press", "release"], "the latch did not engage"
+
+
+# ---------------------------------------------------------------------------
+# A session ended by something other than the key (2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+def test_a_latch_ended_elsewhere_does_not_eat_the_next_double_tap(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """Reported from use: latch, press Escape, then the next double-tap fails.
+
+    `_latched` is the listener's own state and **every route out of a session
+    except the ending tap leaves it set** — Escape, the overlay's ✕, `manu
+    toggle`, a VAD auto-end. The listener then reads the next press as
+    "a press mid-latch decides nothing", swallows it, and the release that
+    follows unlatches instead of starting anything. So the first tap of the
+    next double-tap vanishes and only the second is seen, which is exactly
+    what a dictation that will not stick looks like.
+
+    This is finding 1c's shape a second time: a process-wide value read as
+    though it described one session.
+    """
+    recorder = _Recorder()
+    latch_listener.start(
+        recorder.press, recorder.release, recorder.cancel, recorder.latch
+    )
+
+    _enter_latch(quartz, clock)
+    assert recorder.events == ["press", "latch"]
+
+    # Escape, the ✕, or `manu toggle`: the session ends and the key is never
+    # touched, so the listener is told rather than inferring.
+    latch_listener.clear_latch()
+    clock.advance(2.0)
+
+    recorder.events.clear()
+    _enter_latch(quartz, clock)
+
+    assert recorder.events == ["press", "latch"], "the next double-tap was eaten"
+
+
+def test_clearing_a_latch_that_is_not_latched_changes_nothing(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """It is called on every transition out of RECORDING, most of which never
+    latched. A clear that disturbed an ordinary push-to-talk hold would break
+    the common case to fix the rare one."""
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    latch_listener.clear_latch()
+    _down(quartz)
+    clock.advance(1.0)
+    latch_listener.clear_latch()
+    _up(quartz)
+
+    assert recorder.events == ["press", "release"]
+
+
+def test_clearing_a_latch_does_not_swallow_the_next_release(
+    latch_listener: MacOSHotkeyListener, quartz: _FakeQuartz, clock: _Clock
+) -> None:
+    """`_swallow_release` is the other half of the latch's state.
+
+    Clearing `_latched` and leaving the swallow armed would drop the *release*
+    of the next ordinary hold, which is a dictation that starts and never ends
+    — a live microphone with no way to close it, and a worse bug than the one
+    being fixed.
+    """
+    recorder = _Recorder()
+    latch_listener.start(recorder.press, recorder.release, recorder.cancel)
+
+    _down(quartz)  # arms _swallow_release only if this latches; it does not
+    clock.advance(0.08)
+    _up(quartz)
+    clock.advance(0.12)
+    _down(quartz)  # this latches, arming the swallow
+    latch_listener.clear_latch()
+
+    recorder.events.clear()
+    clock.advance(1.0)
+    _up(quartz)
+
+    assert recorder.events == ["release"], "the release was swallowed"

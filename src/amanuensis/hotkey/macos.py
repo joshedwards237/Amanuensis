@@ -388,6 +388,34 @@ class MacOSHotkeyListener(HotkeyListener):
             return
         request(_IOHID_REQUEST_TYPE_LISTEN_EVENT)
 
+    def clear_latch(self) -> None:
+        """A session ended without the key. Forget the latch (§5.2).
+
+        **Reported from use, 2026-09-17.** Latch, press Escape, then the next
+        double-tap does not take. `_latched` is this object's state and every
+        route out of a session except the ending tap leaves it set: Escape, the
+        overlay's ✕, `manu toggle`, a VAD auto-end. The listener then reads the
+        next press as "a press mid-latch decides nothing", swallows it, and the
+        release that follows unlatches instead of starting anything — so the
+        first tap vanishes and only the second is seen.
+
+        Finding 1c's shape a second time: a process-wide value read as though
+        it described one session. The listener cannot infer this, because the
+        thing that happened produced no key event at all, so it is told.
+
+        **`_swallow_release` is cleared with it, and that is not tidiness.**
+        Leaving it armed would drop the release of the next ordinary hold — a
+        dictation that starts and never ends, over a microphone with no way to
+        close it, which is worse than the bug this fixes.
+
+        A pending deferral is left alone: it belongs to a tap that has already
+        happened, and cancelling it here would swallow an end the user asked
+        for.
+        """
+        with self._latch_lock:
+            self._latched = False
+            self._swallow_release = False
+
     def start(
         self,
         on_press: HotkeyCallback,
