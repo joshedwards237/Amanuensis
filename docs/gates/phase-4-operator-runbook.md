@@ -24,15 +24,55 @@ written to pass.
 |---|---|---|---|
 | Today, 5 min | **1. Check the daemon starts and stops** | 5 min | nothing |
 | Today, 10 min | **2. Judge the recording panel** (§5.4) | 10 min | a full-screen app |
+| **Owed** | **2b. Re-judge it — the panel changed** (§5.4) | 10 min + 20 to write the criterion | a full-screen app |
 | Today, 15 min | **3. Run the network capture** (G3) | 15 min | terminal, `sudo` |
 | Today, 20 min | **4.** *Optional:* ten short corrections | 20 min | quiet room |
 | Today, 5 min | **4b. The latch and the second daemon** (§5.2, §9) | 5 min | two terminals |
 | Whenever, 5 min | **5. Write the gate record** | 25 min | steps 1–4b done |
 | Book it | **6. The install gate** | watch only | **a second person**, 30 min |
 
-Steps 1–4b are independent. **5 needs 1–3 and 4b. 6 is the gate and should be
+Steps 1–4b are independent. **5 needs 1–3, 2b and 4b. 6 is the gate and should be
 last** — its output is a defect list you may want to fix before anyone else
-sees it.
+sees it. **2b supersedes 2 and is owed before 5 can be written**; see below.
+
+### Not in this gate, and tracked here because nothing else tracks it
+
+| When | Task | Your time | Needs |
+|---|---|---|---|
+| Unbooked | **The punctuation corpus** — correct ten transcripts | **~40 min** | a quiet hour |
+
+**Phase 5 groundwork. It does not gate Phase 4** and must not be allowed to
+delay step 6.
+
+The Phase 3 gate found the dominant error class is punctuation — 58 missing
+sentence marks and 41 stray capitals, 99 of 171 edits — and **the audio that
+produced those corrections was not kept.** `corrections-2026-09-01.json` is
+keyed by `history.db` session ids; the recordings are gone. So no engine-side
+punctuation change can ever be scored against the 9.59% / 31% figures, which is
+why `bench_punctuation.py` never re-decodes and says so in its own docstring.
+
+What does exist is `tests/fixtures/phase3/L*.wav` — ten long takes, same ten
+prompts, same speaker, **different takes**, with no operator corrections. A
+first probe on them (2026-09-17) found the pause signal is real and strongly
+structured: of 139 segment boundaries, 64 have a gap of exactly 0.000 s and 66
+exceed 0.5 s, and positions where the decoder *did* emit a sentence mark carry a
+pause over 0.3 s **44% of the time against 3.7% everywhere else** — a 12x
+enrichment. That used the decoder's own marks as ground truth, so it shows pause
+and sentence-end co-occur in this speaker's delivery; it does **not** show the
+gap predicts the marks the decoder missed, which is the actual defect.
+
+The task: decode those ten takes, correct punctuation and case only, ~1,900
+words. That is the corpus both untried candidates need —
+
+1. **gap-gated segment joins**, the discriminator the rejected rule lacked (it
+   fired on all 95 boundaries at 31% precision, treating two populations as
+   one), and
+2. **a dedicated punctuation-restoration model**, never benchmarked; every
+   Phase 5 mechanism that failed had freedom to regenerate *words*, and error
+   rate tracked that freedom monotonically.
+
+Nobody else can do it. It is the operator's own speech, and the same species of
+task as the demo corpus in SITE_PRD §10.2.
 
 ---
 
@@ -120,6 +160,51 @@ the key is held, and nothing when it isn't.
   `~/Library/Application Support/amanuensis/config.toml` accepts `bottom`
   (default) or `top`.
 - Turn the menu-bar auto-hide back off afterwards if you don't like it.
+
+---
+
+## Step 2b — re-judge it, because the panel changed (10 min + 20 to write it)
+
+> **Step 2's 6/6 no longer describes what ships, and this replaces it.** The
+> panel is now drawn whenever the daemon runs: a short outlined pill while idle
+> (34x10), growing to the full pill with live bars while recording (72x22), with
+> an animated transition. PRD §5.4 was amended 2026-09-17 on an explicit
+> operator disposition to build it before lane 6. `docs/gates/phase-4.md`
+> carries the invalidation in place.
+
+**Step 2's criterion cannot be reused as written, and the reason is the whole
+point of this step.** It asked whether you could answer "is the microphone live
+right now?" on a live and an idle daemon. On the old panel the idle answer was
+*nothing on screen* — a presence/absence judgement, the easiest discrimination
+there is. It is now *a smaller pill* — a state judgement, which is harder, and
+is the direction of §5.4's own named failure: a live microphone with an
+indicator that looks alive either way.
+
+**Write the new criterion first. Do not skip this, and do not write it after
+looking at the panel.** A criterion written once the thing exists is written to
+pass, and this repository has that event on record twice. Put it in
+`docs/gates/phase-4.md` with the date, before step 2b runs.
+
+Three things it has to cover that step 2's did not:
+
+1. **The two forms, at a glance.** Same shape as step 2 — full screen, menu bar
+   hidden, coin flip, answer out loud before looking anywhere else, six trials.
+2. **Peripheral vision.** The pill is on screen permanently now, which means it
+   will normally be seen out of the corner of the eye rather than looked at. A
+   distinction that needs a direct look is not the one this affordance needs.
+3. **A frozen panel.** The case the two-cue rule exists for. A panel that has
+   stopped updating shows the recording form with motionless bars, and the
+   width cue is the only thing that separates that from idle. Rehearse it —
+   `overlay.set_state(RECORDING)` and then no audio — and confirm you can still
+   tell it from the idle pill. If you cannot, the two-cue rule is not doing its
+   job and the sizes need to change, not the criterion.
+
+**The decision it forces is step 2's, unchanged:** 6/6 discharges §5.4 by the
+panel and the `.app` bundle stays deferred; anything less builds the bundle.
+
+**Also note:** whether the animation helps or distracts. `[feedback]
+overlay_animate = false` turns it off, and so does macOS's Reduce Motion. That
+is a preference, not a criterion — do not let it move the score.
 
 ---
 
