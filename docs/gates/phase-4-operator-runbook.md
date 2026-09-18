@@ -24,7 +24,7 @@ written to pass.
 |---|---|---|---|
 | Today, 5 min | **1. Check the daemon starts and stops** | 5 min | nothing |
 | Today, 10 min | **2. Judge the recording panel** (§5.4) | 10 min | a full-screen app |
-| **Owed** | **2b. Re-judge it — the panel changed** (§5.4) | 10 min + 20 to write the criterion | a full-screen app |
+| ~~Owed~~ **PASSED 6/6, 2026-09-18** | **2b. Re-judge it — the panel changed** (§5.4) | done | — |
 | Today, 15 min | **3. Run the network capture** (G3) | 15 min | terminal, `sudo` |
 | Today, 20 min | **4.** *Optional:* ten short corrections | 20 min | quiet room |
 | Today, 5 min | **4b. The latch and the second daemon** (§5.2, §9) | 5 min | two terminals |
@@ -33,13 +33,15 @@ written to pass.
 
 Steps 1–4b are independent. **5 needs 1–3, 2b and 4b. 6 is the gate and should be
 last** — its output is a defect list you may want to fix before anyone else
-sees it. **2b supersedes 2 and is owed before 5 can be written**; see below.
+sees it. **2b superseded 2 and PASSED 6/6 on 2026-09-18** — with its criterion
+not rewritten in advance, which `docs/gates/phase-4.md` records. Step 5 is
+unblocked.
 
 ### Not in this gate, and tracked here because nothing else tracks it
 
 | When | Task | Your time | Needs |
 |---|---|---|---|
-| Unbooked | **The punctuation corpus** — correct ten transcripts | **~40 min** | a quiet hour |
+| **In progress, 2026-09-18** | **The punctuation corpus** — correct ten transcripts | **~40 min** | a quiet hour |
 
 **Phase 5 groundwork. It does not gate Phase 4** and must not be allowed to
 delay step 6.

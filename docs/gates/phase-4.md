@@ -166,9 +166,37 @@ opposite of a cheap check.
 > working, which is exactly the test below, and it changes the perceptual task
 > from *presence versus absence* to *state A versus state B*.
 >
-> **Lane 2 is UNSCORED for the panel that ships and must be re-run before this
-> gate closes.** Operator disposition 2026-09-17: build it, re-score, and let
-> lane 6 see the panel that ships rather than one it will not recognise.
+> **Re-run 2026-09-18: 6/6 on the panel that ships.** Operator's reading, after
+> the idle pill, the animated transition, the ✕/✓ controls and the circled
+> Lucide icons had all landed. §5.4 is discharged by the panel and the `.app`
+> bundle **stays deferred** — which is a decision recorded explicitly, not an
+> omission.
+>
+> **The criterion was not rewritten first, and this record says so rather than
+> implying otherwise.** The runbook's step 2b required a new one in advance,
+> and no such document exists in this repository. So what was applied is step
+> 2's original criterion — *"answer 'is the microphone live right now?'
+> correctly, without moving the pointer, without keyboard input, and without
+> waiting, on both a live and an idle daemon, three trials each"* — against the
+> new panel.
+>
+> That reading is real and it is the §5.4 question. Two things step 2b added are
+> therefore **still unasked**:
+>
+> 1. **Peripheral vision.** The pill is on screen permanently now, so it will
+>    normally be seen out of the corner of the eye rather than looked at. Step
+>    2's protocol has the subject answer before looking anywhere else, which is
+>    close but is not the same as never looking.
+> 2. **A frozen panel.** The case the two-cue rule exists for — a panel that has
+>    stopped updating shows the recording form with motionless bars, and width
+>    is the only thing separating that from idle.
+>
+> Neither is a reason to withhold the 6/6. Both are recorded because a gate that
+> rounds "the question I asked" up to "the question I meant to ask" is how lane
+> 2's first score came to need this note in the first place.
+>
+> Operator disposition 2026-09-17: build it, re-score, and let lane 6 see the
+> panel that ships rather than one it will not recognise. Done.
 >
 > The re-run is not the same test. The old criterion asked whether the user
 > noticed the panel appear. The new one has to ask whether they can tell the two
