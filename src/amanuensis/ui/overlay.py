@@ -72,6 +72,7 @@ __all__ = [
     "BAR_COUNT",
     "CONTROL_SIZE",
     "CORNER_RADIUS",
+    "ICON_SIZE",
     "IDLE_HEIGHT",
     "IDLE_WIDTH",
     "LATCHED_WIDTH",
@@ -87,6 +88,7 @@ __all__ = [
     "bar_heights",
     "control_frame",
     "frame_for",
+    "icon_frame",
     "icon_polylines",
     "icon_stroke_width",
     "is_recording",
@@ -106,9 +108,51 @@ _HEIGHT: Final = 22.0
 #: layer inside it is what changes. See `pill_frame`.
 ACTIVE_WIDTH: Final = _WIDTH
 ACTIVE_HEIGHT: Final = _HEIGHT
+#: Bars, newest on the right so it reads as motion in one direction. Declared
+#: here rather than with the other drawing metrics because the latched pill's
+#: width is derived from their span.
+BAR_COUNT: Final = 7
+_BAR_WIDTH: Final = 3.0
+_BAR_GAP: Final = 3.0
+_BAR_SPAN: Final = BAR_COUNT * _BAR_WIDTH + (BAR_COUNT - 1) * _BAR_GAP
+
+#: **The controls, and the layout the latched pill is built from** (revised
+#: 2026-09-18 on the operator's verdict). Each control is a filled circle with
+#: a Lucide icon stroked on top of it.
+#:
+#: The circle is inset from the pill's edge by `_CONTROL_PADDING` on every side,
+#: which is what makes its curve **parallel** to the pill's own: the pill's
+#: corner radius is half its height, so a circle inset equally top, bottom and
+#: end is concentric with the rounded end it sits in. Its diameter therefore
+#: follows from the inset rather than being chosen — pick both and they
+#: disagree, and the gap between the two arcs varies around the curve in a way
+#: that looks like a mistake and is one.
+_CONTROL_PADDING: Final = 2.0
+#: Between a control's circle and the nearest bar. The only free number in the
+#: layout, and the one the operator was adjusting: raise it to spread the pill,
+#: lower it to tighten.
+_CONTROL_GAP: Final = 8.0
+#: The circle behind each icon. Lighter than the pill it sits on, so the
+#: controls read as raised rather than as printed on it — the pill's own fill is
+#: `CGColorCreateGenericGray(0.0, 0.62)`, and this is a white wash over it
+#: rather than a second dark layer, which would disappear.
+_CONTROL_FILL_GRAY: Final = 1.0
+_CONTROL_FILL_ALPHA: Final = 0.18
+
+#: The circle's diameter, and the control's hit target.
+CONTROL_SIZE: Final = _HEIGHT - 2 * _CONTROL_PADDING
+
 #: The latched form: the recording pill with a ✕ and a ✓ either side of the
-#: bars (§5.2, spec `overlay-controls.md` S5). 114 is the spec's number.
-LATCHED_WIDTH: Final = 114.0
+#: bars (§5.2, spec `overlay-controls.md` S5).
+#:
+#: **Derived, not the spec's 114.** The spec picked a width and the controls
+#: were placed inside it; that left a wide empty margin outside each control,
+#: which is what the operator asked to pull in. Deriving it from the parts
+#: means the pill is exactly as wide as its contents need, and a change to any
+#: of them moves it rather than silently unbalancing the layout.
+LATCHED_WIDTH: Final = (
+    2 * (_CONTROL_PADDING + CONTROL_SIZE + _CONTROL_GAP) + _BAR_SPAN
+)
 
 #: **The window is built at the widest form and never resized**, so it is this
 #: wide in every state — see `pill_frame`. Everything drawn inside is positioned
@@ -117,9 +161,6 @@ LATCHED_WIDTH: Final = 114.0
 PANEL_WIDTH: Final = LATCHED_WIDTH
 PANEL_HEIGHT: Final = _HEIGHT
 
-#: The two controls. 16 px is the spec's number and is the smallest thing S6's
-#: reachability criterion is willing to judge.
-CONTROL_SIZE: Final = 16.0
 #: `CAShapeLayer` renders at 1x unless told, and a 1x hairline on a Retina
 #: display reads as broken rather than as plain.
 _RETINA_SCALE: Final = 2.0
@@ -141,8 +182,24 @@ _RETINA_SCALE: Final = 2.0
 #:
 #: `x`     = M18 6 6 18   /  m6 6 12 12
 #: `check` = M20 6 9 17 l-5-5
+#:
+#: **Joined mitred, not rounded** (2026-09-18, operator's verdict: the check was
+#: "too curved"). Lucide renders with `stroke-linejoin: round`, which at this
+#: size turns the checkmark's elbow into a visible arc — the segments are
+#: straight and the corner between them is not. A mitre leaves the corner sharp
+#: and the two arms unambiguously straight. `x` has no join at all, being two
+#: separate strokes, so this changes only the check.
+#: The icon inside the circle, which is smaller than the circle. An icon drawn
+#: at the circle's own diameter touches its edge on the diagonals and reads as
+#: cramped rather than as centred.
+ICON_SIZE: Final = 11.0
 _LUCIDE_VIEWBOX: Final = 24.0
-_LUCIDE_STROKE: Final = 2.0
+#: **Lucide specifies 2 and this is deliberately heavier** (2026-09-18,
+#: operator's verdict: "make this stroke a little thicker"). At `ICON_SIZE` the
+#: faithful value scales to 0.92 px, which is below a Retina pixel pair and
+#: reads as grey rather than as white. Recorded as a departure rather than left
+#: to look like Lucide's own number.
+_LUCIDE_STROKE: Final = 3.4
 _LUCIDE_POLYLINES: Final[dict[str, tuple[tuple[tuple[float, float], ...], ...]]] = {
     "cancel": (
         ((18.0, 18.0), (6.0, 6.0)),
@@ -150,10 +207,10 @@ _LUCIDE_POLYLINES: Final[dict[str, tuple[tuple[tuple[float, float], ...], ...]]]
     ),
     "finish": (((20.0, 18.0), (9.0, 7.0), (4.0, 12.0)),),
 }
-#: Distance from the panel's centre to each control's centre. Sized so both sit
-#: inside the latched pill and outside the bars, with the bars' half-span
-#: (19.5) and the control's half-width (8) both cleared.
-_CONTROL_OFFSET: Final = 36.0
+#: Distance from the panel's centre to each control's centre. Derived from the
+#: layout above, so the circle lands exactly `_CONTROL_PADDING` inside the
+#: latched pill's end.
+_CONTROL_OFFSET: Final = LATCHED_WIDTH / 2.0 - _CONTROL_PADDING - CONTROL_SIZE / 2.0
 #: The idle form. A short pill — wider than it is tall, and thinner than the
 #: recording form — revised 2026-09-17 from a 22x22 circle on the operator's
 #: verdict after seeing it on screen.
@@ -186,10 +243,6 @@ CORNER_RADIUS: Final = _HEIGHT / 2.0
 #: Distance from the chosen screen edge.
 _MARGIN: Final = 44.0
 
-#: Bars, newest on the right so it reads as motion in one direction.
-BAR_COUNT: Final = 7
-_BAR_WIDTH: Final = 3.0
-_BAR_GAP: Final = 3.0
 #: Never zero. A dead-flat pill is indistinguishable from a frozen one, and
 #: "is it live or is it broken" is the ambiguity §5.4 exists to remove.
 MIN_BAR_HEIGHT: Final = 2.0
@@ -460,8 +513,22 @@ def _control_view_class() -> Any:
     return _CONTROL_VIEW_CLASS
 
 
+def icon_frame(which: str) -> tuple[float, float, float, float]:
+    """The icon's own box, centred inside the control's circle.
+
+    Separate from `control_frame` because the circle is the hit target and the
+    icon is smaller than it. Drawing the icon at the circle's frame would put
+    an `ICON_SIZE` glyph in the corner of a `CONTROL_SIZE` layer, which is a
+    mistake that looks like bad centring rather than like wrong geometry.
+    """
+    left, bottom, width, height = control_frame(which)
+    inset_x = (width - ICON_SIZE) / 2.0
+    inset_y = (height - ICON_SIZE) / 2.0
+    return (left + inset_x, bottom + inset_y, ICON_SIZE, ICON_SIZE)
+
+
 def icon_polylines(which: str) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Lucide's `x` or `check`, scaled into a `CONTROL_SIZE` box. Pure.
+    """Lucide's `x` or `check`, scaled into an `ICON_SIZE` box. Pure.
 
     Separated from the drawing so the geometry is testable without Quartz, a
     layer or a display — the same reason `frame_for` takes a tuple rather than
@@ -471,7 +538,7 @@ def icon_polylines(which: str) -> tuple[tuple[tuple[float, float], ...], ...]:
     rather than a single list of points. Joining `x`'s two diagonals into one
     path would draw a `Z`.
     """
-    scale = CONTROL_SIZE / _LUCIDE_VIEWBOX
+    scale = ICON_SIZE / _LUCIDE_VIEWBOX
     return tuple(
         tuple((x * scale, y * scale) for x, y in polyline)
         for polyline in _LUCIDE_POLYLINES[which]
@@ -480,7 +547,7 @@ def icon_polylines(which: str) -> tuple[tuple[tuple[float, float], ...], ...]:
 
 def icon_stroke_width() -> float:
     """Lucide's stroke, scaled with the icon so the proportions are theirs."""
-    return _LUCIDE_STROKE * CONTROL_SIZE / _LUCIDE_VIEWBOX
+    return _LUCIDE_STROKE * ICON_SIZE / _LUCIDE_VIEWBOX
 
 
 def control_hit(x: float, y: float) -> str | None:
@@ -542,8 +609,10 @@ class RecordingOverlay:
         self._bars: list[Any] = []
         #: The visible pill. Resized between the three forms; the window is not.
         self._pill: Any | None = None
-        #: The ✕ and ✓ layers, by name. Built with the bars, shown by mode.
+        #: The ✕ and ✓ icon layers, by name. Built with the bars, shown by mode.
         self._controls_layers: dict[str, Any] = {}
+        #: The circle behind each icon. Shown and hidden with it.
+        self._control_circles: dict[str, Any] = {}
         self._panel: Any | None = None
         self._mode = OverlayMode.HIDDEN
         #: Guards `_panel` and `_visible`. Set from the event tap and the
@@ -801,6 +870,8 @@ class RecordingOverlay:
                 bar.setHidden_(not recording)
             for layer in self._controls_layers.values():
                 layer.setHidden_(not latched)
+            for circle in self._control_circles.values():
+                circle.setHidden_(not latched)
         finally:
             # In a `finally` because an exception between begin and commit
             # leaves the transaction open, and every later implicit animation
@@ -948,7 +1019,22 @@ class RecordingOverlay:
         quartz = self._quartz()
         white = quartz.CGColorCreateGenericGray(1.0, 0.92)
         layers: dict[str, Any] = {}
+        wash = quartz.CGColorCreateGenericGray(
+            _CONTROL_FILL_GRAY, _CONTROL_FILL_ALPHA
+        )
         for which in ("cancel", "finish"):
+            # The circle first, so the icon is stroked over it. Two sibling
+            # layers rather than one with a background: a `CAShapeLayer`'s
+            # background fills its whole rectangle, and a square wash behind a
+            # round icon is the opposite of the intent.
+            circle = self._calayer().layer()
+            circle.setFrame_(as_rect(control_frame(which)))
+            circle.setCornerRadius_(CONTROL_SIZE / 2.0)
+            circle.setBackgroundColor_(wash)
+            circle.setHidden_(True)
+            parent.addSublayer_(circle)
+            self._control_circles[which] = circle
+
             layer = self._cashapelayer().layer()
             layer.setPath_(self._icon_path(which))
             layer.setStrokeColor_(white)
@@ -959,12 +1045,16 @@ class RecordingOverlay:
             layer.setFillColor_(None)
             layer.setLineWidth_(icon_stroke_width())
             layer.setLineCap_(quartz.kCALineCapRound)
-            layer.setLineJoin_(quartz.kCALineJoinRound)
+            # **Mitre, not round.** Lucide renders joins rounded, which at this
+            # size turns the checkmark's elbow into a visible arc — the arms
+            # are straight and the corner between them is not. `x` is two
+            # separate strokes and has no join, so this changes only the check.
+            layer.setLineJoin_(quartz.kCALineJoinMiter)
             # Without this the stroke is rasterised at 1x and is visibly soft
             # on a Retina display, on a control small enough that softness
             # reads as a rendering fault rather than as a style.
             layer.setContentsScale_(_RETINA_SCALE)
-            layer.setFrame_(as_rect(control_frame(which)))
+            layer.setFrame_(as_rect(icon_frame(which)))
             layer.setHidden_(True)
             parent.addSublayer_(layer)
             layers[which] = layer

@@ -179,7 +179,9 @@ the right of the waveform:
 
 The two icons are [Lucide](https://lucide.dev)'s `x` and `check`, drawn as
 strokes rather than typeset from a font — a font glyph is whatever the system
-font happens to have, which is not the same shape across macOS versions.
+font happens to have, which is not the same shape across macOS versions. Each
+sits on a lighter circle, inset the same distance from the pill's edge on every
+side so its curve runs parallel to the pill's own rounded end.
 
 **Press Escape to throw that dictation away**, or tap the hotkey again to finish
 and process it normally — the buttons are there for when your hands are already

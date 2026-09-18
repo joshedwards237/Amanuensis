@@ -24,6 +24,7 @@ from amanuensis.ui.overlay import (
     BAR_COUNT,
     CONTROL_SIZE,
     CORNER_RADIUS,
+    ICON_SIZE,
     MAX_BAR_HEIGHT,
     MIN_BAR_HEIGHT,
     OVERLAY_FAILURE_LIMIT,
@@ -37,6 +38,7 @@ from amanuensis.ui.overlay import (
     bar_heights,
     control_frame,
     frame_for,
+    icon_frame,
     icon_polylines,
     icon_stroke_width,
     is_recording,
@@ -1403,7 +1405,10 @@ def test_the_icons_are_stroked_not_filled(appkit: _FakeAppKit) -> None:
         assert layer.fill is None, f"{which} is filled"
         assert layer.stroke is not None, f"{which} has no stroke"
         assert layer.line_width == pytest.approx(icon_stroke_width())
-        assert layer.line_cap == "round" and layer.line_join == "round"
+        assert layer.line_cap == "round"
+        # Mitre, not round: a rounded join turns the checkmark's elbow into a
+        # visible arc at this size, which is what "too curved" meant.
+        assert layer.line_join == "miter", f"{which} has a rounded join"
 
 
 def test_the_icons_fit_their_control_box() -> None:
@@ -1454,3 +1459,109 @@ def test_the_controls_can_be_declined(appkit: _FakeAppKit) -> None:
 
     assert overlay.mode is OverlayMode.ACTIVE
     assert appkit.panels[-1].ignores_mouse is True
+
+
+def test_each_control_has_a_circle_behind_it(appkit: _FakeAppKit) -> None:
+    """A lighter wash, so the controls read as raised rather than printed on.
+
+    A `CAShapeLayer`'s own background fills its whole rectangle, so the circle
+    is a sibling layer with a corner radius rather than a property of the icon
+    — a square wash behind a round icon is the opposite of the intent.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+
+    for which in ("cancel", "finish"):
+        circle = overlay._control_circles[which]
+        assert circle.frame() == as_rect(control_frame(which))
+        assert circle.corner_radius == CONTROL_SIZE / 2.0, "it is not a circle"
+        assert circle.background is not None, "it has no wash"
+
+
+def test_the_circles_appear_and_vanish_with_the_icons(appkit: _FakeAppKit) -> None:
+    """Two layers, one visibility. Either alone is a defect you can see: a
+    circle with no icon is a blank button, an icon with no circle is the
+    previous design half-applied."""
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+    assert all(c.hidden for c in overlay._control_circles.values())
+
+    overlay.set_state(DictationState.RECORDING)
+    overlay.set_controls(True)
+    assert not any(c.hidden for c in overlay._control_circles.values())
+    assert not any(i.hidden for i in overlay._controls_layers.values())
+
+    overlay.set_state(DictationState.TRANSCRIBING)
+    assert all(c.hidden for c in overlay._control_circles.values())
+
+
+def test_the_circle_is_inset_equally_from_the_pill_on_every_side() -> None:
+    """What makes its curve parallel to the pill's, rather than merely near it.
+
+    The pill's corner radius is half its height, so a circle inset by the same
+    amount top, bottom and end is concentric with the rounded end it sits in —
+    the gap between the two arcs is constant all the way round. Inset by
+    different amounts and the gap varies, which looks like a mistake because it
+    is one.
+    """
+    px, py, pill_width, ph = pill_frame(OverlayMode.LATCHED)
+    left, bottom, width, height = control_frame("cancel")
+    right = control_frame("finish")
+
+    top_gap = (py + ph) - (bottom + height)
+    assert bottom - py == pytest.approx(top_gap), "not centred vertically"
+    assert left - px == pytest.approx(bottom - py), "the end inset differs"
+    assert width == height, "the hit target is not square, so not a circle"
+    # Both ends, not just the one: an inset applied to `cancel` alone leaves
+    # the pill lopsided, and every assertion above would still hold.
+    assert (px + pill_width) - (right[0] + right[2]) == pytest.approx(
+        left - px
+    ), "the two ends are inset differently"
+
+
+def test_the_icon_layer_is_framed_where_icon_frame_says(
+    appkit: _FakeAppKit,
+) -> None:
+    """The wiring, not the arithmetic — and the arithmetic test alone missed it.
+
+    `test_the_icon_is_centred_inside_its_circle` compares two pure functions and
+    passes whatever the panel does with them. Swapping `icon_frame` for
+    `control_frame` at the call site puts an `ICON_SIZE` glyph in the corner of
+    a `CONTROL_SIZE` layer and **that sabotage passed the whole suite** until
+    this existed. A geometry helper being right says nothing about it being
+    used.
+    """
+    overlay = RecordingOverlay(FeedbackConfig(), on_cancel=lambda: None)
+    overlay.start()
+
+    for which in ("cancel", "finish"):
+        assert overlay._controls_layers[which].frame() == as_rect(icon_frame(which))
+
+
+def test_the_icon_is_centred_inside_its_circle() -> None:
+    """Drawing the icon at the circle's frame puts an `ICON_SIZE` glyph in the
+    corner of a `CONTROL_SIZE` layer, which looks like bad centring rather than
+    like wrong geometry — and is therefore easy to accept."""
+    for which in ("cancel", "finish"):
+        cx, cy, cw, ch = control_frame(which)
+        ix, iy, iw, ih = icon_frame(which)
+
+        assert (iw, ih) == (ICON_SIZE, ICON_SIZE)
+        assert ix + iw / 2 == pytest.approx(cx + cw / 2)
+        assert iy + ih / 2 == pytest.approx(cy + ch / 2)
+
+
+def test_the_controls_clear_the_bars() -> None:
+    """The layout's one free number is the gap, and this is what it buys.
+
+    `LATCHED_WIDTH` is derived from the parts, so tightening the padding moves
+    the pill's edge rather than sliding the controls onto the waveform. This
+    fails if a future tightening goes one step too far.
+    """
+    centre = PANEL_WIDTH / 2.0
+    half_span = (BAR_COUNT * 3.0 + (BAR_COUNT - 1) * 3.0) / 2.0
+    cancel = control_frame("cancel")
+    finish = control_frame("finish")
+
+    assert cancel[0] + cancel[2] < centre - half_span, "✕ is over the bars"
+    assert finish[0] > centre + half_span, "✓ is over the bars"
