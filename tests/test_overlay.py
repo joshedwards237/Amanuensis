@@ -1504,13 +1504,19 @@ def test_the_circle_is_inset_equally_from_the_pill_on_every_side() -> None:
     different amounts and the gap varies, which looks like a mistake because it
     is one.
     """
-    px, py, pw, ph = pill_frame(OverlayMode.LATCHED)
+    px, py, pill_width, ph = pill_frame(OverlayMode.LATCHED)
     left, bottom, width, height = control_frame("cancel")
+    right = control_frame("finish")
 
     top_gap = (py + ph) - (bottom + height)
     assert bottom - py == pytest.approx(top_gap), "not centred vertically"
     assert left - px == pytest.approx(bottom - py), "the end inset differs"
     assert width == height, "the hit target is not square, so not a circle"
+    # Both ends, not just the one: an inset applied to `cancel` alone leaves
+    # the pill lopsided, and every assertion above would still hold.
+    assert (px + pill_width) - (right[0] + right[2]) == pytest.approx(
+        left - px
+    ), "the two ends are inset differently"
 
 
 def test_the_icon_layer_is_framed_where_icon_frame_says(
