@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from make_punctuation_corpus import main  # noqa: E402
+from make_punctuation_corpus import main
 
 if __name__ == "__main__":
     raise SystemExit(main(["--split", *sys.argv[1:]]))

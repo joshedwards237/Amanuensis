@@ -154,7 +154,8 @@ def write_combined(out: Path, slugs: list[str]) -> Path:
     """One document, from the per-take transcripts."""
     parts = [_COMBINED_PREAMBLE]
     for slug in slugs:
-        parts.append(f"{_HEADER}{slug}\n\n{(out / f'{slug}.txt').read_text().strip()}\n")
+        body = (out / f"{slug}.txt").read_text().strip()
+        parts.append(f"{_HEADER}{slug}\n\n{body}\n")
     path = out / COMBINED_NAME
     path.write_text("\n".join(parts))
     return path
