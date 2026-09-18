@@ -119,6 +119,85 @@ def decode(
     return "".join(text), captured
 
 
+#: The one-file editing form. Ten files is ten context switches on a task that
+#: is already forty minutes of reading; a single document is one.
+COMBINED_NAME = "EDIT-ME.md"
+_HEADER = "## "
+_COMBINED_PREAMBLE = """\
+# Punctuation corpus — correct this file, then run the measurement
+
+**Correct punctuation and case ONLY.**
+
+* Add the sentence marks that belong. This is the whole point: the decoder
+  emits almost none, which is why every take reads as one long run-on.
+* Fix stray capitals — Whisper capitalises the first word of every segment it
+  emits, and those are not sentence starts.
+* Commas are welcome but are **not** what this measures.
+
+**Do not fix misheard words.** A wrong word is the decoder's problem and is not
+what this measures; changing one makes the alignment treat it as an edit and
+tells us nothing about pauses. If a sentence is gibberish, punctuate the
+gibberish.
+
+Leave the `## ` headings exactly as they are — they are how this file is split
+back into per-take transcripts.
+
+When you are done:
+
+    python scripts/punctuation_corpus_split.py
+    python scripts/measure_pause_punctuation.py
+
+"""
+
+
+def write_combined(out: Path, slugs: list[str]) -> Path:
+    """One document, from the per-take transcripts."""
+    parts = [_COMBINED_PREAMBLE]
+    for slug in slugs:
+        parts.append(f"{_HEADER}{slug}\n\n{(out / f'{slug}.txt').read_text().strip()}\n")
+    path = out / COMBINED_NAME
+    path.write_text("\n".join(parts))
+    return path
+
+
+def split_combined(out: Path) -> list[str]:
+    """The per-take transcripts, back from the one document.
+
+    Refuses rather than guesses when a heading is missing or unknown: a split
+    that silently dropped a take would produce a corpus short by ~190 words and
+    a precision figure computed over nine tenths of it.
+    """
+    path = out / COMBINED_NAME
+    if not path.exists():
+        raise SystemExit(f"no {path} — run with --combine first")
+
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in path.read_text().splitlines():
+        if line.startswith(_HEADER):
+            current = line[len(_HEADER) :].strip()
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+
+    expected = {p.stem for p in out.glob("L*.txt")}
+    unknown = set(sections) - expected
+    missing = expected - set(sections)
+    if unknown:
+        raise SystemExit(f"unknown heading(s) in {COMBINED_NAME}: {sorted(unknown)}")
+    if missing:
+        raise SystemExit(f"{COMBINED_NAME} is missing: {sorted(missing)}")
+
+    written: list[str] = []
+    for slug, lines in sections.items():
+        text = "\n".join(lines).strip()
+        if not text:
+            raise SystemExit(f"{slug} is empty in {COMBINED_NAME}")
+        (out / f"{slug}.txt").write_text(text + "\n")
+        written.append(slug)
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -126,6 +205,16 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_CORPUS,
         help="directory holding the L*.wav takes (default: this checkout's)",
+    )
+    parser.add_argument(
+        "--combine",
+        action="store_true",
+        help=f"write {COMBINED_NAME} from the per-take transcripts and stop",
+    )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        help=f"write the per-take transcripts back from {COMBINED_NAME} and stop",
     )
     parser.add_argument(
         "--force",
@@ -136,6 +225,18 @@ def main(argv: list[str] | None = None) -> int:
 
     corpus = args.corpus.expanduser().resolve()
     out = corpus / "corpus"
+
+    if args.split:
+        written = split_combined(out)
+        print(f"wrote {len(written)} transcripts back to {out}")
+        return 0
+    if args.combine:
+        slugs = sorted(p.stem for p in out.glob("L*.txt"))
+        if not slugs:
+            raise SystemExit(f"no transcripts in {out} — run without --combine first")
+        print(f"edit: {write_combined(out, slugs)}")
+        return 0
+
     takes = sorted(corpus.glob("L*.wav"))
     if not takes:
         raise SystemExit(f"no L*.wav in {corpus}")
@@ -209,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
 
     (out / "decode.json").write_text(json.dumps(record, indent=1))
 
+    print(f"edit: {write_combined(out, [w.stem for w in takes])}")
     print(f"\nWrote {len(takes)} transcripts to {out}")
     print("\nCorrect PUNCTUATION AND CASE ONLY. Do not fix misheard words —")
     print("a wrong word is the decoder's problem and is not what this measures.")
