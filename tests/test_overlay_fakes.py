@@ -315,6 +315,7 @@ def install(fake: Any) -> None:
         CAShapeLayer = _FakeShapeLayer
         kCALineCapRound = "round"
         kCALineJoinRound = "round"
+        kCALineJoinMiter = "miter"
 
         @staticmethod
         def CGColorCreateGenericGray(_gray: float, _alpha: float) -> str:
