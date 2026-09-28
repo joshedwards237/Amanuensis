@@ -887,6 +887,7 @@ def _daemon(config: AppConfig) -> int:
     from amanuensis.ipc.macos import AlreadyRunningError
     from amanuensis.storage.history import HistoryStore
     from amanuensis.ui.overlay import RecordingOverlay
+    from amanuensis.ui.tray import HistoryEntry as TrayHistoryEntry
     from amanuensis.ui.tray import TrayApp
 
     try:
@@ -1090,6 +1091,7 @@ def _daemon(config: AppConfig) -> int:
             # will not start. Reported from use 2026-09-17.
             listener_box["current"].clear_latch()
         if state is DictationState.IDLE:
+            _refresh_history()
             # Devices come and go while the daemon runs — a headset connected
             # after start-up is in no menu built at start-up. Idle is the one
             # moment with no deadline attached, and `_device_refresh` is only
@@ -1369,11 +1371,61 @@ def _daemon(config: AppConfig) -> int:
 
     tray.set_on_hotkey(_change_hotkey)
     tray.set_on_mode(_change_mode)
+    def _refresh_history() -> None:
+        """Re-read recent transcripts for the menu. Silent on failure.
+
+        Same reasoning as `_refresh_devices`, and the same one place a silent
+        failure is right: an unreadable history is not a state the user is in,
+        and reporting it through `tray.set_error` would overwrite whatever did
+        fail with a message about a menu.
+
+        Not on the G1 path — start-up and return-to-idle only, never between
+        the hotkey and the first character.
+        """
+        if config.history.menu_items <= 0:
+            return
+        try:
+            entries = tuple(
+                TrayHistoryEntry(
+                    id=row.id, started_at=row.started_at, preview=row.transcript
+                )
+                for row in history.recent(limit=config.history.menu_items)
+            )
+        except Exception:
+            return
+        tray.set_history(entries, retaining=config.history.retain)
+
+    def _copy_transcript(transcript_id: str) -> None:
+        """Put a stored transcript back on the clipboard.
+
+        **Copy rather than inject**, decided 2026-09-28. Re-injecting would
+        type into whatever holds focus when the menu closes, which is not
+        necessarily where the user wants it and is not knowable from here. The
+        clipboard lets them choose the destination and the moment.
+
+        The cost is §7.3's, unchanged and already theirs: this clobbers the
+        clipboard, and a clipboard manager will retain a copy.
+
+        The id travels through the menu; the words are read here. §6.2 keeps
+        the tray a status surface and out of the store.
+        """
+        for row in history.recent(limit=config.history.menu_items):
+            if row.id == transcript_id:
+                injector.set_clipboard(row.transcript)
+                tray.set_error(None)
+                print(f"copied {len(row.transcript.split())} words to the clipboard")
+                return
+        # Swept between the menu being built and the click landing. Says so
+        # rather than failing silently on a row the user can still see.
+        tray.set_error("that transcript is no longer stored")
+
+    tray.set_on_history(_copy_transcript)
     tray.set_on_device(_change_device)
     device_refresh_box["refresh"] = _refresh_devices
     tray.set_hotkey_options(available_bindings(), config.hotkey.binding)
     tray.set_mode_options(available_modes(), config.hotkey.mode)
     _refresh_devices()
+    _refresh_history()
     tray.set_on_quit(tray.stop)
     signal.signal(signal.SIGINT, lambda *_: tray.stop())
     signal.signal(signal.SIGTERM, lambda *_: tray.stop())

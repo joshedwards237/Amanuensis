@@ -57,6 +57,24 @@ class TextInjector(ABC):
         write an empty body to satisfy a contract it has no stake in.
         """
 
+    def set_clipboard(self, text: str) -> bool:
+        """Put `text` on the clipboard without typing it. Returns success.
+
+        Added 2026-09-28 for §5.5's history menu, where the user is recovering
+        a transcript rather than dictating one and chooses the destination
+        themselves.
+
+        **Not `inject`.** Injection types into whatever holds focus, which for
+        a recovery is whatever happened to be frontmost when a menu closed —
+        knowable to the user and not to this process.
+
+        Concrete and a default `False`, on the same reasoning as
+        `request_permissions`: an injector with no clipboard has nothing to
+        offer here, and making every implementation write a stub to say so is
+        how the method stops being read.
+        """
+        return False
+
     def focus_identity(self) -> str | None:
         """Who would receive text right now? `None` when it cannot be told.
 

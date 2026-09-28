@@ -625,6 +625,11 @@ sounds = false              # audio cue on start and stop. OFF, and quarantined
                             # the one recording signal available without sight.
 
 [history]
+menu_items = 10             # added 2026-09-28. How many recent transcripts the
+                            # tray offers. 0 removes the row entirely, which is
+                            # the switch for its disclosure cost: the menu shows
+                            # the opening words of each one to anybody who opens
+                            # it on an unlocked machine.
 retain = true               # false: the transcript is still written before
                             # injection (§8, unconditional) and deleted once
                             # injection succeeds. Renamed from `enabled`
@@ -713,6 +718,32 @@ is ambiguous about recording state is a privacy problem regardless of where the 
   wrong, and §5.4's purpose is served by it regardless of what Amanuensis
   draws. That is a reason to build the richer affordance for *confidence*
   rather than for *correctness*.
+- **History is reachable without a terminal** (added 2026-09-28, operator
+  request). The tray carries a `History` submenu of the most recent
+  transcripts; clicking one puts it on the clipboard.
+
+  **Recorded because the request was based on a false premise and the premise
+  is the interesting part.** The report was "if my cursor is not on a text box
+  the transcribed text is lost, there is no way to recover it". The text was
+  never lost — §8's *persist before injecting* is a hard constraint, it holds,
+  and `manu history --last` had every one of them. What did not exist was a
+  route to them that a person using a dictation tool would ever take. A
+  guarantee the user cannot see is one they do not have.
+
+  **Copy, not re-inject.** Injection types into whatever holds focus, which for
+  a recovery is whatever happened to be frontmost when a menu closed — knowable
+  to the user and not to the process. The clipboard lets them choose the
+  destination and the moment.
+
+  The cost is §7.3's and it is **unmitigated here**: this clobbers the
+  clipboard and does not restore it, because in this direction the clipboard is
+  the destination rather than a transport, and restoring it would take back the
+  thing the user clicked for. A clipboard manager will keep a copy.
+
+  A second cost, new: **the menu previews the opening words of recent
+  dictations to anyone who opens it on an unlocked machine.** Bounded by a
+  44-character preview and by `[history] menu_items`, which is `0` to remove
+  the row entirely.
 - **The affordance is persistent, and recording is a transition rather than an
   appearance** (added 2026-09-17, operator request). The panel is drawn
   whenever the daemon runs: a narrow pill carrying a single static dot while

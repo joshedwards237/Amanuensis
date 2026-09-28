@@ -21,7 +21,13 @@ import pytest
 from amanuensis.controllers.dictation_controller import DictationState
 from amanuensis.models.results import ClipboardExposure
 from amanuensis.ui import indicator as indicator_module
-from amanuensis.ui.tray import TrayApp
+from amanuensis.ui.tray import (
+    HISTORY_ACTION_PREFIX,
+    HISTORY_PREVIEW_CHARS,
+    HistoryEntry,
+    MenuItem,
+    TrayApp,
+)
 from test_indicator import _FakeAppKit, _FakeFoundation, _FakeMainQueue
 
 # ---------------------------------------------------------------------------
@@ -715,3 +721,145 @@ def test_an_unoffered_device_is_not_handed_to_the_daemon() -> None:
     tray.set_device_options(("BoomAudio",), "default")
     tray.activate("device:Some Other Microphone")
     assert devices == []
+
+
+# ---------------------------------------------------------------------------
+# History in the menu (§5.5, 2026-09-28)
+# ---------------------------------------------------------------------------
+
+
+def _entries(*texts: str) -> tuple[HistoryEntry, ...]:
+    return tuple(
+        HistoryEntry(id=f"id{n}", started_at=f"2026-09-28T2{n}:00:00+00:00", preview=t)
+        for n, t in enumerate(texts)
+    )
+
+
+def _row(app: TrayApp, title_prefix: str) -> MenuItem | None:
+    return next(
+        (i for i in app.menu_items() if i.title.startswith(title_prefix)), None
+    )
+
+
+def test_history_is_offered_when_there_is_any() -> None:
+    """§5.5 specified the store and no surface for it.
+
+    The transcript was never lost — `persist before injecting` is a hard
+    constraint and it holds — but the only way to reach one was `manu history`
+    in a terminal, which is not a route a user of a dictation tool has open.
+    """
+    app = TrayApp()
+    app.set_history(_entries("first words of one", "and of another"))
+
+    row = _row(app, "History")
+
+    assert row is not None
+    assert row.enabled
+    assert len(row.submenu) == 2
+
+
+def test_a_history_row_carries_the_id_and_not_the_transcript() -> None:
+    """The action is an id. The tray never holds the words.
+
+    §6.2 makes this a status surface, and a menu that carried full transcripts
+    would make the tray a second copy of the store — one with no retention
+    sweep, no `0600`, and a lifetime nobody manages. The preview in the label
+    is the deliberate exception and is bounded.
+    """
+    secret = "and this is the part nobody should read from a menu bar"
+    app = TrayApp()
+    app.set_history(_entries("the quick brown fox jumps over the lazy dog " + secret))
+
+    item = _row(app, "History").submenu[0]
+
+    assert item.action == f"{HISTORY_ACTION_PREFIX}id0"
+    # Long enough to be truncated, which is the only case where "the whole
+    # transcript is not in the menu" is a claim at all — a short one appears in
+    # full by design, and asserting against that would be asserting the
+    # preview does not work.
+    assert secret not in item.title, "the full transcript reached the menu"
+
+
+def test_a_long_transcript_is_truncated_in_the_label() -> None:
+    """A menu row is not a text view.
+
+    macOS will render a 200-word title as a menu item the width of the screen,
+    which is both unreadable and a disclosure surface — see the privacy note on
+    `set_history`.
+    """
+    app = TrayApp()
+    app.set_history(_entries("word " * 200))
+
+    title = _row(app, "History").submenu[0].title
+
+    assert len(title) <= HISTORY_PREVIEW_CHARS + 32, title
+
+
+def test_no_history_row_when_the_store_is_empty() -> None:
+    """An empty submenu reads as a broken feature.
+
+    A user who opens `History ›` and finds nothing cannot tell "you have not
+    dictated yet" from "this is not working". Absent is honest; empty is not.
+    """
+    app = TrayApp()
+    app.set_history(())
+
+    assert _row(app, "History") is None
+
+
+def test_history_says_so_when_retention_is_off() -> None:
+    """`[history] retain = false` is a configured choice, not a fault.
+
+    With it off there is nothing to list, and a missing row would look
+    identical to a store that happens to be empty. The row is drawn, disabled,
+    and says which of the two it is — the same argument `_device_row` makes for
+    a pinned device that is not connected.
+    """
+    app = TrayApp()
+    app.set_history((), retaining=False)
+
+    row = _row(app, "History")
+
+    assert row is not None
+    assert not row.enabled
+    assert "off" in row.title.lower() or "not" in row.title.lower()
+
+
+def test_history_is_newest_first() -> None:
+    """The one the user just lost is the one they want, and it is at the top."""
+    app = TrayApp()
+    app.set_history(_entries("oldest", "middle", "newest"))
+
+    titles = [i.title for i in _row(app, "History").submenu]
+
+    assert "oldest" in titles[0]
+    assert "newest" in titles[-1]
+
+
+def test_clicking_a_history_row_hands_back_its_id() -> None:
+    """The id, not the text, and only an id this menu offered.
+
+    The action string arrives from AppKit and the tray is the only thing that
+    knows which rows exist, so an id it never drew is not a transcript to send
+    anybody looking for.
+    """
+    seen: list[str] = []
+    app = TrayApp()
+    app.set_on_history(seen.append)
+    app.set_history(_entries("recover me"))
+
+    app.activate(f"{HISTORY_ACTION_PREFIX}id0")
+
+    assert seen == ["id0"]
+
+
+def test_an_unoffered_history_id_is_ignored() -> None:
+    """A swept transcript, or an action from a menu that no longer exists."""
+    seen: list[str] = []
+    app = TrayApp()
+    app.set_on_history(seen.append)
+    app.set_history(_entries("recover me"))
+
+    app.activate(f"{HISTORY_ACTION_PREFIX}some-other-id")
+
+    assert seen == []

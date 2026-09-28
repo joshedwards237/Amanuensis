@@ -341,6 +341,32 @@ no figure in this project describes how much worse. A microphone that is pinned
 and then unplugged shows as `⚠ not connected` in the menu, and the next dictation
 fails naming the devices you do have.
 
+### Getting a transcript back
+
+Every dictation is written to `history.db` **before** it is typed anywhere —
+that is a hard guarantee, so a dictation that landed in the wrong window, or in
+no window at all, is not lost.
+
+The menu-bar icon has a **History** submenu with your recent transcripts.
+Click one and it goes on the clipboard; paste it where you meant it to go.
+
+From a terminal, the same thing plus more:
+
+```sh
+manu history --last        # the most recent, in full
+manu history --limit 20    # a list
+manu history --pending     # any written before a failed injection
+```
+
+Two known costs, neither hidden:
+
+- Clicking a history row **replaces your clipboard and does not restore it**.
+  In this direction the clipboard is where you asked the text to go, so putting
+  it back would undo what you clicked for. A clipboard manager will keep a copy.
+- The menu shows the **opening words** of each recent dictation to anyone who
+  opens it on an unlocked machine. Set `[history] menu_items = 0` to remove the
+  row; `manu history` still works.
+
 ### The Desktop launcher
 
 Step 3 wrote **`~/Desktop/Start Amanuensis.command`**. Double-click it and the

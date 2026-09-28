@@ -316,6 +316,26 @@ class MacOSInjector(TextInjector):
 
     # -- strategies --------------------------------------------------------
 
+    def set_clipboard(self, text: str) -> bool:
+        """The clipboard half of `_paste`, with none of the typing.
+
+        No restore, deliberately, and this is the difference that matters. In
+        `_paste` the clipboard is a transport and putting it back is the whole
+        of §7.3's mitigation; here the clipboard is the **destination** — the
+        user asked for the text to be there and is about to paste it. Restoring
+        it would take back the thing they clicked for.
+
+        So §7.3's documented cost applies in full and unmitigated: this
+        clobbers the clipboard, and a clipboard manager will keep a copy. The
+        menu row is switchable off for exactly that reason.
+        """
+        appkit = _appkit()
+        pasteboard = appkit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        return bool(
+            pasteboard.setString_forType_(text, appkit.NSPasteboardTypeString)
+        )
+
     def _paste(self, text: str) -> float:
         """Paste `text`, then put the clipboard back. Returns the restore cost.
 
