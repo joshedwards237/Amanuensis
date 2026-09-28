@@ -904,6 +904,16 @@ sequencing: they change the panel lane 2 scored, and lane 6 has not run.
   which is why it is here and S3–S5 are not: lane 2 scored the overlay, and this
   adds a menu row. Lane 6's install walk-through now has one more menu to
   explain, which is a question for the second person rather than a defect.
+- **The history submenu** (2026-09-28, §5.5). Same argument, same precedent: it
+  is a menu row and does not touch the panel lane 2 scored, so it lands ahead of
+  lane 6 rather than behind it. Lane 6 now has two extra menus to explain.
+
+  Worth carrying into that lane specifically: the request that produced it was
+  *"the transcribed text is lost, there is no way to recover it"*, and it was
+  **false** — §8's persist-before-injecting held, and `manu history` had every
+  transcript. A guarantee whose only surface is a terminal command is one the
+  user does not have. Lane 6's subject is the right person to ask whether they
+  would ever have found it.
 
 **One defect S2 surfaced and closed:** `_latch_enabled` gated the latch on an
 `on_cancel` callback, so any caller passing none silently got **no latch**. That

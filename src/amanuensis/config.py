@@ -350,6 +350,16 @@ class HistoryConfig:
     #: unconditionally; `retain = false` means the transcript never enters
     #: history.db at all and is unlinked once injection succeeds (§5.5).
     retain: bool = True
+    #: How many recent transcripts the tray offers (§5.5, added 2026-09-28).
+    #: **0 removes the menu row entirely**, which is the switch for the cost
+    #: below rather than a way to have a zero-length list.
+    #:
+    #: The row is a disclosure surface: anyone who opens the menu on an
+    #: unlocked machine reads the opening words of the last several dictations.
+    #: That is bounded by `HISTORY_PREVIEW_CHARS` and by this number, and it is
+    #: the reason this is a key rather than a constant — §7.3's rule is that a
+    #: known cost is documented and switchable, not hidden.
+    menu_items: int = 10
     retain_days: int = 30
     #: Audio is the sensitive artefact. Off by default.
     store_audio: bool = False
@@ -534,6 +544,7 @@ _SCHEMA: Final[dict[str, dict[str, _Rule]]] = {
         "sounds": _Rule((bool,)),
     },
     "history": {
+        "menu_items": _Rule((int,), _non_negative),
         "retain": _Rule((bool,)),
         "retain_days": _Rule((int,), _non_negative),
         "store_audio": _Rule((bool,)),

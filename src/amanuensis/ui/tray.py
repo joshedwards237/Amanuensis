@@ -45,6 +45,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
 from amanuensis.controllers.dictation_controller import DictationState
@@ -53,8 +54,11 @@ from amanuensis.ui.indicator import _TOOLTIPS, GLYPHS, RecordingIndicator
 
 __all__ = [
     "DEVICE_ACTION_PREFIX",
+    "HISTORY_ACTION_PREFIX",
+    "HISTORY_PREVIEW_CHARS",
     "HOTKEY_ACTION_PREFIX",
     "MODE_ACTION_PREFIX",
+    "HistoryEntry",
     "MenuItem",
     "TrayApp",
 ]
@@ -64,6 +68,21 @@ __all__ = [
 #: unusable menu. Dropping it instead would hide the failure, so the only
 #: answer that does neither is truncation, at a width a menu can carry.
 _MAX_ERROR_CHARS: Final = 160
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryEntry:
+    """One transcript, as much of it as the menu is allowed to know.
+
+    Deliberately not a `StoredTranscript`. §6.2 makes the tray a status
+    surface, and handing it the real record would make it a second copy of the
+    store — one with no retention sweep, no `0600` on disk, and a lifetime
+    nobody manages. It gets an id to hand back and a preview to draw.
+    """
+
+    id: str
+    started_at: str
+    preview: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +167,19 @@ def _mode_label(name: str) -> str:
 #: Prefix distinguishing a microphone row. Same scheme as the other two.
 DEVICE_ACTION_PREFIX: Final = "device:"
 
+#: Prefix for a history row. What follows is the transcript's **id**, never its
+#: text — see `set_history`.
+HISTORY_ACTION_PREFIX: Final = "history:"
+
+#: How much of a transcript a menu row shows.
+#:
+#: A menu row is not a text view: macOS renders a 200-word title as an item the
+#: width of the screen. It is also the one place this surface discloses
+#: anything — anyone who opens the menu on an unlocked machine reads the
+#: opening words of the last several dictations. Bounded here, and switchable
+#: off entirely with `[history] menu_items = 0`.
+HISTORY_PREVIEW_CHARS: Final = 44
+
 #: §5.3's spelling for "follow Sound preferences". A menu saying `default`
 #: leaves the user guessing what it defaults to.
 DEFAULT_DEVICE: Final = "default"
@@ -170,6 +202,36 @@ def _binding_label(name: str) -> str:
 
     pretty = _pretty_binding(name)
     return f"{pretty}  ⚠ used in shortcuts" if name in COLLIDING_BINDINGS else pretty
+
+
+def _history_time(started_at: str) -> str:
+    """`HH:MM` in local time, or the raw value if it will not parse.
+
+    Local, because the user is placing a dictation in their own day and the
+    store writes UTC. Falls back rather than raising: `started_at` is read from
+    a database row that may predate whatever format is current, and a menu that
+    refuses to draw is worse than one showing an ugly timestamp.
+    """
+    try:
+        moment = datetime.fromisoformat(started_at)
+    except ValueError:
+        return _one_line(started_at)[:16]
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()
+    return moment.strftime("%H:%M")
+
+
+def _preview(text: str) -> str:
+    """The opening of a transcript, bounded and flattened.
+
+    Through `_one_line` first: a transcript is the user's own words, but it
+    reaches here from a database and the same control-character reasoning that
+    applies to an exception message applies to any string a menu renders.
+    """
+    flat = _one_line(text)
+    if len(flat) <= HISTORY_PREVIEW_CHARS:
+        return flat
+    return flat[:HISTORY_PREVIEW_CHARS].rstrip() + "\u2026"
 
 
 def _one_line(text: str) -> str:
@@ -214,7 +276,13 @@ class TrayApp:
         self._modes: tuple[str, ...] = ()
         self._mode_current = ""
         self._on_device = on_device
+        self._on_history: Callable[[str], None] | None = None
         self._devices: tuple[str, ...] = ()
+        #: Recent transcripts, newest first, and whether the store is keeping
+        #: any. The two are separate because "nothing yet" and "retention is
+        #: off" are different things to tell somebody.
+        self._history: tuple[HistoryEntry, ...] = ()
+        self._retaining = True
         self._device_current = ""
         self._state = DictationState.IDLE
         self._error: str | None = None
@@ -263,6 +331,26 @@ class TrayApp:
         # having been routed somewhere nobody looks. The words stay in the menu;
         # the *mark* goes in the title.
         self._indicator.set_fault(self._error is not None)
+        self._refresh()
+
+    def set_history(
+        self, entries: Sequence[HistoryEntry], *, retaining: bool = True
+    ) -> None:
+        """Offer recent transcripts. §5.5's store, given a surface.
+
+        **The transcript was never lost.** "Persist before injecting" is a hard
+        constraint and it holds — every dictation reaches `history.db` before
+        the injector is called. What did not exist was a way to reach one
+        without `manu history` in a terminal, which is not a route open to
+        somebody using a dictation tool.
+
+        `retaining` is `[history] retain`. With it off there is nothing to list
+        and a *missing* row would look identical to a store that is merely
+        empty, so the row is drawn and says which it is — the same argument
+        `_device_row` makes for a pinned device that is not connected.
+        """
+        self._history = tuple(entries)
+        self._retaining = retaining
         self._refresh()
 
     def set_hotkey_options(
@@ -319,6 +407,9 @@ class TrayApp:
 
     def set_on_device(self, on_device: Callable[[str], None]) -> None:
         self._on_device = on_device
+
+    def set_on_history(self, on_history: Callable[[str], None]) -> None:
+        self._on_history = on_history
 
     def set_clipboard_exposure(self, exposure: ClipboardExposure | None) -> None:
         """§5.4 and §7.3 both assign this row to Phase 4.
@@ -389,8 +480,37 @@ class TrayApp:
         if self._devices or self._device_current:
             items.append(self._device_row())
 
+        history = self._history_row()
+        if history is not None:
+            items.append(history)
+
         items.append(MenuItem("Quit Amanuensis", action="quit", enabled=True))
         return tuple(items)
+
+    def _history_row(self) -> MenuItem | None:
+        """`History ›`, or a disabled line, or nothing at all.
+
+        Nothing when there is simply no history yet: a user who opens an empty
+        submenu cannot tell "you have not dictated" from "this is broken", and
+        absent is honest where empty is not.
+        """
+        if not self._retaining:
+            return MenuItem("History is off — [history] retain = false")
+        if not self._history:
+            return None
+        return MenuItem(
+            "History",
+            enabled=True,
+            submenu=tuple(
+                MenuItem(
+                    f"{_history_time(entry.started_at)}  "
+                    f"{_preview(entry.preview)}",
+                    action=f"{HISTORY_ACTION_PREFIX}{entry.id}",
+                    enabled=True,
+                )
+                for entry in self._history
+            ),
+        )
 
     def _device_row(self) -> MenuItem:
         """`Device: …` and its submenu.
@@ -467,6 +587,16 @@ class TrayApp:
             known = (DEFAULT_DEVICE, *self._devices, self._device_current)
             if self._on_device is not None and name in known:
                 self._on_device(name)
+            return
+        if action and action.startswith(HISTORY_ACTION_PREFIX):
+            transcript_id = action[len(HISTORY_ACTION_PREFIX) :]
+            # Checked against the ids this menu actually drew. The action
+            # string arrives from AppKit and the tray is the only thing that
+            # knows which rows exist, so an id it never offered is not a
+            # transcript to go looking for.
+            offered = {entry.id for entry in self._history}
+            if self._on_history is not None and transcript_id in offered:
+                self._on_history(transcript_id)
             return
         if action and action.startswith(HOTKEY_ACTION_PREFIX):
             name = action[len(HOTKEY_ACTION_PREFIX) :]
