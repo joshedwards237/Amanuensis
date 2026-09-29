@@ -2,6 +2,11 @@
 
 A one-line wrapper, and it exists because the alternative is telling somebody
 who has just spent forty minutes reading their own words to remember a flag.
+
+`--words` splits the verbatim pass instead, into `*.verbatim.txt`. Separate
+files on purpose: the punctuation corpus is what two gate documents were
+measured on, and overwriting it would destroy the evidence they rest on while
+leaving both still quoting numbers.
 """
 
 from __future__ import annotations

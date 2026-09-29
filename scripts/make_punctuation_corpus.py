@@ -150,6 +150,64 @@ When you are done:
 """
 
 
+#: The verbatim pass. Separate files, and that is the point: the punctuation
+#: corpus is what `phase5-pause-hypothesis.md` and `phase5-punctuation-model.md`
+#: were measured on, and overwriting it would destroy the evidence those two
+#: documents rest on while leaving both still quoting numbers.
+VERBATIM_NAME = "EDIT-ME-WORDS.md"
+VERBATIM_SUFFIX = ".verbatim.txt"
+_VERBATIM_PREAMBLE = """\
+# Verbatim corpus — fix the WORDS this time
+
+You already corrected punctuation and case in these takes. This pass is the
+other half, and it exists because the first one deliberately left it out.
+
+**Fix misheard words. Leave the punctuation you already set.**
+
+`M&UCIS` -> `Amanuensis`. `co-harbour` -> whatever you actually said. A name the
+decoder mangled, a technical term it guessed at, a word it simply got wrong.
+
+If you cannot remember what you said, the audio is beside these files:
+
+    afplay tests/fixtures/phase3/L01-project-walkthrough.wav
+
+**Why this is a second pass and not a redo.** The first instruction was
+"punctuation and case only, do not fix misheard words". That was correct for the
+question it served — the pause hypothesis needed a reference independent of the
+decoder's word choices — and it is exactly what makes that corpus unable to
+compare engines. A reference holding `tiny.en`'s mistakes charges an edit to any
+engine that hears correctly: `small.en` took 65 of them, and the alignment
+degraded far enough that the segmentation column stopped meaning anything.
+
+What this pass produces is a **true transcript**: your words, your punctuation.
+That is the thing an engine comparison needs, and it is what the Phase 3 gate
+had and this corpus did not.
+
+Leave the `## ` headings alone — they are how this file is split back.
+
+When you are done:
+
+    python scripts/punctuation_corpus_split.py --words
+
+"""
+
+
+def write_verbatim(out: Path, slugs: list[str]) -> Path:
+    """One document seeded from the punctuation-corrected transcripts.
+
+    Seeded from the corrected text rather than from the decoder's, so the work
+    already done is carried forward instead of asked for twice.
+    """
+    parts = [_VERBATIM_PREAMBLE]
+    for slug in slugs:
+        existing = out / f"{slug}{VERBATIM_SUFFIX}"
+        source = existing if existing.exists() else out / f"{slug}.txt"
+        parts.append(f"{_HEADER}{slug}\n\n{source.read_text().strip()}\n")
+    path = out / VERBATIM_NAME
+    path.write_text("\n".join(parts))
+    return path
+
+
 def write_combined(out: Path, slugs: list[str]) -> Path:
     """One document, from the per-take transcripts."""
     parts = [_COMBINED_PREAMBLE]
@@ -161,16 +219,18 @@ def write_combined(out: Path, slugs: list[str]) -> Path:
     return path
 
 
-def split_combined(out: Path) -> list[str]:
+def split_combined(out: Path, *, verbatim: bool = False) -> list[str]:
     """The per-take transcripts, back from the one document.
 
     Refuses rather than guesses when a heading is missing or unknown: a split
     that silently dropped a take would produce a corpus short by ~190 words and
     a precision figure computed over nine tenths of it.
     """
-    path = out / COMBINED_NAME
+    name = VERBATIM_NAME if verbatim else COMBINED_NAME
+    suffix = VERBATIM_SUFFIX if verbatim else ".txt"
+    path = out / name
     if not path.exists():
-        raise SystemExit(f"no {path} — run with --combine first")
+        raise SystemExit(f"no {path} — run with --combine-words first")
 
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -185,16 +245,16 @@ def split_combined(out: Path) -> list[str]:
     unknown = set(sections) - expected
     missing = expected - set(sections)
     if unknown:
-        raise SystemExit(f"unknown heading(s) in {COMBINED_NAME}: {sorted(unknown)}")
+        raise SystemExit(f"unknown heading(s) in {name}: {sorted(unknown)}")
     if missing:
-        raise SystemExit(f"{COMBINED_NAME} is missing: {sorted(missing)}")
+        raise SystemExit(f"{name} is missing: {sorted(missing)}")
 
     written: list[str] = []
     for slug, lines in sections.items():
         text = "\n".join(lines).strip()
         if not text:
-            raise SystemExit(f"{slug} is empty in {COMBINED_NAME}")
-        (out / f"{slug}.txt").write_text(text + "\n")
+            raise SystemExit(f"{slug} is empty in {name}")
+        (out / f"{slug}{suffix}").write_text(text + "\n")
         written.append(slug)
     return written
 
@@ -213,6 +273,16 @@ def main(argv: list[str] | None = None) -> int:
         help=f"write {COMBINED_NAME} from the per-take transcripts and stop",
     )
     parser.add_argument(
+        "--combine-words",
+        action="store_true",
+        help=f"write {VERBATIM_NAME} for the misheard-word pass and stop",
+    )
+    parser.add_argument(
+        "--words",
+        action="store_true",
+        help=f"with --split, read {VERBATIM_NAME} and write *{VERBATIM_SUFFIX}",
+    )
+    parser.add_argument(
         "--split",
         action="store_true",
         help=f"write the per-take transcripts back from {COMBINED_NAME} and stop",
@@ -228,8 +298,14 @@ def main(argv: list[str] | None = None) -> int:
     out = corpus / "corpus"
 
     if args.split:
-        written = split_combined(out)
+        written = split_combined(out, verbatim=args.words)
         print(f"wrote {len(written)} transcripts back to {out}")
+        return 0
+    if args.combine_words:
+        slugs = sorted(p.stem for p in out.glob("L*.txt"))
+        if not slugs:
+            raise SystemExit(f"no transcripts in {out}")
+        print(f"edit: {write_verbatim(out, slugs)}")
         return 0
     if args.combine:
         slugs = sorted(p.stem for p in out.glob("L*.txt"))
