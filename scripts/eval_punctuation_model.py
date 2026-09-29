@@ -120,7 +120,7 @@ class Punctuator:
 
         rendered: list[str] = []
         cursor = 0
-        for word, run in zip(words, runs):
+        for word, run in zip(words, runs, strict=True):
             token = word.upper() if self._is_acronym(post, cursor, run) else word
             if cap[cursor] and not token.isupper():
                 token = token.capitalize()
@@ -195,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         after = [bare(w) for w in model_only.split() if bare(w)]
         if before != after:
             first = next(
-                (i for i, (a, b) in enumerate(zip(before, after)) if a != b),
+                (i for i, (a, b) in enumerate(zip(before, after, strict=False)) if a != b),
                 min(len(before), len(after)),
             )
             violations.append(
