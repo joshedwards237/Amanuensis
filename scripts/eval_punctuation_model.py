@@ -194,8 +194,9 @@ def main(argv: list[str] | None = None) -> int:
         before = [bare(w) for w in take["raw"].split() if bare(w)]
         after = [bare(w) for w in model_only.split() if bare(w)]
         if before != after:
+            pairs = enumerate(zip(before, after, strict=False))
             first = next(
-                (i for i, (a, b) in enumerate(zip(before, after, strict=False)) if a != b),
+                (i for i, (a, b) in pairs if a != b),
                 min(len(before), len(after)),
             )
             violations.append(
