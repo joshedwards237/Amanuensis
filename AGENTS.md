@@ -1,5 +1,11 @@
 # Compound Learning
 
+> **Stale since 2026-09-02, and read [`AI_START_HERE.md`](AI_START_HERE.md)
+> first.** Everything below is still true as far as it goes — none of it has been
+> retracted — but a month of sessions since has not been folded in, and the
+> entry point carries what they learned. Treat this as an archive of solved
+> gotchas rather than as current practice.
+
 <!-- This file is the project's persistent memory across AI sessions.
      It accumulates patterns, gotchas, and decisions so that each session
      builds on what previous sessions learned — rather than rediscovering

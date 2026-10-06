@@ -11,6 +11,11 @@ Two documents govern this project and they do not overlap:
 This file is the short brief an agent reads first. When it disagrees with the
 PRD, the PRD wins.
 
+> **New to this repository? Read [`AI_START_HERE.md`](AI_START_HERE.md) before
+> this file.** It routes the nine root-level documents, carries the verification
+> practice that is not written down anywhere else, and lists what will waste your
+> afternoon. This file is the phase record; that one is the map.
+
 ---
 
 ## Status: **Phase 4i is open; Phase 4's gate cannot run yet** — `docs/gates/phase-4.md`
