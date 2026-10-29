@@ -27,10 +27,12 @@ measuring a panel nobody has lived with for more than a day.
 
 ## 1. What is being asked for
 
-1. **Controls in a latched session.** An **✕** and a **✓** to the right of the
-   waveform. ✕ discards the dictation; ✓ ends it and processes. Tight — no
-   generous padding. Each icon sits on a circle of slightly lighter background.
-   Mirrors Wispr's affordance.
+1. **Controls in every hands-free session.** An **✕** and a **✓** to the right
+   of the waveform. ✕ discards the dictation; ✓ ends it and processes. Tight —
+   no generous padding. Each icon sits on a circle of slightly lighter
+   background. Mirrors Wispr's affordance. Show them immediately when recording
+   starts for latched push-to-talk, `toggle`, and `vad_auto`; plain push-to-talk
+   holds retain release-to-finish without controls.
 2. **No flash when latching.** A double-tap currently makes the panel disappear
    and reappear. It should open as the ordinary push-to-talk panel and then
    *transition* into the latched one.
@@ -87,10 +89,15 @@ TRANSCRIBING varies with input.*
 | injected | fades out ~120 ms | — | — | — |
 | `ERROR` / `RECOVERED` | hidden | — | — | — |
 
-**Controls appear only in a latched session**, because they answer a question
-only a latched session raises. In push-to-talk the hand is already on the key
-and the release *is* the ✓; an ✕ there would be a second way to do what letting
-go already does, on a panel whose whole argument is that it says one thing.
+**Controls appear in every hands-free session: latched push-to-talk, toggle,
+and `vad_auto`.** They appear immediately when recording starts. In plain
+push-to-talk the hand is on the key and release *is* the ✓, so that hold remains
+without controls.
+
+**Operator disposition, 2026-10-29:** Controls and Escape apply to all
+hands-free sessions. The operator saw no controls in `toggle` mode because
+they were wired only to the push-to-talk latch; toggle and `vad_auto` now show
+them at session start.
 
 **Controls are hidden during TRANSCRIBING.** ✓ would be a no-op and ✕ would
 imply the audio is still discardable when §8 has already persisted it.
@@ -285,7 +292,8 @@ have it without editing code.
 
 **Testable without a display**, on the existing fake-AppKit seam:
 
-- Controls appear only when latched *and* recording — the four-way state table.
+- Controls appear for hands-free modes while recording and remain hidden in
+  plain push-to-talk holds and non-recording states.
 - `restart_session` never emits `IDLE`, with a control asserting that
   `abort_session` still does.
 - ✕ and ✓ reach `on_cancel` / `on_finish` and nothing else.
@@ -360,10 +368,11 @@ Order: findings 1 and 3 → lane 6 → this.
 
   What it costs instead, recorded here because it is a real cost and a
   different one: **Escape belongs to this process while registered,
-  system-wide.** Registration is therefore scoped to a latched session — taken
-  when the latch closes, given back the moment the microphone is not open, and
-  again on daemon shutdown. A leaked registration is a dead Escape key for
-  every application on the machine.
+  system-wide.** Registration is therefore scoped to a hands-free session —
+  taken when latched push-to-talk, toggle, or `vad_auto` recording starts, given
+  back the moment the microphone is not open, and again on daemon shutdown. A
+  leaked registration is a dead Escape key for every application on the
+  machine.
 
   **A second finding, and it is the one to remember.** Under a bare
   `NSRunLoop`, `InstallEventHandler` returns 0, `RegisterEventHotKey` returns 0

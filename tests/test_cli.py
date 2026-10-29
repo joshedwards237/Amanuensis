@@ -949,3 +949,71 @@ def test_the_status_line_carries_no_transcript() -> None:
     )
 
     assert "transcript" not in detail.lower()
+
+
+def test_hands_free_mode_includes_toggle_and_vad_auto_only() -> None:
+    from amanuensis.cli import _mode_is_hands_free
+
+    assert _mode_is_hands_free("toggle") is True
+    assert _mode_is_hands_free("vad_auto") is True
+    assert _mode_is_hands_free("push_to_talk") is False
+
+
+def test_show_hands_free_controls_draws_and_registers_escape() -> None:
+    from amanuensis.cli import _show_hands_free_controls
+
+    class Overlay:
+        def __init__(self) -> None:
+            self.controls: list[bool] = []
+
+        def set_controls(self, enabled: bool) -> None:
+            self.controls.append(enabled)
+
+    class Escape:
+        registrations = 0
+
+        def register(self) -> bool:
+            self.registrations += 1
+            return True
+
+    class Tray:
+        def __init__(self) -> None:
+            self.errors: list[str] = []
+
+        def set_error(self, message: str) -> None:
+            self.errors.append(message)
+
+    overlay, escape, tray = Overlay(), Escape(), Tray()
+    _show_hands_free_controls(overlay, escape, tray)
+
+    assert overlay.controls == [True]
+    assert escape.registrations == 1
+    assert tray.errors == []
+
+
+def test_refused_escape_registration_keeps_controls_and_reports_error() -> None:
+    from amanuensis.cli import _show_hands_free_controls
+
+    class Overlay:
+        def __init__(self) -> None:
+            self.controls: list[bool] = []
+
+        def set_controls(self, enabled: bool) -> None:
+            self.controls.append(enabled)
+
+    class Escape:
+        def register(self) -> bool:
+            return False
+
+    class Tray:
+        def __init__(self) -> None:
+            self.errors: list[str] = []
+
+        def set_error(self, message: str) -> None:
+            self.errors.append(message)
+
+    overlay, tray = Overlay(), Tray()
+    _show_hands_free_controls(overlay, Escape(), tray)
+
+    assert overlay.controls == [True]
+    assert tray.errors == ["Escape is unavailable for this dictation"]
