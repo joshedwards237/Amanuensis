@@ -39,13 +39,13 @@ slices:
     disposition: accepted
     disposition_rationale: "Accepted 2026-09-10. S1 built the same day; S2-S6 wait on the spec amendment the objection dispositions require."
   - id: S5
-    title: "✕ and ✓ in a latched session, and the click-through the panel now costs"
-    scope: "The two 16 px controls, `_WIDTH_LATCHED = 114`, the animated width change, `setIgnoresMouseEvents_(False)`, `acceptsFirstMouse`, the `on_cancel`/`on_finish` arguments, `[feedback] overlay_controls`, and the README known-costs entry. Excludes hover, Escape, and ✓ for unlatched holds — all §11 open."
-    decision_focus: "How does the overlay learn it is latched? §3 requires latched-only controls; §5 rejects the overlay knowing; §6.2's constructor carries neither parameter nor setter. The spec asks for both and specifies neither."
+    title: "✕ and ✓ in a hands-free session, and the click-through the panel now costs"
+    scope: "The two 16 px controls, `_WIDTH_LATCHED = 114`, the animated width change, `setIgnoresMouseEvents_(False)`, `acceptsFirstMouse`, the `on_cancel`/`on_finish` arguments, `[feedback] overlay_controls`, and the README known-costs entry. Excludes hover and plain push-to-talk holds."
+    decision_focus: "How does the overlay learn it is latched? §5 rejects the overlay knowing; §6.2's constructor carries neither parameter nor setter. The spec asks for both and specifies neither."
     lens_used: decision-boundary
     sequencing_note: "Hard dependency on S1. S6's criterion must be written before this is built."
     disposition: built
-    disposition_rationale: "Built 2026-09-17. S6's criterion was written 2026-09-10, before any control existed, which was the precondition. The open decision question — how the overlay learns it is latched — was answered `set_controls(bool)` driven from cli.py by the listener's new `on_latch`: the overlay is told what to draw and never learns what a latch is, which is what §5 asked for and §6.2 requires. Two scope changes from the spec. The window is now built at LATCHED_WIDTH and never resized, with all three pill forms centred inside it, because a window sized for the recording form would clip both controls off the ends. And `setIgnoresMouseEvents_(False)` is applied only while the controls are drawn rather than for the life of the panel, which bounds the click-through cost to a latched dictation instead of all day."
+    disposition_rationale: "Built 2026-09-17. S6's criterion was written 2026-09-10, before any control existed, which was the precondition. The open decision question — how the overlay learns it is latched — was answered `set_controls(bool)` driven from cli.py by the listener's new `on_latch`: the overlay is told what to draw and never learns what a latch is, which is what §5 asked for and §6.2 requires. Two scope changes from the spec. The window is now built at LATCHED_WIDTH and never resized, with all three pill forms centred inside it, because a window sized for the recording form would clip both controls off the ends. And `setIgnoresMouseEvents_(False)` is applied only while the controls are drawn rather than for the life of the panel, which bounds the click-through cost to a latched dictation instead of all day. **Amended 2026-10-29:** controls are shown immediately for every hands-free session (latched push-to-talk, toggle, `vad_auto`); the operator saw none in toggle mode because the callback was latch-only."
   - id: S6
     title: "Can the operator hit the ✕ while speaking — criterion written first, then tried"
     scope: "A written reachability criterion authored *before* S5 is built, then a trial. Excludes all code. **The criterion is written: `docs/gates/overlay-controls-reachability.md`, 2026-09-10, before any control exists. The trial waits on S5.**"
@@ -75,11 +75,11 @@ arrivals at the same state — are a separate engagement, and §2's argument run
 long enough that anything folded inside it is cheap to accept by the time the
 reader arrives. S3 and S4.
 
-**The spec has a gap S5 will hit on its first day.** §3 requires controls "only
-in a latched session". §5 rejects, on §6.2 grounds, letting the overlay know
+**The spec had a gap S5 would hit on its first day.** §3 required controls only
+in a latched session. §5 rejected, on §6.2 grounds, letting the overlay know
 about the latch. §6.2's constructor has no latch argument and `_on_state_change`
 carries a `DictationState` which does not encode latching. **Three sections
-written against different answers.** This is decision content, not an error to
+written against different answers.** This was decision content, not an error to
 fix quietly, and it is S5's.
 
 ## Verification notes that travel with the slices

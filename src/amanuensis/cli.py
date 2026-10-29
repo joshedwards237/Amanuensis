@@ -73,6 +73,19 @@ _EXIT_USAGE = 2
 _EXIT_ERROR = 1
 _EXIT_OK = 0
 
+
+def _mode_is_hands_free(mode: str) -> bool:
+    """Whether a hotkey mode leaves the user's hands available while recording."""
+    return mode in ("toggle", "vad_auto")
+
+
+def _show_hands_free_controls(overlay: Any, escape: Any, tray: Any) -> None:
+    """Draw the hands-free affordances and report an unavailable Escape key."""
+    overlay.set_controls(True)
+    if not escape.register():
+        tray.set_error("Escape is unavailable for this dictation")
+
+
 #: Verb -> the phase that makes it do something. Kept in one place so that
 #: `manu daemon` and the tests cannot disagree about what is built.
 #:
@@ -1062,12 +1075,12 @@ def _daemon(config: AppConfig) -> int:
     #: went wrong.
     last_error: dict[str, str | None] = {"message": None}
 
-    # Escape cancels a latched session, and only a latched session. While it is
+    # Escape cancels a hands-free session, and only while one is active. While
     # registered no other application on the machine sees the key — see
-    # `hotkey/escape.py` — so it is taken when the latch closes and given back
-    # the moment the microphone is not open. A hands-free dictation is a window
-    # in which the user is speaking rather than pressing Escape at something
-    # else; the rest of the day it belongs to whatever is frontmost.
+    # `hotkey/escape.py` — so it is taken when hands-free recording starts and
+    # given back the moment the microphone is not open. A hands-free dictation
+    # is a window in which the user is speaking rather than pressing Escape at
+    # something else; the rest of the day it belongs to whatever is frontmost.
     escape = EscapeHotkey(lambda: controller.abort_session())
 
     def _on_state_change(state: DictationState) -> None:
@@ -1186,6 +1199,8 @@ def _daemon(config: AppConfig) -> int:
         # inherits the first one's trailing quiet and ends immediately.
         watcher.reset()
         controller.start_session()
+        if _mode_is_hands_free(hotkey_state["mode"]):
+            _show_hands_free_controls(overlay, escape, tray)
 
     def _fan_out(block: Any) -> None:
         for observer in observers:
@@ -1216,14 +1231,10 @@ def _daemon(config: AppConfig) -> int:
         # (§6.2, slice S5's open question). `cli.py` owns the translation
         # because it is already where the listener's callbacks meet the
         # controller.
-        overlay.set_controls(True)
         # A notification, not an operation: the capture opened on the first
         # press and keeps running (§5.2 as amended). Nothing here touches the
         # session.
-        if not escape.register():
-            # Not fatal and not silent. The ✕ control is the other way out, and
-            # §11 called it the only one for exactly this reason.
-            tray.set_error("Escape is unavailable for this dictation")
+        _show_hands_free_controls(overlay, escape, tray)
 
     try:
         controller.start()
