@@ -262,9 +262,12 @@ class DictationController:
         self._queue: queue.Queue[DictationSession | None] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._state = DictationState.IDLE
-        #: The session currently being captured. Written on the event-tap
-        #: thread only, which is the one thread that starts and ends captures.
+        #: The session currently being captured. Started on the event-tap
+        #: thread, but *ended* from several: the hotkey release, the overlay's
+        #: ✓, a VAD auto-end and `manu toggle` each run on their own thread. So
+        #: the read-and-clear that claims it goes through `_claim_lock`.
         self._recording: dict[str, Any] | None = None
+        self._claim_lock = threading.Lock()
         #: Focused-application identity per queued session. Written on the
         #: event-tap thread and read on the worker's; the two touch different
         #: keys, and a lock held for one assignment would buy nothing and read
@@ -414,16 +417,47 @@ class DictationController:
         rather than a fabricated empty session because a session with no audio
         in it would be indistinguishable from a real dictation of silence.
         """
-        recording = self._recording
+        recording = self._claim_recording()
         if recording is None:
             raise RuntimeError("no session is being recorded; call start_session first")
+        return self._finish_session(recording)
 
-        # Cleared **before** the call that can raise, and the order is the whole
-        # point. `AudioCapture.stop` raises when the stream is gone, which a
-        # device disappearing mid-session will do — a Bluetooth headset
-        # detaching is the ordinary case. Clearing after meant one raise left
-        # `_recording` set for the life of the process, and `start_session`
-        # returns early while it is:
+    def try_end_session(self) -> DictationSession | None:
+        """`end_session` for callers that race other ways of ending a session.
+
+        The overlay's ✓, a VAD auto-end and `manu toggle` all end a session from
+        their own thread, and any of them can arrive after the hotkey release
+        (or each other) already did. Reported 2026-11: a daemon printed
+        `Exception in thread amanuensis-overlay-finish ... RuntimeError: no
+        session is being recorded` after a ✓ landed on a finished session. For
+        those callers "already over" is the outcome they wanted, not an error,
+        so it returns None and touches nothing.
+        """
+        recording = self._claim_recording()
+        if recording is None:
+            return None
+        return self._finish_session(recording)
+
+    def _claim_recording(self) -> dict[str, Any] | None:
+        """Take the open session, exactly once across all threads.
+
+        Read and clear are one step under the lock: without it two enders both
+        pass the `None` check and both call `capture.stop()`. Cleared **before**
+        `capture.stop()` is called — see `_finish_session`. The lock is never
+        held across anything that can block or raise.
+        """
+        with self._claim_lock:
+            recording = self._recording
+            self._recording = None
+        return recording
+
+    def _finish_session(self, recording: dict[str, Any]) -> DictationSession:
+        # `_recording` was cleared by `_claim_recording`, **before** the call that
+        # can raise, and the order is the whole point. `AudioCapture.stop` raises
+        # when the stream is gone, which a device disappearing mid-session will
+        # do — a Bluetooth headset detaching is the ordinary case. Clearing
+        # after meant one raise left `_recording` set for the life of the
+        # process, and `start_session` returns early while it is:
         #
         #     if self._recording is not None:
         #         return
@@ -438,7 +472,6 @@ class DictationController:
         # A session whose capture could not be stopped is over either way. The
         # alternative to raising here is a hotkey that has quietly stopped
         # working, which is strictly worse than an error the caller can report.
-        self._recording = None
         audio = self.capture.stop()
 
         timings_capture_ms = (time.perf_counter() - recording["at"]) * 1000.0
@@ -480,9 +513,8 @@ class DictationController:
         session has no such claim, and §5.5 is explicit that every misfired
         session used to be written to disk before the user had seen it.
         """
-        if self._recording is None:
+        if self._claim_recording() is None:
             return
-        self._recording = None
         try:
             self.capture.stop()
         finally:

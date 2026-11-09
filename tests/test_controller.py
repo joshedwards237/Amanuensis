@@ -262,6 +262,53 @@ def test_a_full_cycle_reaches_the_cursor(controller: DictationController) -> Non
     assert controller.injector.injected == ["hello there"]
 
 
+def test_try_end_session_is_a_no_op_when_nothing_is_recording(
+    controller: DictationController,
+) -> None:
+    """The overlay's ✓ arriving after the hotkey already ended the session."""
+    controller.start_session()
+    first = controller.try_end_session()
+    assert first is not None
+    first.wait(5.0)
+
+    assert controller.try_end_session() is None
+    assert controller.capture.stops == 1
+    with pytest.raises(RuntimeError):
+        controller.end_session()
+
+
+def test_racing_enders_claim_the_session_exactly_once(
+    controller: DictationController,
+) -> None:
+    """Hotkey release, ✓, VAD auto-end and `toggle` land on different threads."""
+    controller.start_session()
+    racers = 8
+    barrier = threading.Barrier(racers)
+    results: list[DictationSession | None] = []
+    errors: list[BaseException] = []
+
+    def _end() -> None:
+        barrier.wait()
+        try:
+            results.append(controller.try_end_session())
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_end) for _ in range(racers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5.0)
+
+    won = [r for r in results if r is not None]
+    assert not errors
+    assert len(results) == racers
+    assert len(won) == 1
+    assert controller.capture.stops == 1
+    assert won[0].wait(5.0)
+    assert controller.injector.injected == ["hello there"]
+
+
 def test_persist_happens_before_inject(controller: DictationController) -> None:
     """§8, unchanged by the move into the controller.
 

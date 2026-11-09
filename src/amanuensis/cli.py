@@ -1039,7 +1039,7 @@ def _daemon(config: AppConfig) -> int:
 
     def _control_finish() -> None:
         threading.Thread(
-            target=controller.end_session,
+            target=controller.try_end_session,
             name="amanuensis-overlay-finish",
             daemon=True,
         ).start()
@@ -1174,7 +1174,7 @@ def _daemon(config: AppConfig) -> int:
             # Handed to a thread rather than done here: this is the PortAudio
             # callback and §6.3 forbids blocking it.
             threading.Thread(
-                target=controller.end_session,
+                target=controller.try_end_session,
                 name="amanuensis-vad-auto-end",
                 daemon=True,
             ).start()
@@ -1198,7 +1198,7 @@ def _daemon(config: AppConfig) -> int:
         # nothing useful a callback could hand back to a thread that must not
         # wait for it (§6.3). The session is observed through history and the
         # tray, never through this return.
-        controller.end_session()
+        controller.try_end_session()
 
     def _on_cancel() -> None:
         # §5.2's latch, and the reason it can promise "before the decoder".
@@ -1254,7 +1254,7 @@ def _daemon(config: AppConfig) -> int:
 
     def _toggle() -> Response:
         if tray.state is DictationState.RECORDING:
-            controller.end_session()
+            controller.try_end_session()
             return Response(ok=True, detail="stopping")
         _start_session()
         return Response(ok=True, detail="recording")
